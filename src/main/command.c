@@ -66,23 +66,23 @@ struct fr_command_table_t {
 #define COMMAND_BUFFER_SIZE (1024)
 
 typedef struct fr_cs_buffer_t {
-	int	auth;
-	int	mode;
-	ssize_t offset;
-	ssize_t next;
-	char buffer[COMMAND_BUFFER_SIZE];
+	int		auth;
+	int		mode;
+	ssize_t		offset;
+	ssize_t		next;
+	char		buffer[COMMAND_BUFFER_SIZE];
 } fr_cs_buffer_t;
 
 #define COMMAND_SOCKET_MAGIC (0xffdeadee)
 typedef struct fr_command_socket_t {
-	uint32_t magic;
-	char	*path;
-	char	*copy;		/* <sigh> */
-	uid_t	uid;
-	gid_t	gid;
-	char	*uid_name;
-	char	*gid_name;
-	char	*mode_name;
+	uint32_t	magic;
+	char const	*path;
+	char		*copy;		/* <sigh> */
+	uid_t		uid;
+	gid_t		gid;
+	char const	*uid_name;
+	char const	*gid_name;
+	char const	*mode_name;
 	char user[256];
 
 	/*
@@ -91,7 +91,7 @@ typedef struct fr_command_socket_t {
 	 */
 	fr_ipaddr_t	src_ipaddr; /* src_port is always 0 */
 	fr_ipaddr_t	dst_ipaddr;
-	int		dst_port;
+	uint16_t	dst_port;
 	rad_listen_t	*inject_listener;
 	RADCLIENT	*inject_client;
 
@@ -99,16 +99,12 @@ typedef struct fr_command_socket_t {
 } fr_command_socket_t;
 
 static const CONF_PARSER command_config[] = {
-  { "socket",  PW_TYPE_STRING_PTR,
-    offsetof(fr_command_socket_t, path), NULL, "${run_dir}/radiusd.sock"},
-  { "uid",  PW_TYPE_STRING_PTR,
-    offsetof(fr_command_socket_t, uid_name), NULL, NULL},
-  { "gid",  PW_TYPE_STRING_PTR,
-    offsetof(fr_command_socket_t, gid_name), NULL, NULL},
-  { "mode",  PW_TYPE_STRING_PTR,
-    offsetof(fr_command_socket_t, mode_name), NULL, NULL},
+	{ "socket", FR_CONF_OFFSET(PW_TYPE_STRING, fr_command_socket_t, path), "${run_dir}/radiusd.sock" },
+	{ "uid", FR_CONF_OFFSET(PW_TYPE_STRING, fr_command_socket_t, uid_name), NULL },
+	{ "gid", FR_CONF_OFFSET(PW_TYPE_STRING, fr_command_socket_t, gid_name), NULL },
+	{ "mode", FR_CONF_OFFSET(PW_TYPE_STRING, fr_command_socket_t, mode_name), NULL },
 
-  { NULL, -1, 0, NULL, NULL }		/* end the list */
+	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
 static FR_NAME_NUMBER mode_names[] = {
@@ -118,6 +114,8 @@ static FR_NAME_NUMBER mode_names[] = {
 	{ "rw", FR_READ | FR_WRITE },
 	{ NULL, 0 }
 };
+
+extern const FR_NAME_NUMBER mod_rcode_table[];
 
 #ifndef HAVE_GETPEEREID
 static int getpeereid(int s, uid_t *euid, gid_t *egid)
@@ -149,13 +147,13 @@ static int fr_server_domain_socket(char const *path)
 	struct stat buf;
 
 	if (!path) {
-		ERROR("No path provided, was NULL.");
+		ERROR("No path provided, was NULL");
 		return -1;
 	}
 
 	len = strlen(path);
 	if (len >= sizeof(salocal.sun_path)) {
-		ERROR("Path too long in socket filename.");
+		ERROR("Path too long in socket filename");
 		return -1;
 	}
 
@@ -446,11 +444,11 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 				variables[i].name, *(int const *) data);
 			break;
 
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 			inet_ntop(AF_INET, data, buffer, sizeof(buffer));
 			break;
 
-		case PW_TYPE_IPV6ADDR:
+		case PW_TYPE_IPV6_ADDR:
 			inet_ntop(AF_INET6, data, buffer, sizeof(buffer));
 			break;
 
@@ -460,7 +458,7 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 				((*(bool const *) data) == false) ? "no" : "yes");
 			break;
 
-		case PW_TYPE_STRING_PTR:
+		case PW_TYPE_STRING:
 		case PW_TYPE_FILE_INPUT:
 		case PW_TYPE_FILE_OUTPUT:
 			/*
@@ -586,6 +584,35 @@ static int command_show_module_flags(rad_listen_t *listener, int argc, char *arg
 	return 1;		/* success */
 }
 
+static int command_show_module_status(rad_listen_t *listener, int argc, char *argv[])
+{
+	CONF_SECTION *cs;
+	const module_instance_t *mi;
+
+	if (argc != 1) {
+		cprintf(listener, "ERROR: No module name was given\n");
+		return 0;
+	}
+
+	cs = cf_section_find("modules");
+	if (!cs) return 0;
+
+	mi = find_module_instance(cs, argv[0], 0);
+	if (!mi) {
+		cprintf(listener, "ERROR: No such module \"%s\"\n", argv[0]);
+		return 0;
+	}
+
+	if (!mi->force) {
+		cprintf(listener, "alive\n");
+	} else {
+		cprintf(listener, "%s\n", fr_int2str(mod_rcode_table, mi->code, "<invalid>"));
+	}
+
+
+	return 1;		/* success */
+}
+
 
 /*
  *	Show all loaded modules
@@ -680,11 +707,11 @@ static int command_show_home_servers(rad_listen_t *listener, UNUSED int argc, UN
 			 *	The *reported* state changes because
 			 *	the internal state machine NEEDS THE
 			 *	RIGHT STATE.  However, reporting that
-			 *	to the admin will confuse him.  So...
-			 *	we lie.  Yes, that dress doesn't make
-			 *	you look fat.
+			 *	to the admin will confuse them.
+			 *	So... we lie.  No, that dress doesn't
+			 *	make you look fat...
 			 */
-			if ((home->last_packet_recv + home->ping_interval) >= now) {
+			if ((home->last_packet_recv + (int)home->ping_interval) >= now) {
 				state = "alive";
 			} else {
 				state = "unknown";
@@ -715,10 +742,10 @@ static int command_show_clients(rad_listen_t *listener, UNUSED int argc, UNUSED 
 		ip_ntoh(&client->ipaddr, buffer, sizeof(buffer));
 
 		if (((client->ipaddr.af == AF_INET) &&
-		     (client->prefix != 32)) ||
+		     (client->ipaddr.prefix != 32)) ||
 		    ((client->ipaddr.af == AF_INET6) &&
-		     (client->prefix != 128))) {
-			cprintf(listener, "\t%s/%d\n", buffer, client->prefix);
+		     (client->ipaddr.prefix != 128))) {
+			cprintf(listener, "\t%s/%d\n", buffer, client->ipaddr.prefix);
 		} else {
 			cprintf(listener, "\t%s\n", buffer);
 		}
@@ -915,7 +942,7 @@ static RADCLIENT *get_client(rad_listen_t *listener, int argc, char *argv[])
 		return NULL;
 	}
 
-	if (ip_hton(argv[0], AF_UNSPEC, &ipaddr) < 0) {
+	if (ip_hton(&ipaddr, AF_UNSPEC, argv[0], false) < 0) {
 		cprintf(listener, "ERROR: Failed parsing IP address; %s\n",
 			fr_strerror());
 		return NULL;
@@ -951,7 +978,7 @@ static home_server_t *get_home_server(rad_listen_t *listener, int argc,
 				    char *argv[], int *last)
 {
 	home_server_t *home;
-	int port;
+	uint16_t port;
 	int proto = IPPROTO_UDP;
 	fr_ipaddr_t ipaddr;
 
@@ -960,7 +987,7 @@ static home_server_t *get_home_server(rad_listen_t *listener, int argc,
 		return NULL;
 	}
 
-	if (ip_hton(argv[0], AF_UNSPEC, &ipaddr) < 0) {
+	if (ip_hton(&ipaddr, AF_UNSPEC, argv[0], false) < 0) {
 		cprintf(listener, "ERROR: Failed parsing IP address; %s\n",
 			fr_strerror());
 		return NULL;
@@ -1123,7 +1150,7 @@ static rad_listen_t *get_socket(rad_listen_t *listener, int argc,
 			       char *argv[], int *last)
 {
 	rad_listen_t *sock;
-	int port;
+	uint16_t port;
 	int proto = IPPROTO_UDP;
 	fr_ipaddr_t ipaddr;
 
@@ -1132,7 +1159,7 @@ static rad_listen_t *get_socket(rad_listen_t *listener, int argc,
 		return NULL;
 	}
 
-	if (ip_hton(argv[0], AF_UNSPEC, &ipaddr) < 0) {
+	if (ip_hton(&ipaddr, AF_UNSPEC, argv[0], false) < 0) {
 		cprintf(listener, "ERROR: Failed parsing IP address; %s\n",
 			fr_strerror());
 		return NULL;
@@ -1199,7 +1226,7 @@ static int command_inject_from(rad_listen_t *listener, int argc, char *argv[])
 	}
 
 	sock->src_ipaddr.af = AF_UNSPEC;
-	if (ip_hton(argv[0], AF_UNSPEC, &sock->src_ipaddr) < 0) {
+	if (ip_hton(&sock->src_ipaddr, AF_UNSPEC, argv[0], false) < 0) {
 		cprintf(listener, "ERROR: Failed parsing IP address; %s\n",
 			fr_strerror());
 		return 0;
@@ -1400,6 +1427,9 @@ static fr_command_table_t command_table_show_module[] = {
 	{ "methods", FR_READ,
 	  "show module methods <module> - show sections where <module> may be used",
 	  command_show_module_methods, NULL },
+	{ "status", FR_READ,
+	  "show module status <module> - show the module status",
+	  command_show_module_status, NULL },
 
 	{ NULL, 0, NULL, NULL, NULL }
 };
@@ -1532,8 +1562,7 @@ static int command_set_module_config(rad_listen_t *listener, int argc, char *arg
 	 */
 	cf_pair_replace(mi->cs, cp, argv[2]);
 
-	rcode = cf_item_parse(mi->cs, argv[1], variables[i].type,
-			      data, argv[2]);
+	rcode = cf_item_parse(mi->cs, argv[1], variables[i].type, data, argv[2]);
 	if (rcode < 0) {
 		cprintf(listener, "ERROR: Failed to parse value\n");
 		return 0;
@@ -1541,8 +1570,6 @@ static int command_set_module_config(rad_listen_t *listener, int argc, char *arg
 
 	return 1;		/* success */
 }
-
-extern const FR_NAME_NUMBER mod_rcode_table[];
 
 static int command_set_module_status(rad_listen_t *listener, int argc, char *argv[])
 {
@@ -2615,7 +2642,7 @@ static int command_domain_accept(rad_listen_t *listener)
 
 	salen = sizeof(src);
 
-	DEBUG2(" ... new connection request on command socket.");
+	DEBUG2(" ... new connection request on command socket");
 
 	newfd = accept(listener->fd, (struct sockaddr *) &src, &salen);
 	if (newfd < 0) {
@@ -2626,7 +2653,7 @@ static int command_domain_accept(rad_listen_t *listener)
 			return 0;
 		}
 
-		DEBUG2(" ... failed to accept connection.");
+		DEBUG2(" ... failed to accept connection");
 		return 0;
 	}
 

@@ -30,16 +30,11 @@ RCSID("$Id$")
 #include "rlm_eap.h"
 
 static const CONF_PARSER module_config[] = {
-	{ "default_eap_type", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_t, default_method_name), NULL, "md5" },
-	{ "timer_expire", PW_TYPE_INTEGER,
-	  offsetof(rlm_eap_t, timer_limit), NULL, "60"},
-	{ "ignore_unknown_eap_types", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_t, ignore_unknown_types), NULL, "no" },
-	{ "mod_accounting_username_bug", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_t, mod_accounting_username_bug), NULL, "no" },
-	{ "max_sessions", PW_TYPE_INTEGER,
-	  offsetof(rlm_eap_t, max_sessions), NULL, "2048"},
+	{ "default_eap_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_t, default_method_name), "md5" },
+	{ "timer_expire", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_eap_t, timer_limit), "60" },
+	{ "ignore_unknown_eap_types", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_t, ignore_unknown_types), "no" },
+	{ "mod_accounting_username_bug", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_t, mod_accounting_username_bug), "no" },
+	{ "max_sessions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_eap_t, max_sessions), "2048" },
 
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
@@ -322,8 +317,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	/*
 	 *	If we're doing horrible tunneling work, remember it.
 	 */
-	if ((request->options & RAD_REQUEST_OPTION_PROXY_EAP) != 0) {
-		RDEBUG2("  Not-EAP proxy set.  Not composing EAP");
+	if ((request->log.lvl & RAD_REQUEST_OPTION_PROXY_EAP) != 0) {
+		RDEBUG2("No EAP proxy set.  Not composing EAP");
 		/*
 		 *	Add the handle to the proxied list, so that we
 		 *	can retrieve it in the post-proxy stage, and
@@ -380,7 +375,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 */
 		pairdelete(&request->proxy->vps, PW_FREERADIUS_PROXIED_TO, VENDORPEC_FREERADIUS, TAG_ANY);
 
-		RDEBUG2("  Tunneled session will be proxied.  Not doing EAP.");
+		RDEBUG2("Tunneled session will be proxied.  Not doing EAP");
 		return RLM_MODULE_HANDLED;
 	}
 #endif

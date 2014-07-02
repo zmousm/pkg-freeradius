@@ -167,6 +167,8 @@ fr_log_t default_log = {
 static int stderr_fd = -1;	//!< The original unmolested stderr file descriptor
 static int stdout_fd = -1;	//!< The original unmolested stdout file descriptor
 
+static char const spaces[] = "                                                                                                                        ";
+
 /** On fault, reset STDOUT and STDERR to something useful.
  *
  * @return 0
@@ -529,7 +531,7 @@ inline bool radlog_debug_enabled(log_type_t type, log_debug_t lvl, REQUEST *requ
 	 *	then don't log the message.
 	 */
 	if ((type & L_DBG) &&
-	    ((request && request->radlog && (lvl > request->options)) ||
+	    ((request && request->log.func && (lvl > request->log.lvl)) ||
 	     ((debug_flag != 0) && (lvl > debug_flag)))) {
 		return false;
 	}
@@ -546,6 +548,8 @@ void vradlog_request(log_type_t type, log_debug_t lvl, REQUEST *request, char co
 	char *p;
 	char const *extra = "";
 	va_list aq;
+
+	rad_assert(request);
 
 	/*
 	 *	Debug messages get treated specially.
@@ -569,9 +573,9 @@ void vradlog_request(log_type_t type, log_debug_t lvl, REQUEST *request, char co
 	}
 
 	if (request && filename) {
-		radlog_func_t rl = request->radlog;
+		radlog_func_t rl = request->log.func;
 
-		request->radlog = NULL;
+		request->log.func = NULL;
 
 		/*
 		 *	This is SLOW!  Doing it for every log message
@@ -582,7 +586,7 @@ void vradlog_request(log_type_t type, log_debug_t lvl, REQUEST *request, char co
 		if (radius_xlat(buffer, sizeof(buffer), request, filename, NULL, NULL) < 0) {
 			return;
 		}
-		request->radlog = rl;
+		request->log.func = rl;
 
 		p = strrchr(buffer, FR_DIR_SEP);
 		if (p) {
@@ -660,9 +664,19 @@ void vradlog_request(log_type_t type, log_debug_t lvl, REQUEST *request, char co
 	}
 
 	if (!fp) {
+
 		if (debug_flag > 2) extra = "";
-		request ? radlog(type, "(%u) %s%s", request->number, extra, buffer) :
-			  radlog(type, "%s%s", extra, buffer);
+
+		if (request) {
+			uint8_t indent;
+
+			indent = request->log.indent > sizeof(spaces) ?
+				 sizeof(spaces) :
+				 request->log.indent;
+			radlog(type, "(%u) %.*s%s%s", request->number, indent, spaces, extra, buffer);
+		} else {
+			radlog(type, "%s%s", extra, buffer);
+		}
 	} else {
 		if (request) {
 			fprintf(fp, "(%u) %s", request->number, extra);
@@ -686,10 +700,12 @@ void radlog_request(log_type_t type, log_debug_t lvl, REQUEST *request, char con
 {
 	va_list ap;
 
-	if (request->radlog == NULL) return;
+	rad_assert(request);
+
+	if (request->log.func == NULL) return;
 
 	va_start(ap, msg);
-	request->radlog(type, lvl, request, msg, ap);
+	request->log.func(type, lvl, request, msg, ap);
 	va_end(ap);
 }
 
@@ -712,15 +728,15 @@ void radlog_request_error(log_type_t type, log_debug_t lvl, REQUEST *request, ch
 {
 	va_list ap;
 
+	rad_assert(request);
+
 	va_start(ap, msg);
-	if (request->radlog) {
-		request->radlog(type, lvl, request, msg, ap);
+	if (request->log.func) {
+		request->log.func(type, lvl, request, msg, ap);
 	}
 	vmodule_failure_msg(request, msg, ap);
 	va_end(ap);
 }
-
-static char const spaces[] = "                                                                                                                        ";
 
 /** Parse error, write out string we were parsing, and a message indicating the error
  *
@@ -728,24 +744,35 @@ static char const spaces[] = "                                                  
  * @param lvl of debugging this message should be displayed at.
  * @param request The current request.
  * @param fmt string we were parsing.
- * @param indent how much to indent the message by.
- * @param error what the parse error was.
+ * @param idx The position of the marker relative to the string.
+ * @param error What the parse error was.
  */
 void radlog_request_marker(log_type_t type, log_debug_t lvl, REQUEST *request,
-			   char const *fmt, size_t indent, char const *error)
+			   char const *fmt, size_t idx, char const *error)
 {
 	char const *prefix = "";
+	uint8_t indent;
 
-	if (indent >= sizeof(spaces)) {
-		size_t offset = (indent - (sizeof(spaces) - 1)) + (sizeof(spaces) * 0.75);
-		indent -= offset;
+	rad_assert(request);
+
+	if (idx >= sizeof(spaces)) {
+		size_t offset = (idx - (sizeof(spaces) - 1)) + (sizeof(spaces) * 0.75);
+		idx -= offset;
 		fmt += offset;
 
 		prefix = "... ";
 	}
 
+	/*
+	 *  Don't want format markers being indented
+	 */
+	indent = request->log.indent;
+	request->log.indent = 0;
+
 	radlog_request(type, lvl, request, "%s%s", prefix, fmt);
-	radlog_request(type, lvl, request, "%s%.*s^ %s", prefix, (int) indent, spaces, error);
+	radlog_request(type, lvl, request, "%s%.*s^ %s", prefix, (int) idx, spaces, error);
+
+	request->log.indent = indent;
 }
 
 typedef struct fr_logfile_entry_t {
@@ -758,7 +785,7 @@ typedef struct fr_logfile_entry_t {
 
 
 struct fr_logfile_t {
-	int max_entries;
+	uint32_t max_entries;
 #ifdef HAVE_PTHREAD_H
 	pthread_mutex_t mutex;
 #endif
@@ -780,7 +807,7 @@ struct fr_logfile_t {
 
 static int _logfile_free(fr_logfile_t *lf)
 {
-	int i;
+	uint32_t i;
 
 	PTHREAD_MUTEX_LOCK(&lf->mutex);
 
@@ -845,7 +872,7 @@ fr_logfile_t *fr_logfile_init(TALLOC_CTX *ctx)
  */
 int fr_logfile_open(fr_logfile_t *lf, char const *filename, mode_t permissions)
 {
-	int i;
+	uint32_t i;
 	uint32_t hash;
 	time_t now = time(NULL);
 	struct stat st;
@@ -1040,7 +1067,7 @@ do_return:
  */
 int fr_logfile_close(fr_logfile_t *lf, int fd)
 {
-	int i;
+	uint32_t i;
 
 	for (i = 0; i < lf->max_entries; i++) {
 		if (!lf->entries[i].filename) continue;
@@ -1066,7 +1093,7 @@ int fr_logfile_close(fr_logfile_t *lf, int fd)
 
 int fr_logfile_unlock(fr_logfile_t *lf, int fd)
 {
-	int i;
+	uint32_t i;
 
 	for (i = 0; i < lf->max_entries; i++) {
 		if (!lf->entries[i].filename) continue;

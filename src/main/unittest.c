@@ -345,8 +345,8 @@ static REQUEST *request_setup(FILE *fp)
 	/*
 	 *	Debugging
 	 */
-	request->options = debug_flag;
-	request->radlog = vradlog_request;
+	request->log.lvl = debug_flag;
+	request->log.func = vradlog_request;
 
 	request->username = pairfind(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
 	request->password = pairfind(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY);
@@ -424,7 +424,7 @@ int main(int argc, char *argv[])
 	 */
 	memset(&main_config, 0, sizeof(main_config));
 	main_config.myip.af = AF_UNSPEC;
-	main_config.port = -1;
+	main_config.port = 0;
 	main_config.name = "radiusd";
 
 	/*
@@ -636,7 +636,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	INFO("Exiting normally.");
+	INFO("Exiting normally");
 
 finish:
 	talloc_free(request);

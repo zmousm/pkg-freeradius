@@ -35,11 +35,9 @@ typedef struct rlm_eap_mschapv2_t {
 } rlm_eap_mschapv2_t;
 
 static CONF_PARSER module_config[] = {
-	{ "with_ntdomain_hack",     PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_mschapv2_t,with_ntdomain_hack), NULL, "no" },
+	{ "with_ntdomain_hack", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_mschapv2_t, with_ntdomain_hack), "no" },
 
-	{ "send_error",     PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_mschapv2_t,send_error), NULL, "no" },
+	{ "send_error", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_mschapv2_t, send_error), "no" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -265,7 +263,7 @@ static int mschapv2_initiate(UNUSED void *instance, eap_handler_t *handler)
 	 *	The EAP session doesn't have enough information to
 	 *	proxy the "inside EAP" protocol.  Disable EAP proxying.
 	 */
-	handler->request->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
+	handler->request->log.lvl &= ~RAD_REQUEST_OPTION_PROXY_EAP;
 #endif
 
 	/*
@@ -305,7 +303,7 @@ static int CC_HINT(nonnull) mschap_postproxy(eap_handler_t *handler, UNUSED void
 	 */
 	switch (request->reply->code) {
 	case PW_CODE_AUTHENTICATION_ACK:
-		RDEBUG2("Proxied authentication succeeded.");
+		RDEBUG2("Proxied authentication succeeded");
 
 		/*
 		 *	Move the attribute, so it doesn't go into
@@ -316,7 +314,7 @@ static int CC_HINT(nonnull) mschap_postproxy(eap_handler_t *handler, UNUSED void
 
 	default:
 	case PW_CODE_AUTHENTICATION_REJECT:
-		RDEBUG("Proxied authentication did not succeed.");
+		RDEBUG("Proxied authentication did not succeed");
 		return 0;
 	}
 
@@ -331,7 +329,7 @@ static int CC_HINT(nonnull) mschap_postproxy(eap_handler_t *handler, UNUSED void
 	/*
 	 *	Done doing EAP proxy stuff.
 	 */
-	request->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
+	request->log.lvl &= ~RAD_REQUEST_OPTION_PROXY_EAP;
 	eapmschapv2_compose(handler, response);
 	data->code = PW_EAP_MSCHAPV2_SUCCESS;
 
@@ -465,7 +463,7 @@ static int CC_HINT(nonnull) mschapv2_authenticate(void *arg, eap_handler_t *hand
 			}
 
 	failure:
-			request->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
+			request->log.lvl &= ~RAD_REQUEST_OPTION_PROXY_EAP;
 			eap_ds->request->code = PW_EAP_FAILURE;
 			return 1;
 
@@ -490,7 +488,7 @@ static int CC_HINT(nonnull) mschapv2_authenticate(void *arg, eap_handler_t *hand
 					/*
 					 *	It's a success.  Don't proxy it.
 					 */
-					request->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
+					request->log.lvl &= ~RAD_REQUEST_OPTION_PROXY_EAP;
 #endif
 					pairfilter(request->reply,
 						  &request->reply->vps,
@@ -609,7 +607,7 @@ packet_ready:
 	 *	EAP attributes, and proxy the MS-CHAP attributes to a
 	 *	home server.
 	 */
-	if (request->options & RAD_REQUEST_OPTION_PROXY_EAP) {
+	if (request->log.lvl & RAD_REQUEST_OPTION_PROXY_EAP) {
 		char *username = NULL;
 		eap_tunnel_data_t *tunnel;
 
@@ -724,7 +722,7 @@ packet_ready:
 	 *	No response, die.
 	 */
 	if (!response) {
-		REDEBUG("No MS-CHAP-Success or MS-CHAP-Error was found.");
+		REDEBUG("No MS-CHAP-Success or MS-CHAP-Error was found");
 		return 0;
 	}
 

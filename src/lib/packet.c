@@ -126,16 +126,11 @@ int fr_nonblock(UNUSED int fd)
 /*
  *	Open a socket on the given IP and port.
  */
-int fr_socket(fr_ipaddr_t *ipaddr, int port)
+int fr_socket(fr_ipaddr_t *ipaddr, uint16_t port)
 {
 	int sockfd;
 	struct sockaddr_storage salocal;
 	socklen_t	salen;
-
-	if ((port < 0) || (port > 65535)) {
-		fr_strerror_printf("Port %d is out of allowed bounds", port);
-		return -1;
-	}
 
 	sockfd = socket(ipaddr->af, SOCK_DGRAM, 0);
 	if (sockfd < 0) {
@@ -237,17 +232,17 @@ typedef struct fr_packet_socket_t {
 	int		sockfd;
 	void		*ctx;
 
-	int		num_outgoing;
+	uint32_t	num_outgoing;
 
 	int		src_any;
 	fr_ipaddr_t	src_ipaddr;
-	int		src_port;
+	uint16_t	src_port;
 
 	int		dst_any;
 	fr_ipaddr_t	dst_ipaddr;
-	int		dst_port;
+	uint16_t	dst_port;
 
-	int		dont_use;
+	bool		dont_use;
 
 #ifdef WITH_TCP
 	int		proto;
@@ -272,7 +267,7 @@ struct fr_packet_list_t {
 	rbtree_t	*tree;
 
 	int		alloc_id;
-	int		num_outgoing;
+	uint32_t	num_outgoing;
 	int		last_recv;
 	int		num_sockets;
 
@@ -314,7 +309,7 @@ bool fr_packet_list_socket_freeze(fr_packet_list_t *pl, int sockfd)
 		return false;
 	}
 
-	ps->dont_use = 1;
+	ps->dont_use = true;
 	return true;
 }
 
@@ -327,7 +322,7 @@ bool fr_packet_list_socket_thaw(fr_packet_list_t *pl, int sockfd)
 	ps = fr_socket_find(pl, sockfd);
 	if (!ps) return false;
 
-	ps->dont_use = 0;
+	ps->dont_use = false;
 	return true;
 }
 
@@ -354,7 +349,7 @@ bool fr_packet_list_socket_del(fr_packet_list_t *pl, int sockfd)
 
 
 bool fr_packet_list_socket_add(fr_packet_list_t *pl, int sockfd, int proto,
-			      fr_ipaddr_t *dst_ipaddr, int dst_port,
+			      fr_ipaddr_t *dst_ipaddr, uint16_t dst_port,
 			      void *ctx)
 {
 	int i, start;
@@ -568,7 +563,7 @@ bool fr_packet_list_yank(fr_packet_list_t *pl, RADIUS_PACKET *request)
 	return true;
 }
 
-int fr_packet_list_num_elements(fr_packet_list_t *pl)
+uint32_t fr_packet_list_num_elements(fr_packet_list_t *pl)
 {
 	if (!pl) return 0;
 
@@ -917,9 +912,9 @@ RADIUS_PACKET *fr_packet_list_recv(fr_packet_list_t *pl, fd_set *set)
 	return NULL;
 }
 
-int fr_packet_list_num_incoming(fr_packet_list_t *pl)
+uint32_t fr_packet_list_num_incoming(fr_packet_list_t *pl)
 {
-	int num_elements;
+	uint32_t num_elements;
 
 	if (!pl) return 0;
 
@@ -929,7 +924,7 @@ int fr_packet_list_num_incoming(fr_packet_list_t *pl)
 	return num_elements - pl->num_outgoing;
 }
 
-int fr_packet_list_num_outgoing(fr_packet_list_t *pl)
+uint32_t fr_packet_list_num_outgoing(fr_packet_list_t *pl)
 {
 	if (!pl) return 0;
 

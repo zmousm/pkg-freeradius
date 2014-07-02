@@ -42,14 +42,10 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #define MPPE_KEY_LEN    32
 
 static CONF_PARSER pwd_module_config[] = {
-    { "group", PW_TYPE_INTEGER,
-      offsetof(EAP_PWD_CONF, group), NULL, "19"},
-    { "fragment_size", PW_TYPE_INTEGER,
-      offsetof(EAP_PWD_CONF, fragment_size), NULL, "1020"},
-    { "server_id", PW_TYPE_STRING_PTR,
-      offsetof(EAP_PWD_CONF, server_id), NULL, NULL },
-    { "virtual_server", PW_TYPE_STRING_PTR,
-      offsetof(EAP_PWD_CONF, virtual_server), NULL, NULL },
+    { "group", FR_CONF_OFFSET(PW_TYPE_INTEGER, EAP_PWD_CONF, group), "19" },
+    { "fragment_size", FR_CONF_OFFSET(PW_TYPE_INTEGER, EAP_PWD_CONF, fragment_size), "1020" },
+    { "server_id", FR_CONF_OFFSET(PW_TYPE_STRING, EAP_PWD_CONF, server_id), NULL },
+    { "virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, EAP_PWD_CONF, virtual_server), NULL },
     { NULL, -1, 0, NULL, NULL }
 };
 
@@ -341,7 +337,7 @@ mod_authenticate (void *arg, eap_handler_t *handler)
     if (EAP_PWD_GET_MORE_BIT(hdr)) {
 	rad_assert(pwd_session->in_buf != NULL);
 	if ((pwd_session->in_buf_pos + len) > pwd_session->in_buf_len) {
-	    RDEBUG2("pwd will not overflow a fragment buffer. Nope, not prudent.");
+	    RDEBUG2("pwd will not overflow a fragment buffer. Nope, not prudent");
 	    return 0;
 	}
 	memcpy(pwd_session->in_buf + pwd_session->in_buf_pos, buf, len);
@@ -369,7 +365,7 @@ mod_authenticate (void *arg, eap_handler_t *handler)
 	 * the last fragment...
 	 */
 	if ((pwd_session->in_buf_pos + len) > pwd_session->in_buf_len) {
-	    RDEBUG2("pwd will not overflow a fragment buffer. Nope, not prudent.");
+	    RDEBUG2("pwd will not overflow a fragment buffer. Nope, not prudent");
 	    return 0;
 	}
 	memcpy(pwd_session->in_buf + pwd_session->in_buf_pos, buf, len);

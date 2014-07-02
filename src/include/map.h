@@ -102,6 +102,7 @@ typedef enum vpt_type {
 	VPT_TYPE_DATA,			//!< is a value_data_t
 	VPT_TYPE_XLAT_STRUCT,	      	//!< pre-parsed xlat_exp_t
 	VPT_TYPE_REGEX_STRUCT,	      	//!< pre-parsed regex_t
+	VPT_TYPE_NULL			//!< VPT has no value
 } vpt_type_t;
 
 extern const FR_NAME_NUMBER vpt_types[];
@@ -149,17 +150,20 @@ typedef struct value_pair_tmpl_t {
 		pair_lists_t		list;	 //!< List to search or insert in.
 
 		DICT_ATTR const		*da;	 //!< Resolved dictionary attribute.
-		unsigned int		num;	 //!< for array references
+		int			num;	 //!< for array references
 		int8_t			tag;     //!< for tag references
 	} attribute;
 
 	union {
 		struct {
-			value_data_t const	*value;	 //!< actual data
-			size_t			length;  //!< of the vpd data
+			value_data_t const	*value;		//!< actual data
+			size_t			length;		//!< of the vpd data
 		} literal;
 		xlat_exp_t	*xlat;	 //!< pre-parsed xlat_exp_t
-		regex_t		*preg;	 //!< pre-parsed regex_t
+		struct {
+			regex_t			*comp;		//!< pre-parsed regex_t
+			bool			iflag;		//!< Case insensitive
+		} preg;
 	} data;
 } value_pair_tmpl_t;
 
@@ -170,7 +174,9 @@ typedef struct value_pair_tmpl_t {
 #define vpt_tag		attribute.tag
 
 #define vpt_xlat	data.xlat
-#define vpt_preg	data.preg
+
+#define vpt_preg	data.preg.comp
+#define vpt_iflag	data.preg.iflag
 
 #define vpt_value	data.literal.value
 #define vpt_length	data.literal.length

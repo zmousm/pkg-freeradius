@@ -41,11 +41,9 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #endif
 
 static CONF_PARSER module_config[] = {
-	{ "tls", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_tls_t, tls_conf_name), NULL, NULL },
+	{ "tls", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_tls_t, tls_conf_name), NULL },
 
-	{ "virtual_server", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_tls_t, virtual_server), NULL, NULL },
+	{ "virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_tls_t, virtual_server), NULL },
 
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
@@ -209,7 +207,7 @@ static int CC_HINT(nonnull) mod_authenticate(void *type_arg, eap_handler_t *hand
 		 *	data.
 		 */
 	case FR_TLS_OK:
-		RDEBUG2("Received unexpected tunneled data after successful handshake.");
+		RDEBUG2("Received unexpected tunneled data after successful handshake");
 #ifndef NDEBUG
 		if ((debug_flag > 2) && fr_log_fp) {
 			unsigned int i;

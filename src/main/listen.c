@@ -108,7 +108,7 @@ static ssize_t xlat_listen(UNUSED void *instance, REQUEST *request,
  *	Find a per-socket client.
  */
 RADCLIENT *client_listener_find(rad_listen_t *listener,
-				fr_ipaddr_t const *ipaddr, int src_port)
+				fr_ipaddr_t const *ipaddr, uint16_t src_port)
 {
 #ifdef WITH_DYNAMIC_CLIENTS
 	int rcode;
@@ -532,7 +532,8 @@ static int dual_tcp_recv(rad_listen_t *listener)
 
 static int dual_tcp_accept(rad_listen_t *listener)
 {
-	int newfd, src_port;
+	int newfd;
+	uint16_t src_port;
 	rad_listen_t *this;
 	socklen_t salen;
 	struct sockaddr_storage src;
@@ -542,7 +543,7 @@ static int dual_tcp_accept(rad_listen_t *listener)
 
 	salen = sizeof(src);
 
-	DEBUG2(" ... new connection request on TCP socket.");
+	DEBUG2(" ... new connection request on TCP socket");
 
 	newfd = accept(listener->fd, (struct sockaddr *) &src, &salen);
 	if (newfd < 0) {
@@ -555,13 +556,13 @@ static int dual_tcp_accept(rad_listen_t *listener)
 		}
 #endif
 
-		DEBUG2(" ... failed to accept connection.");
+		DEBUG2(" ... failed to accept connection");
 		return -1;
 	}
 
 	if (!fr_sockaddr2ipaddr(&src, salen, &src_ipaddr, &src_port)) {
 		close(newfd);
-		DEBUG2(" ... unknown address family.");
+		DEBUG2(" ... unknown address family");
 		return 0;
 	}
 
@@ -863,32 +864,23 @@ int common_socket_print(rad_listen_t const *this, char *buffer, size_t bufsize)
 extern bool check_config;	/* radiusd.c */
 
 static CONF_PARSER performance_config[] = {
-	{ "skip_duplicate_checks", PW_TYPE_BOOLEAN,
-	  offsetof(rad_listen_t, nodup), NULL,   NULL },
+	{ "skip_duplicate_checks", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rad_listen_t, nodup), NULL },
 
-	{ "synchronous", PW_TYPE_BOOLEAN,
-	  offsetof(rad_listen_t, synchronous), NULL,   NULL },
+	{ "synchronous", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rad_listen_t, synchronous), NULL },
 
-	{ "workers", PW_TYPE_INTEGER,
-	  offsetof(rad_listen_t, workers), NULL,   NULL },
+	{ "workers", FR_CONF_OFFSET(PW_TYPE_INTEGER, rad_listen_t, workers), NULL },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
 
 static CONF_PARSER limit_config[] = {
-	{ "max_pps", PW_TYPE_INTEGER,
-	  offsetof(listen_socket_t, max_rate), NULL,   NULL },
+	{ "max_pps", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_socket_t, max_rate), NULL },
 
 #ifdef WITH_TCP
-	{ "max_connections", PW_TYPE_INTEGER,
-	  offsetof(listen_socket_t, limit.max_connections), NULL,   "16" },
-
-	{ "lifetime", PW_TYPE_INTEGER,
-	  offsetof(listen_socket_t, limit.lifetime), NULL,   "0" },
-
-	{ "idle_timeout", PW_TYPE_INTEGER,
-	  offsetof(listen_socket_t, limit.idle_timeout), NULL,   "30" },
+	{ "max_connections", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_socket_t, limit.max_connections), "16" },
+	{ "lifetime", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_socket_t, limit.lifetime), "0" },
+	{ "idle_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_socket_t, limit.idle_timeout), STRINGIFY(30) },
 #endif
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
@@ -900,10 +892,10 @@ static CONF_PARSER limit_config[] = {
 int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 {
 	int		rcode;
-	int		listen_port;
+	uint16_t	listen_port;
 	fr_ipaddr_t	ipaddr;
 	listen_socket_t *sock = this->data;
-	char		*section_name = NULL;
+	char const	*section_name = NULL;
 	CONF_SECTION	*client_cs, *parentcs;
 	CONF_SECTION	*subcs;
 
@@ -914,51 +906,35 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	 */
 	memset(&ipaddr, 0, sizeof(ipaddr));
 	ipaddr.ipaddr.ip4addr.s_addr = htonl(INADDR_NONE);
-	rcode = cf_item_parse(cs, "ipaddr", PW_TYPE_IPADDR,
-			      &ipaddr.ipaddr.ip4addr, NULL);
+
+	rcode = cf_item_parse(cs, "ipaddr", FR_ITEM_POINTER(PW_TYPE_IP_ADDR, &ipaddr), NULL);
 	if (rcode < 0) return -1;
-
-	if (rcode == 0) { /* successfully parsed IPv4 */
-		ipaddr.af = AF_INET;
-
-	} else {	/* maybe IPv6? */
-		rcode = cf_item_parse(cs, "ipv6addr", PW_TYPE_IPV6ADDR,
-				      &ipaddr.ipaddr.ip6addr, NULL);
-		if (rcode < 0) return -1;
-
-		if (rcode == 1) {
-			cf_log_err_cs(cs,
-				   "No address specified in listen section");
-			return -1;
-		}
-		ipaddr.af = AF_INET6;
+	if (rcode != 0) rcode = cf_item_parse(cs, "ipv4addr", FR_ITEM_POINTER(PW_TYPE_IPV4_ADDR, &ipaddr), NULL);
+	if (rcode < 0) return -1;
+	if (rcode != 0) rcode = cf_item_parse(cs, "ipv6addr", FR_ITEM_POINTER(PW_TYPE_IPV6_ADDR, &ipaddr), NULL);
+	if (rcode < 0) return -1;
+	if (rcode != 0) {
+		cf_log_err_cs(cs, "No address specified in listen section");
+		return -1;
 	}
 
-	rcode = cf_item_parse(cs, "port", PW_TYPE_INTEGER,
-			      &listen_port, "0");
+	rcode = cf_item_parse(cs, "port", FR_ITEM_POINTER(PW_TYPE_SHORT, &listen_port), "0");
 	if (rcode < 0) return -1;
-
-	if ((listen_port < 0) || (listen_port > 65535)) {
-			cf_log_err_cs(cs,
-				   "Invalid value for \"port\"");
-			return -1;
-	}
 
 	sock->proto = IPPROTO_UDP;
 
 	if (cf_pair_find(cs, "proto")) {
 #ifndef WITH_TCP
 		cf_log_err_cs(cs,
-			   "System does not support the TCP protocol.  Delete this line from the configuration file.");
+			   "System does not support the TCP protocol.  Delete this line from the configuration file");
 		return -1;
 #else
-		char *proto = NULL;
+		char const *proto = NULL;
 #ifdef WITH_TLS
 		CONF_SECTION *tls;
 #endif
 
-		rcode = cf_item_parse(cs, "proto", PW_TYPE_STRING_PTR,
-				      &proto, "udp");
+		rcode = cf_item_parse(cs, "proto", FR_ITEM_POINTER(PW_TYPE_STRING, &proto), "udp");
 		if (rcode < 0) return -1;
 
 		if (strcmp(proto, "udp") == 0) {
@@ -994,7 +970,7 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 			 */
 			if (sock->proto != IPPROTO_TCP) {
 				cf_log_err_cs(cs,
-					      "TLS transport is not available for UDP sockets.");
+					      "TLS transport is not available for UDP sockets");
 				return -1;
 			}
 
@@ -1023,7 +999,7 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 		 */
 		if (cf_section_sub_find(cs, "tls")) {
 			cf_log_err_cs(cs,
-				   "TLS transport is not available in this executable.");
+				   "TLS transport is not available in this executable");
 			return -1;
 		}
 #endif	/* WITH_TLS */
@@ -1035,7 +1011,7 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 		 */
 	} else if (cf_section_sub_find(cs, "tls")) {
 		cf_log_err_cs(cs,
-			   "TLS transport is not available in this \"listen\" section.");
+			   "TLS transport is not available in this \"listen\" section");
 		return -1;
 	}
 
@@ -1150,7 +1126,7 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	if (cf_pair_find(cs, "broadcast")) {
 #ifndef SO_BROADCAST
 		cf_log_err_cs(cs,
-			   "System does not support broadcast sockets.  Delete this line from the configuration file.");
+			   "System does not support broadcast sockets.  Delete this line from the configuration file");
 		return -1;
 #else
 		char const *value;
@@ -1158,7 +1134,7 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 
 		if (this->type != RAD_LISTEN_DHCP) {
 			cf_log_err_cp(cp,
-				   "Broadcast can only be set for DHCP listeners.  Delete this line from the configuration file.");
+				   "Broadcast can only be set for DHCP listeners.  Delete this line from the configuration file");
 			return -1;
 		}
 
@@ -1203,16 +1179,13 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	 */
 	client_cs = NULL;
 	parentcs = cf_top_section(cs);
-	rcode = cf_item_parse(cs, "clients", PW_TYPE_STRING_PTR,
-			      &section_name, NULL);
+	rcode = cf_item_parse(cs, "clients", FR_ITEM_POINTER(PW_TYPE_STRING, &section_name), NULL);
 	if (rcode < 0) return -1; /* bad string */
 	if (rcode == 0) {
 		/*
 		 *	Explicit list given: use it.
 		 */
-		client_cs = cf_section_sub_find_name2(parentcs,
-						      "clients",
-						      section_name);
+		client_cs = cf_section_sub_find_name2(parentcs, "clients", section_name);
 		if (!client_cs) {
 			client_cs = cf_section_find(section_name);
 		}
@@ -1374,7 +1347,8 @@ static int proxy_socket_send(rad_listen_t *listener, REQUEST *request)
 static int stats_socket_recv(rad_listen_t *listener)
 {
 	ssize_t		rcode;
-	int		code, src_port;
+	int		code;
+	uint16_t	src_port;
 	RADIUS_PACKET	*packet;
 	RADCLIENT	*client = NULL;
 	fr_ipaddr_t	src_ipaddr;
@@ -1440,7 +1414,8 @@ static int stats_socket_recv(rad_listen_t *listener)
 static int auth_socket_recv(rad_listen_t *listener)
 {
 	ssize_t		rcode;
-	int		code, src_port;
+	int		code;
+	uint16_t	src_port;
 	RADIUS_PACKET	*packet;
 	RAD_REQUEST_FUNP fun = NULL;
 	RADCLIENT	*client = NULL;
@@ -1546,7 +1521,8 @@ static int auth_socket_recv(rad_listen_t *listener)
 static int acct_socket_recv(rad_listen_t *listener)
 {
 	ssize_t		rcode;
-	int		code, src_port;
+	int		code;
+	uint16_t	src_port;
 	RADIUS_PACKET	*packet;
 	RAD_REQUEST_FUNP fun = NULL;
 	RADCLIENT	*client = NULL;
@@ -1795,7 +1771,8 @@ static int rad_coa_recv(REQUEST *request)
 static int coa_socket_recv(rad_listen_t *listener)
 {
 	ssize_t		rcode;
-	int		code, src_port;
+	int		code;
+	uint16_t	src_port;
 	RADIUS_PACKET	*packet;
 	RAD_REQUEST_FUNP fun = NULL;
 	RADCLIENT	*client = NULL;
@@ -2219,7 +2196,7 @@ static int listen_bind(rad_listen_t *this)
 #endif
 
 		default:
-			WARN("Internal sanity check failed in binding to socket.  Ignoring problem.");
+			WARN("Internal sanity check failed in binding to socket.  Ignoring problem");
 			return -1;
 		}
 	}
@@ -2434,16 +2411,6 @@ static int listen_bind(rad_listen_t *this)
 	 *	May be binding to priviledged ports.
 	 */
 	if (sock->my_port != 0) {
-#ifdef SO_REUSEADDR
-		int on = 1;
-
-		if (setsockopt(this->fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) < 0) {
-			ERROR("Can't set re-use address option: %s",
-			       fr_syserror(errno));
-			return -1;
-		}
-#endif
-
 		fr_suid_up();
 		rcode = bind(this->fd, (struct sockaddr *) &salocal, salen);
 		fr_suid_down();
@@ -2485,20 +2452,32 @@ static int listen_bind(rad_listen_t *this)
 #ifdef WITH_TCP
 	if (sock->proto == IPPROTO_TCP) {
 		/*
-		 *	If there are hard-coded worker threads, they're blocking.
+		 *	If there are hard-coded worker threads, OR
+		 *	it's a TLS connection, it's blocking.
 		 *
 		 *	Otherwise, they're non-blocking.
 		 */
-		if (!this->workers && fr_nonblock(this->fd) < 0) {
-			close(this->fd);
-			ERROR("Failed setting non-blocking on socket: %s",
-			      fr_syserror(errno));
-			return -1;
+		if (!this->workers
+#ifdef WITH_PROXY
+#ifdef WITH_TLS
+		    && (this->type == RAD_LISTEN_PROXY) && !this->tls
+#endif
+#endif
+			) {
+			if (fr_nonblock(this->fd) < 0) {
+				close(this->fd);
+				ERROR("Failed setting non-blocking on socket: %s",
+				      fr_syserror(errno));
+				return -1;
+			}
 		}
 
 		/*
-		 *	Allow a backlog of 8 listeners
+		 *	Allow a backlog of 8 listeners, but only for incoming interfaces.
 		 */
+#ifdef WITH_PROXY
+		if (this->type != RAD_LISTEN_PROXY)
+#endif
 		if (listen(this->fd, 8) < 0) {
 			close(this->fd);
 			ERROR("Failed in listen(): %s", fr_syserror(errno));
@@ -2606,7 +2585,7 @@ static rad_listen_t *listen_alloc(TALLOC_CTX *ctx, RAD_LISTEN_TYPE type)
  *	Not thread-safe, but all calls to it are protected by the
  *	proxy mutex in event.c
  */
-rad_listen_t *proxy_new_listener(home_server_t *home, int src_port)
+rad_listen_t *proxy_new_listener(home_server_t *home, uint16_t src_port)
 {
 	time_t now;
 	rad_listen_t *this;
@@ -2767,7 +2746,7 @@ static int _free_proto_handle(lt_dlhandle *handle)
 static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
 {
 	int		type, rcode;
-	char		*listen_type;
+	char const	*listen_type;
 	rad_listen_t	*this;
 	CONF_PAIR	*cp;
 	char const	*value;
@@ -2825,8 +2804,7 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
 	cf_log_info(cs, "listen {");
 
 	listen_type = NULL;
-	rcode = cf_item_parse(cs, "type", PW_TYPE_STRING_PTR,
-			      &listen_type, "");
+	rcode = cf_item_parse(cs, "type", FR_ITEM_POINTER(PW_TYPE_STRING, &listen_type), "");
 	if (rcode < 0) return NULL;
 	if (rcode == 1) {
 		cf_log_err_cs(cs,
@@ -2847,12 +2825,7 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
 	 *	refer to a server.
 	 */
 	if (!server) {
-		rcode = cf_item_parse(cs, "virtual_server", PW_TYPE_STRING_PTR,
-				      &server, NULL);
-		if (rcode == 1) { /* compatiblity with 2.0-pre */
-			rcode = cf_item_parse(cs, "server", PW_TYPE_STRING_PTR,
-					      &server, NULL);
-		}
+		rcode = cf_item_parse(cs, "virtual_server", FR_ITEM_POINTER(PW_TYPE_STRING, &server), NULL);
 		if (rcode < 0) return NULL;
 	}
 
@@ -2934,7 +2907,7 @@ int listen_init(CONF_SECTION *config, rad_listen_t **head,
 	rad_listen_t	**last;
 	rad_listen_t	*this;
 	fr_ipaddr_t	server_ipaddr;
-	int		auth_port = 0;
+	uint16_t	auth_port = 0;
 #ifdef WITH_PROXY
 	bool		defined_proxy = false;
 #endif
@@ -2955,16 +2928,15 @@ int listen_init(CONF_SECTION *config, rad_listen_t **head,
 	 *
 	 *	FIXME: If argv[0] == "vmpsd", then don't listen on auth/acct!
 	 */
-	if (main_config.port >= 0) {
+	if (main_config.port > 0) {
 		auth_port = main_config.port;
 
 		/*
 		 *	-p X but no -i Y on the command-line.
 		 */
-		if ((main_config.port > 0) &&
-		    (main_config.myip.af == AF_UNSPEC)) {
+		if (main_config.myip.af == AF_UNSPEC) {
 			ERROR("The command-line says \"-p %d\", but there is no associated IP address to use",
-			       main_config.port);
+			      main_config.port);
 			return -1;
 		}
 	}
@@ -3146,7 +3118,7 @@ add_sockets:
 	 *	proxying is pointless.
 	 */
 	if (!*head) {
-		ERROR("The server is not configured to listen on any ports.  Cannot start.");
+		ERROR("The server is not configured to listen on any ports.  Cannot start");
 		return -1;
 	}
 
@@ -3177,11 +3149,9 @@ add_sockets:
 			}
 
 			if (this->workers) {
-#ifndef HAVE_PTHREAD_H
-				WARN("Setting 'workers' requires 'synchronous'.  Disabling 'workers'");
-				this->workers = 0;
-#else
-				int i, rcode;
+#ifdef HAVE_PTHREAD_H
+				int rcode;
+				uint32_t i;
 				char buffer[256];
 
 				this->print(this, buffer, sizeof(buffer));
@@ -3201,7 +3171,11 @@ add_sockets:
 
 					DEBUG("Thread %d for %s\n", i, buffer);
 				}
+#else
+				WARN("Setting 'workers' requires 'synchronous'.  Disabling 'workers'");
+				this->workers = 0;
 #endif
+
 			} else {
 				radius_update_listener(this);
 			}
@@ -3217,7 +3191,7 @@ add_sockets:
 	if ((main_config.proxy_requests == true) &&
 	    !check_config &&
 	    (*head != NULL) && !defined_proxy) {
-		int		port ;
+		uint16_t	port = 0;
 		home_server_t	home;
 
 		memset(&home, 0, sizeof(home));
@@ -3280,8 +3254,7 @@ void listen_free(rad_listen_t **head)
 }
 
 #ifdef WITH_STATS
-RADCLIENT_LIST *listener_find_client_list(fr_ipaddr_t const *ipaddr,
-					  int port)
+RADCLIENT_LIST *listener_find_client_list(fr_ipaddr_t const *ipaddr, uint16_t port)
 {
 	rad_listen_t *this;
 
@@ -3306,7 +3279,7 @@ RADCLIENT_LIST *listener_find_client_list(fr_ipaddr_t const *ipaddr,
 }
 #endif
 
-rad_listen_t *listener_find_byipaddr(fr_ipaddr_t const *ipaddr, int port, int proto)
+rad_listen_t *listener_find_byipaddr(fr_ipaddr_t const *ipaddr, uint16_t port, int proto)
 {
 	rad_listen_t *this;
 

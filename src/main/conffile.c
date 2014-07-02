@@ -907,6 +907,53 @@ static char const *cf_expand_variables(char const *cf, int *lineno,
 
 static char const *parse_spaces = "                                                                                                                                                                                                                                                                ";
 
+/** Validation function for ipaddr conffile types
+ *
+ */
+static inline int fr_item_validate_ipaddr(CONF_SECTION *cs, char const *name, PW_TYPE type, char const *value,
+					  fr_ipaddr_t *ipaddr)
+{
+	char ipbuf[128];
+
+	if (strcmp(value, "*") == 0) {
+		cf_log_info(cs, "%.*s\t%s = *", cs->depth, parse_spaces, name);
+	} else if (strspn(value, ".0123456789abdefABCDEF:%[]/") == strlen(value)) {
+		cf_log_info(cs, "%.*s\t%s = %s", cs->depth, parse_spaces, name, value);
+	} else {
+		cf_log_info(cs, "%.*s\t%s = %s IPv%s address [%s]", cs->depth, parse_spaces, name, value,
+			    (ipaddr->af == AF_INET ? "4" : " 6"), ip_ntoh(ipaddr, ipbuf, sizeof(ipbuf)));
+	}
+
+	switch (type) {
+	case PW_TYPE_IPV4_ADDR:
+	case PW_TYPE_IPV6_ADDR:
+	case PW_TYPE_IP_ADDR:
+		switch (ipaddr->af) {
+		case AF_INET:
+		if (ipaddr->prefix != 32) {
+			ERROR("Invalid IPv4 mask length \"/%i\".  Only \"/32\" permitted for non-prefix types",
+			      ipaddr->prefix);
+
+			return -1;
+		}
+			break;
+
+		case AF_INET6:
+		if (ipaddr->prefix != 128) {
+			ERROR("Invalid IPv6 mask length \"/%i\".  Only \"/128\" permitted for non-prefix types",
+			      ipaddr->prefix);
+
+			return -1;
+		}
+			break;
+
+		default:
+			return -1;
+		}
+	default:
+		return 0;
+	}
+}
 
 /*
  *	Parses an item (not a CONF_ITEM) into the specified format,
@@ -922,9 +969,8 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 	bool deprecated, required, attribute, secret;
 	char **q;
 	char const *value;
-	fr_ipaddr_t ipaddr;
 	CONF_PAIR const *cp = NULL;
-	char ipbuf[128];
+	fr_ipaddr_t *ipaddr;
 	char buffer[8192];
 
 	if (!cs) return -1;
@@ -995,12 +1041,52 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 		break;
 
 	case PW_TYPE_INTEGER:
-		*(int *)data = strtol(value, 0, 0);
-		cf_log_info(cs, "%.*s\t%s = %d",
-			    cs->depth, parse_spaces, name, *(int *)data);
+	{
+		unsigned long v = strtoul(value, 0, 0);
+
+		/*
+		 *	Restrict integer values to 0-INT32_MAX, this means
+		 *	it will always be safe to cast them to a signed type
+		 *	for comparisons, and imposes the same range limit as
+		 *	before we switched to using an unsigned type to
+		 *	represent config item integers.
+		 */
+		if (v > INT32_MAX) {
+			cf_log_err(&(cs->item), "Invalid value \"%s\" for variable %s, must be between 0-%u", value,
+				   name, INT32_MAX);
+			return -1;
+		}
+
+		*(uint32_t *)data = v;
+		cf_log_info(cs, "%.*s\t%s = %u", cs->depth, parse_spaces, name, *(uint32_t *)data);
+	}
 		break;
 
-	case PW_TYPE_STRING_PTR:
+	case PW_TYPE_SHORT:
+	{
+		unsigned long v = strtoul(value, 0, 0);
+
+		if (v > UINT16_MAX) {
+			cf_log_err(&(cs->item), "Invalid value \"%s\" for variable %s, must be between 0-%u", value,
+				   name, UINT16_MAX);
+			return -1;
+		}
+		*(uint16_t *)data = (uint16_t) v;
+		cf_log_info(cs, "%.*s\t%s = %u", cs->depth, parse_spaces, name, *(uint16_t *)data);
+	}
+		break;
+
+	case PW_TYPE_INTEGER64:
+		*(uint64_t *)data = strtoull(value, 0, 0);
+		cf_log_info(cs, "%.*s\t%s = %" PRIu64, cs->depth, parse_spaces, name, *(uint64_t *)data);
+		break;
+
+	case PW_TYPE_SIGNED:
+		*(int32_t *)data = strtol(value, 0, 0);
+		cf_log_info(cs, "%.*s\t%s = %d", cs->depth, parse_spaces, name, *(int32_t *)data);
+		break;
+
+	case PW_TYPE_STRING:
 		q = (char **) data;
 		if (*q != NULL) {
 			talloc_free(*q);
@@ -1055,7 +1141,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 		break;
 
 		/*
-		 *	This is the same as PW_TYPE_STRING_PTR,
+		 *	This is the same as PW_TYPE_STRING,
 		 *	except that we also "stat" the file, and
 		 *	cache the result.
 		 */
@@ -1102,42 +1188,65 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 		}
 		break;
 
-	case PW_TYPE_IPADDR:
-		/*
-		 *	Allow '*' as any address
-		 */
-		if (strcmp(value, "*") == 0) {
-			*(uint32_t *) data = htonl(INADDR_ANY);
-			cf_log_info(cs, "%.*s\t%s = *",
-				    cs->depth, parse_spaces, name);
-			break;
-		}
-		if (ip_hton(value, AF_INET, &ipaddr) < 0) {
-			ERROR("Can't find IP address for host %s", value);
+	case PW_TYPE_IPV4_ADDR:
+	case PW_TYPE_IPV4_PREFIX:
+		ipaddr = data;
+
+		if (fr_pton4(ipaddr, value, 0, true, false) < 0) {
+			ERROR("%s", fr_strerror());
 			return -1;
 		}
-
-		if (strspn(value, "0123456789.") == strlen(value)) {
-			cf_log_info(cs, "%.*s\t%s = %s",
-				    cs->depth, parse_spaces, name, value);
-		} else {
-			cf_log_info(cs, "%.*s\t%s = %s IP address [%s]",
-				    cs->depth, parse_spaces, name, value,
-			       ip_ntoh(&ipaddr, ipbuf, sizeof(ipbuf)));
-		}
-		*(uint32_t *) data = ipaddr.ipaddr.ip4addr.s_addr;
+		if (fr_item_validate_ipaddr(cs, name, type, value, ipaddr) < 0) return -1;
 		break;
 
-	case PW_TYPE_IPV6ADDR:
-		if (ip_hton(value, AF_INET6, &ipaddr) < 0) {
-			ERROR("Can't find IPv6 address for host %s", value);
+	case PW_TYPE_IPV6_ADDR:
+	case PW_TYPE_IPV6_PREFIX:
+		ipaddr = data;
+
+		if (fr_pton6(ipaddr, value, 0, true, false) < 0) {
+			ERROR("%s", fr_strerror());
 			return -1;
 		}
-		cf_log_info(cs, "%.*s\t%s = %s IPv6 address [%s]",
-			    cs->depth, parse_spaces, name, value,
-			    ip_ntoh(&ipaddr, ipbuf, sizeof(ipbuf)));
-		memcpy(data, &ipaddr.ipaddr.ip6addr,
-		       sizeof(ipaddr.ipaddr.ip6addr));
+		if (fr_item_validate_ipaddr(cs, name, type, value, ipaddr) < 0) return -1;
+		break;
+
+	case PW_TYPE_IP_ADDR:
+	case PW_TYPE_IP_PREFIX:
+		ipaddr = data;
+
+		if (fr_pton(ipaddr, value, 0, true) < 0) {
+			ERROR("%s", fr_strerror());
+			return -1;
+		}
+		if (fr_item_validate_ipaddr(cs, name, type, value, ipaddr) < 0) return -1;
+		break;
+
+	case PW_TYPE_TIMEVAL: {
+		int sec;
+		char *end;
+		struct timeval tv;
+
+		sec = strtoul(value, &end, 10);
+		tv.tv_sec = sec;
+		tv.tv_usec = 0;
+		if (*end == '.') {
+			sec = strlen(end + 1);
+
+			if (sec > 6) {
+				ERROR("Too much precision for timeval");
+				return -1;
+			}
+
+			strcpy(buffer, "000000");
+			memcpy(buffer, end + 1, sec);
+
+			sec = strtoul(buffer, NULL, 10);
+			tv.tv_usec = sec;
+		}
+		cf_log_info(cs, "%.*s\t%s = %d.%06d",
+			    cs->depth, parse_spaces, name, (int) tv.tv_sec, (int) tv.tv_usec);
+		memcpy(data, &tv, sizeof(tv));
+		}
 		break;
 
 	default:
@@ -1208,7 +1317,7 @@ static void cf_section_parse_init(CONF_SECTION *cs, void *base,
 			continue;
 		}
 
-		if ((variables[i].type != PW_TYPE_STRING_PTR) &&
+		if ((variables[i].type != PW_TYPE_STRING) &&
 		    (variables[i].type != PW_TYPE_FILE_INPUT) &&
 		    (variables[i].type != PW_TYPE_FILE_OUTPUT)) {
 			continue;

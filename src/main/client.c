@@ -43,7 +43,7 @@ struct radclient_list {
 	 *	FIXME: One set of trees for IPv4, and another for IPv6?
 	 */
 	rbtree_t	*trees[129]; /* for 0..128, inclusive. */
-	int		min_prefix;
+	uint32_t       	min_prefix;
 };
 
 
@@ -142,6 +142,7 @@ void clients_free(RADCLIENT_LIST *clients)
 	int i;
 
 	if (!clients) clients = root_clients;
+	if (!clients) return;	/* Clients may not have been initialised yet */
 
 	for (i = 0; i <= 128; i++) {
 		if (clients->trees[i]) rbtree_free(clients->trees[i]);
@@ -180,91 +181,25 @@ RADCLIENT_LIST *clients_init(CONF_SECTION *cs)
 	return clients;
 }
 
-
-/*
- *	Sanity check a client.
- */
-static int client_sane(RADCLIENT *client)
-{
-	switch (client->ipaddr.af) {
-	case AF_INET:
-		if (client->prefix > 32) {
-			return 0;
-		}
-
-		/*
-		 *	Zero out the subnet bits.
-		 */
-		if (client->prefix == 0) {
-			memset(&client->ipaddr.ipaddr.ip4addr, 0,
-			       sizeof(client->ipaddr.ipaddr.ip4addr));
-
-		} else if (client->prefix < 32) {
-			uint32_t mask = ~0;
-
-			mask <<= (32 - client->prefix);
-			client->ipaddr.ipaddr.ip4addr.s_addr &= htonl(mask);
-		}
-		break;
-
-	case AF_INET6:
-		if (client->prefix > 128) return 0;
-
-		if (client->prefix == 0) {
-			memset(&client->ipaddr.ipaddr.ip6addr, 0,
-			       sizeof(client->ipaddr.ipaddr.ip6addr));
-
-		} else if (client->prefix < 128) {
-			uint32_t mask, *addr;
-
-			addr = (uint32_t *) &client->ipaddr.ipaddr.ip6addr;
-
-			if ((client->prefix & 0x1f) == 0) {
-				mask = 0;
-			} else {
-				mask = ~ ((uint32_t) 0);
-				mask <<= (32 - (client->prefix & 0x1f));
-				mask = htonl(mask);
-			}
-
-			switch (client->prefix >> 5) {
-			case 0:
-				addr[0] &= mask;
-				mask = 0;
-				/* FALL-THROUGH */
-			case 1:
-				addr[1] &= mask;
-				mask = 0;
-				/* FALL-THROUGH */
-			case 2:
-				addr[2] &= mask;
-				mask = 0;
-				/* FALL-THROUGH */
-			case 3:
-				addr[3] &= mask;
-			  break;
-			}
-		}
-		break;
-
-	default:
-		return 0;
-	}
-
-	return 1;
-}
-
-
 /*
  *	Add a client to the tree.
  */
 int client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 {
 	RADCLIENT *old;
+	char buffer[INET6_ADDRSTRLEN + 3];
 
 	if (!client) {
 		return 0;
 	}
+
+	/*
+	 *	Hack to fixup wildcard clients
+	 */
+	if (is_wildcard(&client->ipaddr)) client->ipaddr.prefix = 0;
+
+	fr_ntop(buffer, sizeof(buffer), &client->ipaddr);
+	DEBUG3("Adding client %s (%s) to prefix tree %i", buffer, client->longname, client->ipaddr.prefix);
 
 	/*
 	 *	If "clients" is NULL, it means add to the global list.
@@ -280,19 +215,12 @@ int client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 		clients = root_clients;
 	}
 
-	if ((client->prefix < 0) || (client->prefix > 128)) {
-		return 0;
-	}
-
-	if (!client_sane(client)) return 0;
-
 	/*
 	 *	Create a tree for it.
 	 */
-	if (!clients->trees[client->prefix]) {
-		clients->trees[client->prefix] = rbtree_create(client_ipaddr_cmp,
-							       NULL, 0);
-		if (!clients->trees[client->prefix]) {
+	if (!clients->trees[client->ipaddr.prefix]) {
+		clients->trees[client->ipaddr.prefix] = rbtree_create(client_ipaddr_cmp, NULL, 0);
+		if (!clients->trees[client->ipaddr.prefix]) {
 			return 0;
 		}
 	}
@@ -302,14 +230,14 @@ int client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 	/*
 	 *	Cannot insert the same client twice.
 	 */
-	old = rbtree_finddata(clients->trees[client->prefix], client);
+	old = rbtree_finddata(clients->trees[client->ipaddr.prefix], client);
 	if (old) {
 		/*
 		 *	If it's a complete duplicate, then free the new
 		 *	one, and return "OK".
 		 */
 		if ((fr_ipaddr_cmp(&old->ipaddr, &client->ipaddr) == 0) &&
-		    (old->prefix == client->prefix) &&
+		    (old->ipaddr.prefix == client->ipaddr.prefix) &&
 		    namecmp(longname) && namecmp(secret) &&
 		    namecmp(shortname) && namecmp(nas_type) &&
 		    namecmp(login) && namecmp(password) && namecmp(server) &&
@@ -337,7 +265,7 @@ int client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 	/*
 	 *	Other error adding client: likely is fatal.
 	 */
-	if (!rbtree_insert(clients->trees[client->prefix], client)) {
+	if (!rbtree_insert(clients->trees[client->ipaddr.prefix], client)) {
 		return 0;
 	}
 
@@ -373,8 +301,8 @@ int client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 	if (tree_num) rbtree_insert(tree_num, client);
 #endif
 
-	if (client->prefix < clients->min_prefix) {
-		clients->min_prefix = client->prefix;
+	if (client->ipaddr.prefix < clients->min_prefix) {
+		clients->min_prefix = client->ipaddr.prefix;
 	}
 
 	(void) talloc_steal(clients, client); /* reparent it */
@@ -392,14 +320,14 @@ void client_delete(RADCLIENT_LIST *clients, RADCLIENT *client)
 
 	if (!client->dynamic) return;
 
-	rad_assert((client->prefix >= 0) && (client->prefix <= 128));
+	rad_assert(client->ipaddr.prefix <= 128);
 
 	client->dynamic = 2;	/* signal to client_free */
 
 #ifdef WITH_STATS
 	rbtree_deletebydata(tree_num, client);
 #endif
-	rbtree_deletebydata(clients->trees[client->prefix], client);
+	rbtree_deletebydata(clients->trees[client->ipaddr.prefix], client);
 }
 #endif
 
@@ -439,7 +367,7 @@ RADCLIENT *client_findbynumber(UNUSED const RADCLIENT_LIST *clients, UNUSED int 
  */
 RADCLIENT *client_find(RADCLIENT_LIST const *clients, fr_ipaddr_t const *ipaddr, int proto)
 {
-	int i, max_prefix;
+	uint32_t i, max_prefix;
 	RADCLIENT myclient;
 
 	if (!clients) clients = root_clients;
@@ -462,22 +390,18 @@ RADCLIENT *client_find(RADCLIENT_LIST const *clients, fr_ipaddr_t const *ipaddr,
 	for (i = max_prefix; i >= clients->min_prefix; i--) {
 		void *data;
 
-		myclient.prefix = i;
 		myclient.ipaddr = *ipaddr;
 		myclient.proto = proto;
-		client_sane(&myclient);	/* clean up the ipaddress */
+		fr_ipaddr_mask(&myclient.ipaddr, i);
 
 		if (!clients->trees[i]) continue;
 
 		data = rbtree_finddata(clients->trees[i], &myclient);
-		if (data) {
-			return data;
-		}
+		if (data) return data;
 	}
 
 	return NULL;
 }
-
 
 /*
  *	Old wrapper for client_find
@@ -487,76 +411,57 @@ RADCLIENT *client_find_old(fr_ipaddr_t const *ipaddr)
 	return client_find(root_clients, ipaddr, IPPROTO_UDP);
 }
 
-static struct in_addr cl_ip4addr;
-static struct in6_addr cl_ip6addr;
-static char *cl_srcipaddr = NULL;
+static fr_ipaddr_t cl_ipaddr;
+static char const *cl_srcipaddr = NULL;
+static uint32_t cl_prefix;
 #ifdef WITH_TCP
-static char *hs_proto = NULL;
+static char const *hs_proto = NULL;
 #endif
 
 #ifdef WITH_TCP
 static CONF_PARSER limit_config[] = {
-	{ "max_connections", PW_TYPE_INTEGER,
-	  offsetof(RADCLIENT, limit.max_connections), NULL,   "16" },
+	{ "max_connections", FR_CONF_OFFSET(PW_TYPE_INTEGER, RADCLIENT, limit.max_connections),   "16" },
 
-	{ "lifetime", PW_TYPE_INTEGER,
-	  offsetof(RADCLIENT, limit.lifetime), NULL,   "0" },
+	{ "lifetime", FR_CONF_OFFSET(PW_TYPE_INTEGER, RADCLIENT, limit.lifetime),   "0" },
 
-	{ "idle_timeout", PW_TYPE_INTEGER,
-	  offsetof(RADCLIENT, limit.idle_timeout), NULL,   "30" },
+	{ "idle_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, RADCLIENT, limit.idle_timeout), "30" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 #endif
 
 static const CONF_PARSER client_config[] = {
-	{ "ipaddr",  PW_TYPE_IPADDR,
-	  0, &cl_ip4addr,  NULL },
-	{ "ipv6addr",  PW_TYPE_IPV6ADDR,
-	  0, &cl_ip6addr, NULL },
-	{ "netmask",  PW_TYPE_INTEGER,
-	  offsetof(RADCLIENT, prefix), 0, NULL },
+	{ "ipaddr", FR_CONF_POINTER(PW_TYPE_IP_PREFIX, &cl_ipaddr), NULL },
+	{ "ipv4addr", FR_CONF_POINTER(PW_TYPE_IPV4_PREFIX, &cl_ipaddr), NULL },
+	{ "ipv6addr", FR_CONF_POINTER(PW_TYPE_IPV6_PREFIX, &cl_ipaddr), NULL },
+	{ "netmask", FR_CONF_POINTER(PW_TYPE_INTEGER, &cl_prefix), NULL },
 
-	{ "src_ipaddr",  PW_TYPE_STRING_PTR,
-	  0, &cl_srcipaddr,  NULL },
+	{ "src_ipaddr", FR_CONF_POINTER(PW_TYPE_STRING, &cl_srcipaddr), NULL },
 
-	{ "require_message_authenticator",  PW_TYPE_BOOLEAN,
-	  offsetof(RADCLIENT, message_authenticator), 0, "no" },
+	{ "require_message_authenticator",  FR_CONF_OFFSET(PW_TYPE_BOOLEAN, RADCLIENT, message_authenticator), "no" },
 
-	{ "secret",  PW_TYPE_STRING_PTR | PW_TYPE_SECRET,
-	  offsetof(RADCLIENT, secret), 0, NULL },
-	{ "shortname",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, shortname), 0, NULL },
-	{ "nastype",  PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(RADCLIENT, nas_type), 0, NULL },
-	{ "nas_type",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, nas_type), 0, NULL },
-	{ "login",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, login), 0, NULL },
-	{ "password",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, password), 0, NULL },
-	{ "virtual_server",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, server), 0, NULL },
+	{ "secret", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, RADCLIENT, secret), NULL },
+	{ "shortname", FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, shortname), NULL },
+	{ "nastype", FR_CONF_OFFSET(PW_TYPE_DEPRECATED | PW_TYPE_STRING, RADCLIENT, nas_type), NULL },
+	{ "nas_type", FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, nas_type), NULL },
+	{ "login", FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, login), NULL },
+	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, password), NULL },
+	{ "virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, server), NULL },
+	{ "response_window", FR_CONF_OFFSET(PW_TYPE_TIMEVAL, RADCLIENT, response_window), NULL },
 
 #ifdef WITH_TCP
-	{ "proto",  PW_TYPE_STRING_PTR,
-	  0, &hs_proto, NULL },
-
-	{ "limit", PW_TYPE_SUBSECTION, 0, NULL, (void const *) limit_config },
+	{ "proto", FR_CONF_POINTER(PW_TYPE_STRING, &hs_proto), NULL },
+	{ "limit", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) limit_config },
 #endif
 
 #ifdef WITH_DYNAMIC_CLIENTS
-	{ "dynamic_clients",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, client_server), 0, NULL },
-	{ "lifetime",  PW_TYPE_INTEGER,
-	  offsetof(RADCLIENT, lifetime), 0, NULL },
-	{ "rate_limit",  PW_TYPE_BOOLEAN,
-	  offsetof(RADCLIENT, rate_limit), 0, NULL },
+	{ "dynamic_clients", FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, client_server), NULL },
+	{ "lifetime", FR_CONF_OFFSET(PW_TYPE_INTEGER, RADCLIENT, lifetime), NULL },
+	{ "rate_limit", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, RADCLIENT, rate_limit), NULL },
 #endif
 
 #ifdef WITH_COA
-	{ "coa_server",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, coa_name), 0, NULL },
+	{ "coa_server", FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, coa_name), NULL },
 #endif
 
 	{ NULL, -1, 0, NULL, NULL }
@@ -575,17 +480,15 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 	}
 
 	/*
-	 * The size is fine.. Let's create the buffer
+	 *	The size is fine.. Let's create the buffer
 	 */
 	c = talloc_zero(cs, RADCLIENT);
 	c->cs = cs;
 
-	memset(&cl_ip4addr, 0, sizeof(cl_ip4addr));
-	memset(&cl_ip6addr, 0, sizeof(cl_ip6addr));
-	c->prefix = -1;
-
+	memset(&cl_ipaddr, 0, sizeof(cl_ipaddr));
+	cl_prefix = 256;
 	if (cf_section_parse(cs, c, client_config) < 0) {
-		cf_log_err_cs(cs, "Error parsing client section.");
+		cf_log_err_cs(cs, "Error parsing client section");
 	error:
 		client_free(c);
 #ifdef WITH_TCP
@@ -597,27 +500,42 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 	}
 
 	/*
-	 *	Global clients can set servers to use,
-	 *	per-server clients cannot.
+	 *	Global clients can set servers to use per-server clients cannot.
 	 */
 	if (in_server && c->server) {
-		cf_log_err_cs(cs,
-			   "Clients inside of an server section cannot point to a server.");
+		cf_log_err_cs(cs, "Clients inside of an server section cannot point to a server");
 		goto error;
 	}
 
 	/*
-	 *	No "ipaddr" or "ipv6addr", use old-style
-	 *	"client <ipaddr> {" syntax.
+	 *	Newer style client definitions with either ipaddr or ipaddr6
+	 *	config items.
 	 */
-	if (!cf_pair_find(cs, "ipaddr") &&
-	    !cf_pair_find(cs, "ipv6addr")) {
-		char *prefix_ptr;
+	if (cf_pair_find(cs, "ipaddr") || cf_pair_find(cs, "ipv4addr") || cf_pair_find(cs, "ipv6addr")) {
+		char buffer[128];
 
-#if 0
-		WARN("No 'ipaddr' or 'ipv6addr' field found in client %s.  Please fix your configuration",name2);
+		/*
+		 *	Sets ipv4/ipv6 address and prefix.
+		 */
+		c->ipaddr = cl_ipaddr;
+
+		/*
+		 *	Set the long name to be the result of a reverse lookup on the IP address.
+		 */
+		ip_ntoh(&c->ipaddr, buffer, sizeof(buffer));
+		c->longname = talloc_typed_strdup(c, buffer);
+
+		/*
+		 *	Set the short name to the name2.
+		 */
+		if (!c->shortname) c->shortname = talloc_typed_strdup(c, name2);
+	/*
+	 *	No "ipaddr" or "ipv6addr", use old-style "client <ipaddr> {" syntax.
+	 */
+	} else {
+		WARN("No 'ipaddr' or 'ipv4addr' or 'ipv6addr' field found in client %s.  Please fix your configuration",
+		     name2);
 		WARN("Support for old-style clients will be removed in a future release");
-#endif
 
 #ifdef WITH_TCP
 		if (cf_pair_find(cs, "proto") != NULL) {
@@ -625,108 +543,74 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 			goto error;
 		}
 #endif
-
-		prefix_ptr = strchr(name2, '/');
-
-		/*
-		 *	Look for prefixes.
-		 */
-		if (prefix_ptr) {
-			c->prefix = atoi(prefix_ptr + 1);
-			if ((c->prefix < 0) || (c->prefix > 128)) {
-				cf_log_err_cs(cs, "Invalid Prefix value '%s' for IP.", prefix_ptr + 1);
-				goto error;
-			}
-			/* Replace '/' with '\0' */
-			*prefix_ptr = '\0';
-		}
-
-		/*
-		 *	Always get the numeric representation of IP
-		 */
-		if (ip_hton(name2, AF_UNSPEC, &c->ipaddr) < 0) {
-			cf_log_err_cs(cs,
-				   "Failed to look up hostname %s: %s",
-				   name2, fr_strerror());
+		if (fr_pton(&c->ipaddr, name2, 0, true) < 0) {
+			cf_log_err_cs(cs, "Failed parsing client name \"%s\" as ip address or hostname: %s", name2,
+				      fr_strerror());
 			goto error;
 		}
 
-		if (prefix_ptr) *prefix_ptr = '/';
 		c->longname = talloc_typed_strdup(c, name2);
-
 		if (!c->shortname) c->shortname = talloc_typed_strdup(c, c->longname);
+	}
 
-	} else {
-		char buffer[1024];
+	/*
+	 *	Prefix override (this needs to die)
+	 */
+	if (cl_prefix != 256) {
+		WARN("'netmask' field found in client %s is deprecated, use CIDR notation instead.  "
+		     "Please fix your configuration", name2);
+		WARN("Support for 'netmask' will be removed in a future release");
 
-		/*
-		 *	Figure out which one to use.
-		 */
-		if (cf_pair_find(cs, "ipaddr")) {
-			c->ipaddr.af = AF_INET;
-			c->ipaddr.ipaddr.ip4addr = cl_ip4addr;
-
-			if ((c->prefix < -1) || (c->prefix > 32)) {
-				cf_log_err_cs(cs, "Netmask must be between 0 and 32");
-
+		switch (c->ipaddr.af) {
+		case AF_INET:
+			if (cl_prefix > 32) {
+				cf_log_err_cs(cs, "Invalid IPv4 mask length \"%i\".  Should be between 0-32",
+					      cl_prefix);
 				goto error;
 			}
+			break;
 
-		} else if (cf_pair_find(cs, "ipv6addr")) {
-			c->ipaddr.af = AF_INET6;
-			c->ipaddr.ipaddr.ip6addr = cl_ip6addr;
-
-			if ((c->prefix < -1) || (c->prefix > 128)) {
-				cf_log_err_cs(cs,
-					   "Netmask must be between 0 and 128");
+		case AF_INET6:
+			if (cl_prefix > 128) {
+				cf_log_err_cs(cs, "Invalid IPv6 mask length \"%i\".  Should be between 0-128",
+					      cl_prefix);
 				goto error;
 			}
-		} else {
-			cf_log_err_cs(cs,
-				   "No IP address defined for the client");
-			goto error;
+			break;
+
+		default:
+			rad_assert(0);
 		}
+		fr_ipaddr_mask(&c->ipaddr, cl_prefix);
+	}
 
-		ip_ntoh(&c->ipaddr, buffer, sizeof(buffer));
-		c->longname = talloc_typed_strdup(c, buffer);
-
-		/*
-		 *	Set the short name to the name2
-		 */
-		if (!c->shortname) c->shortname = talloc_typed_strdup(c, name2);
-
-		c->proto = IPPROTO_UDP;
-		if (hs_proto) {
-			if (strcmp(hs_proto, "udp") == 0) {
-				hs_proto = NULL;
+	c->proto = IPPROTO_UDP;
+	if (hs_proto) {
+		if (strcmp(hs_proto, "udp") == 0) {
+			hs_proto = NULL;
 
 #ifdef WITH_TCP
-			} else if (strcmp(hs_proto, "tcp") == 0) {
-				hs_proto = NULL;
-				c->proto = IPPROTO_TCP;
+		} else if (strcmp(hs_proto, "tcp") == 0) {
+			hs_proto = NULL;
+			c->proto = IPPROTO_TCP;
+#  ifdef WITH_TLS
+		} else if (strcmp(hs_proto, "tls") == 0) {
+			hs_proto = NULL;
+			c->proto = IPPROTO_TCP;
+			c->tls_required = true;
 
-#ifdef WITH_TLS
-			} else if (strcmp(hs_proto, "tls") == 0) {
-				hs_proto = NULL;
-				c->proto = IPPROTO_TCP;
-				c->tls_required = true;
-
-			} else if (strcmp(hs_proto, "radsec") == 0) {
-				hs_proto = NULL;
-				c->proto = IPPROTO_TCP;
-				c->tls_required = true;
+		} else if (strcmp(hs_proto, "radsec") == 0) {
+			hs_proto = NULL;
+			c->proto = IPPROTO_TCP;
+			c->tls_required = true;
+#  endif
+		} else if (strcmp(hs_proto, "*") == 0) {
+			hs_proto = NULL;
+			c->proto = IPPROTO_IP; /* fake for dual */
 #endif
-
-			} else if (strcmp(hs_proto, "*") == 0) {
-				hs_proto = NULL;
-				c->proto = IPPROTO_IP; /* fake for dual */
-#endif
-
-			} else {
-				cf_log_err_cs(cs,
-					   "Unknown proto \"%s\".", hs_proto);
-				goto error;
-			}
+		} else {
+			cf_log_err_cs(cs, "Unknown proto \"%s\".", hs_proto);
+			goto error;
 		}
 	}
 
@@ -737,38 +621,40 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 	 */
 	if (cl_srcipaddr) {
 #ifdef WITH_UDPFROMTO
-		if (ip_hton(cl_srcipaddr, c->ipaddr.af, &c->src_ipaddr) < 0) {
-			cf_log_err_cs(cs, "Failed parsing src_ipaddr");
-			goto error;
+		switch (c->ipaddr.af) {
+		case AF_INET:
+			if (fr_pton4(&c->src_ipaddr, cl_srcipaddr, 0, true, false) < 0) {
+				cf_log_err_cs(cs, "Failed parsing src_ipaddr: %s", fr_strerror());
+				goto error;
+			}
+			break;
+
+		case AF_INET6:
+			if (fr_pton6(&c->src_ipaddr, cl_srcipaddr, 0, true, false) < 0) {
+				cf_log_err_cs(cs, "Failed parsing src_ipaddr: %s", fr_strerror());
+				goto error;
+			}
+			break;
+		default:
+			rad_assert(0);
 		}
 #else
-		WARN("Server not build with udpfromto, ignoring client src_ipaddr");
+		WARN("Server not built with udpfromto, ignoring client src_ipaddr");
 #endif
-
 		cl_srcipaddr = NULL;
 	}
 
-	if (c->prefix < 0) switch (c->ipaddr.af) {
-	case AF_INET:
-		c->prefix = 32;
-		break;
-	case AF_INET6:
-		c->prefix = 128;
-		break;
-	default:
-		break;
-	}
+	FR_TIMEVAL_BOUND_CHECK("response_window", &c->response_window, >=, 0, 1000);
+	FR_TIMEVAL_BOUND_CHECK("response_window", &c->response_window, <=, 60, 0);
+	FR_TIMEVAL_BOUND_CHECK("response_window", &c->response_window, <=, main_config.max_request_time, 0);
 
 #ifdef WITH_DYNAMIC_CLIENTS
 	if (c->client_server) {
 		c->secret = talloc_typed_strdup(c, "testing123");
 
-		if (((c->ipaddr.af == AF_INET) &&
-		     (c->prefix == 32)) ||
-		    ((c->ipaddr.af == AF_INET6) &&
-		     (c->prefix == 128))) {
-			cf_log_err_cs(cs,
-				   "Dynamic clients MUST be a network, not a single IP address.");
+		if (((c->ipaddr.af == AF_INET) && (c->ipaddr.prefix == 32)) ||
+		    ((c->ipaddr.af == AF_INET6) && (c->ipaddr.prefix == 128))) {
+			cf_log_err_cs(cs, "Dynamic clients MUST be a network, not a single IP address");
 			goto error;
 		}
 
@@ -776,7 +662,7 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 	}
 #endif
 
-	if (!c->secret || !*c->secret) {
+	if (!c->secret || (c->secret[0] == '\0')) {
 #ifdef WITH_DHCP
 		char const *value = NULL;
 		CONF_PAIR *cp = cf_pair_find(cs, "dhcp");
@@ -787,7 +673,6 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 		 *	Secrets aren't needed for DHCP.
 		 */
 		if (value && (strcmp(value, "yes") == 0)) return c;
-
 #endif
 
 #ifdef WITH_TLS
@@ -1022,30 +907,19 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_req
  *	We overload this structure a lot.
  */
 static const CONF_PARSER dynamic_config[] = {
-	{ "FreeRADIUS-Client-IP-Address",  PW_TYPE_IPADDR,
-	  offsetof(RADCLIENT, ipaddr), 0, NULL },
-	{ "FreeRADIUS-Client-IPv6-Address",  PW_TYPE_IPV6ADDR,
-	  offsetof(RADCLIENT, ipaddr), 0, NULL },
-	{ "FreeRADIUS-Client-IP-Prefix",  PW_TYPE_IPV4PREFIX,
-	  offsetof(RADCLIENT, ipaddr), 0, NULL },
-	{ "FreeRADIUS-Client-IPv6-Prefix",  PW_TYPE_IPV6PREFIX,
-	  offsetof(RADCLIENT, ipaddr), 0, NULL },
-	{ "FreeRADIUS-Client-Src-IP-Address",  PW_TYPE_IPADDR,
-	  offsetof(RADCLIENT, src_ipaddr), 0, NULL },
-	{ "FreeRADIUS-Client-Src-IPv6-Address",  PW_TYPE_IPV6ADDR,
-	  offsetof(RADCLIENT, src_ipaddr), 0, NULL },
+	{ "FreeRADIUS-Client-IP-Address", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR, RADCLIENT, ipaddr), NULL },
+	{ "FreeRADIUS-Client-IPv6-Address", FR_CONF_OFFSET(PW_TYPE_IPV6_ADDR, RADCLIENT, ipaddr), NULL },
+	{ "FreeRADIUS-Client-IP-Prefix", FR_CONF_OFFSET(PW_TYPE_IPV4_PREFIX, RADCLIENT, ipaddr), NULL },
+	{ "FreeRADIUS-Client-IPv6-Prefix", FR_CONF_OFFSET(PW_TYPE_IPV6_PREFIX, RADCLIENT, ipaddr), NULL },
+	{ "FreeRADIUS-Client-Src-IP-Address", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR, RADCLIENT, src_ipaddr), NULL },
+	{ "FreeRADIUS-Client-Src-IPv6-Address", FR_CONF_OFFSET(PW_TYPE_IPV6_ADDR, RADCLIENT, src_ipaddr), NULL },
 
-	{ "FreeRADIUS-Client-Require-MA",  PW_TYPE_BOOLEAN,
-	  offsetof(RADCLIENT, message_authenticator), NULL, NULL },
+	{ "FreeRADIUS-Client-Require-MA", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, RADCLIENT, message_authenticator), NULL },
 
-	{ "FreeRADIUS-Client-Secret",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, secret), 0, "" },
-	{ "FreeRADIUS-Client-Shortname",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, shortname), 0, "" },
-	{ "FreeRADIUS-Client-NAS-Type",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, nas_type), 0, NULL },
-	{ "FreeRADIUS-Client-Virtual-Server",  PW_TYPE_STRING_PTR,
-	  offsetof(RADCLIENT, server), 0, NULL },
+	{ "FreeRADIUS-Client-Secret",  FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, secret), "" },
+	{ "FreeRADIUS-Client-Shortname",  FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, shortname), "" },
+	{ "FreeRADIUS-Client-NAS-Type",  FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, nas_type), NULL },
+	{ "FreeRADIUS-Client-Virtual-Server",  FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, server), NULL },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -1104,7 +978,7 @@ error:
 /** Add a client from a result set (LDAP, SQL, et al)
  *
  * @param ctx Talloc context.
- * @param identifier Client IP Address / IPv4 subnet / FQDN.
+ * @param identifier Client IP Address / IPv4 subnet / IPv6 subnet / FQDN.
  * @param secret Client secret.
  * @param shortname Client friendly name.
  * @param type NAS-Type.
@@ -1116,82 +990,33 @@ RADCLIENT *client_from_query(TALLOC_CTX *ctx, char const *identifier, char const
 			     char const *type, char const *server, bool require_ma)
 {
 	RADCLIENT *c;
-	char *id;
-	char *prefix;
+	char buffer[128];
 
 	rad_assert(identifier);
 	rad_assert(secret);
 
 	c = talloc_zero(ctx, RADCLIENT);
 
-#ifdef WITH_DYNAMIC_CLIENTS
-	c->dynamic = true;
-#endif
-
-	id = talloc_typed_strdup(c, identifier);
-
-	/*
-	 *	Look for prefixes
-	 */
-	c->prefix = -1;
-	prefix = strchr(id, '/');
-	if (prefix) {
-		c->prefix = atoi(prefix + 1);
-		if ((c->prefix < 0) || (c->prefix > 128)) {
-			ERROR("Invalid Prefix value '%s' for IP.", prefix + 1);
-			talloc_free(c);
-
-			return NULL;
-		}
-
-		/* Replace '/' with '\0' */
-		*prefix = '\0';
-	}
-
-	/*
-	 *	Always get the numeric representation of IP
-	 */
-	if (ip_hton(id, AF_UNSPEC, &c->ipaddr) < 0) {
-		ERROR("Failed to look up hostname %s: %s", id, fr_strerror());
+	if (fr_pton(&c->ipaddr, identifier, 0, true) < 0) {
+		ERROR("%s", fr_strerror());
 		talloc_free(c);
 
 		return NULL;
 	}
 
-	{
-		char buffer[256];
-		ip_ntoh(&c->ipaddr, buffer, sizeof(buffer));
-		c->longname = talloc_typed_strdup(c, buffer);
-	}
-
-	if (c->prefix < 0) switch (c->ipaddr.af) {
-	case AF_INET:
-		c->prefix = 32;
-		break;
-	case AF_INET6:
-		c->prefix = 128;
-		break;
-	default:
-		break;
-	}
+#ifdef WITH_DYNAMIC_CLIENTS
+	c->dynamic = true;
+#endif
+	ip_ntoh(&c->ipaddr, buffer, sizeof(buffer));
+	c->longname = talloc_typed_strdup(c, buffer);
 
 	/*
 	 *	Other values (secret, shortname, nas_type, virtual_server)
 	 */
 	c->secret = talloc_typed_strdup(c, secret);
-
-	if (shortname) {
-		c->shortname = talloc_typed_strdup(c, shortname);
-	}
-
-	if (type) {
-		c->nas_type = talloc_typed_strdup(c, type);
-	}
-
-	if (server) {
-		c->server = talloc_typed_strdup(c, server);
-	}
-
+	if (shortname) c->shortname = talloc_typed_strdup(c, shortname);
+	if (type) c->nas_type = talloc_typed_strdup(c, type);
+	if (server) c->server = talloc_typed_strdup(c, server);
 	c->message_authenticator = require_ma;
 
 	return c;
@@ -1241,57 +1066,57 @@ RADCLIENT *client_from_request(RADCLIENT_LIST *clients, REQUEST *request)
 		}
 
 		switch (dynamic_config[i].type) {
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 			if (da->attr == PW_FREERADIUS_CLIENT_IP_ADDRESS) {
 				c->ipaddr.af = AF_INET;
 				c->ipaddr.ipaddr.ip4addr.s_addr = vp->vp_ipaddr;
-				c->prefix = 32;
+				c->ipaddr.prefix = 32;
 			} else if (da->attr == PW_FREERADIUS_CLIENT_SRC_IP_ADDRESS) {
 #ifdef WITH_UDPFROMTO
 				c->src_ipaddr.af = AF_INET;
 				c->src_ipaddr.ipaddr.ip4addr.s_addr = vp->vp_ipaddr;
 #else
-				WARN("Server not build with udpfromto, ignoring FreeRADIUS-Client-Src-IP-Address.");
+				WARN("Server not built with udpfromto, ignoring FreeRADIUS-Client-Src-IP-Address");
 #endif
 			}
 
 			break;
 
-		case PW_TYPE_IPV6ADDR:
+		case PW_TYPE_IPV6_ADDR:
 			if (da->attr == PW_FREERADIUS_CLIENT_IPV6_ADDRESS) {
 				c->ipaddr.af = AF_INET6;
 				c->ipaddr.ipaddr.ip6addr = vp->vp_ipv6addr;
-				c->prefix = 128;
+				c->ipaddr.prefix = 128;
 			} else if (da->attr == PW_FREERADIUS_CLIENT_SRC_IPV6_ADDRESS) {
 #ifdef WITH_UDPFROMTO
 				c->src_ipaddr.af = AF_INET6;
 				c->src_ipaddr.ipaddr.ip6addr = vp->vp_ipv6addr;
 #else
-				WARN("Server not build with udpfromto, ignoring FreeRADIUS-Client-Src-IPv6-Address.");
+				WARN("Server not built with udpfromto, ignoring FreeRADIUS-Client-Src-IPv6-Address");
 #endif
 			}
 
 			break;
 
-		case PW_TYPE_IPV4PREFIX:
+		case PW_TYPE_IPV4_PREFIX:
 			if (da->attr == PW_FREERADIUS_CLIENT_IP_PREFIX) {
 				c->ipaddr.af = AF_INET;
 				memcpy(&c->ipaddr.ipaddr.ip4addr.s_addr, &(vp->vp_ipv4prefix[2]), sizeof(c->ipaddr.ipaddr.ip4addr.s_addr));
-				c->prefix = (vp->vp_ipv4prefix[1] & 0x3f);
+				fr_ipaddr_mask(&c->ipaddr, (vp->vp_ipv4prefix[1] & 0x3f));
 			}
 
 			break;
 
-		case PW_TYPE_IPV6PREFIX:
+		case PW_TYPE_IPV6_PREFIX:
 			if (da->attr == PW_FREERADIUS_CLIENT_IPV6_PREFIX) {
 				c->ipaddr.af = AF_INET6;
 				memcpy(&c->ipaddr.ipaddr.ip6addr, &(vp->vp_ipv6prefix[2]), sizeof(c->ipaddr.ipaddr.ip6addr));
-				c->prefix = vp->vp_ipv6prefix[1];
+				fr_ipaddr_mask(&c->ipaddr, vp->vp_ipv6prefix[1]);
 			}
 
 			break;
 
-		case PW_TYPE_STRING_PTR:
+		case PW_TYPE_STRING:
 			p = (char **) ((char *) c + dynamic_config[i].offset);
 			if (*p) talloc_free(*p);
 			if (vp->vp_strvalue[0]) {
@@ -1319,15 +1144,24 @@ RADCLIENT *client_from_request(RADCLIENT_LIST *clients, REQUEST *request)
 		goto error;
 	}
 
-	if (fr_ipaddr_cmp(&request->packet->src_ipaddr, &c->ipaddr) != 0) {
-		char buf2[128];
+	{
+		fr_ipaddr_t addr;
 
-		DEBUG("- Cannot add client %s: IP address %s do not match",
-		      ip_ntoh(&request->packet->src_ipaddr,
-			      buffer, sizeof(buffer)),
-		      ip_ntoh(&c->ipaddr,
-			      buf2, sizeof(buf2)));
-		goto error;
+		/*
+		 *	Need to apply the same mask as we set for the client
+		 *	else clients created with FreeRADIUS-Client-IPv6-Prefix
+		 *	or FreeRADIUS-Client-IPv4-Prefix will fail this check.
+		 */
+		addr = request->packet->src_ipaddr;
+		fr_ipaddr_mask(&addr, c->ipaddr.prefix);
+		if (fr_ipaddr_cmp(&addr, &c->ipaddr) != 0) {
+			char buf2[128];
+
+			DEBUG("- Cannot add client %s: IP address %s do not match",
+			      ip_ntoh(&request->packet->src_ipaddr, buffer, sizeof(buffer)),
+			      ip_ntoh(&c->ipaddr, buf2, sizeof(buf2)));
+			goto error;
+		}
 	}
 
 	if (!c->secret || !*c->secret) {
@@ -1398,3 +1232,4 @@ RADCLIENT *client_read(char const *filename, int in_server, int flag)
 	return c;
 }
 #endif
+

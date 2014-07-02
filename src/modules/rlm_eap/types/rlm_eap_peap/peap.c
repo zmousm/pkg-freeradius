@@ -239,10 +239,10 @@ static int eapmessage_verify(REQUEST *request,
 		 */
 	case PW_EAP_RESPONSE:
 		if (eap_packet->data[0] == PW_EAP_TLV) {
-			RDEBUG2("Received EAP-TLV response.");
+			RDEBUG2("Received EAP-TLV response");
 			return 1;
 		}
-		RDEBUG2("Got something weird.");
+		RDEBUG2("Got something weird");
 		break;
 
 
@@ -402,7 +402,7 @@ static int eappeap_check_tlv(REQUEST *request, uint8_t const *data,
 		}
 
 		if (data[10] == EAP_TLV_FAILURE) {
-			RDEBUG2("Client rejected our response.  The password is probably incorrect.");
+			RDEBUG2("Client rejected our response.  The password is probably incorrect");
 			return 0;
 		}
 	}
@@ -432,7 +432,7 @@ static int CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_session_t 
 
 	switch (reply->code) {
 	case PW_CODE_AUTHENTICATION_ACK:
-		RDEBUG2("Tunneled authentication was successful.");
+		RDEBUG2("Tunneled authentication was successful");
 		t->status = PEAP_STATUS_SENT_TLV_SUCCESS;
 		eappeap_success(handler, tls_session);
 		rcode = RLM_MODULE_HANDLED;
@@ -470,7 +470,7 @@ static int CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_session_t 
 		break;
 
 	case PW_CODE_AUTHENTICATION_REJECT:
-		RDEBUG2("Tunneled authentication was rejected.");
+		RDEBUG2("Tunneled authentication was rejected");
 		t->status = PEAP_STATUS_SENT_TLV_FAILURE;
 		eappeap_failure(handler, tls_session);
 		rcode = RLM_MODULE_HANDLED;
@@ -548,7 +548,7 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 	tls_session_t *tls_session = (tls_session_t *) data;
 	REQUEST *fake, *request = handler->request;
 
-	RDEBUG2("Passing reply from proxy back into the tunnel.");
+	RDEBUG2("Passing reply from proxy back into the tunnel");
 
 	/*
 	 *	If there was a fake request associated with the proxied
@@ -586,7 +586,7 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 		 *	Perform a post-auth stage, which will get the EAP
 		 *	handler, too...
 		 */
-		fake->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
+		fake->log.lvl &= ~RAD_REQUEST_OPTION_PROXY_EAP;
 		RDEBUG2("Passing reply back for EAP-MS-CHAP-V2");
 		process_post_proxy(0, fake);
 
@@ -670,7 +670,7 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 		return eaptls_success(handler, 0);
 
 	default:
-		RDEBUG2("Reply was unknown.");
+		RDEBUG2("Reply was unknown");
 		break;
 	}
 
@@ -748,7 +748,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 
 	if ((t->status != PEAP_STATUS_TUNNEL_ESTABLISHED) &&
 	    !eapmessage_verify(request, data, data_len)) {
-		RDEBUG2("FAILED processing PEAP: Tunneled data is invalid.");
+		RDEBUG2("FAILED processing PEAP: Tunneled data is invalid");
 		if (debug_flag > 2) print_tunneled_data(data, data_len);
 		return RLM_MODULE_REJECT;
 	}
@@ -781,7 +781,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 	case PEAP_STATUS_INNER_IDENTITY_REQ_SENT:
 		/* we're expecting an identity response */
 		if (data[0] != PW_EAP_IDENTITY) {
-			RDEBUG("Expected EAP-Identity, got something else.");
+			RDEBUG("Expected EAP-Identity, got something else");
 			return RLM_MODULE_REJECT;
 		}
 
@@ -877,7 +877,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 			return RLM_MODULE_HANDLED;
 		}
 
-		RDEBUG2("We sent a success, but received something weird in return.");
+		RDEBUG2("We sent a success, but the client did not agree");
 		return RLM_MODULE_REJECT;
 
 	/*
@@ -885,11 +885,14 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 	 *	packets after we told them to f*ck off.
 	 */
 	case PEAP_STATUS_SENT_TLV_FAILURE:
-		RDEBUG(" The users session was previously rejected: returning reject (again.)");
-		RDEBUG(" *** This means you need to read the PREVIOUS messages in the debug output");
-		RDEBUG(" *** to find out the reason why the user was rejected.");
-		RDEBUG(" *** Look for \"reject\" or \"fail\".  Those earlier messages will tell you.");
-		RDEBUG(" *** what went wrong, and how to fix the problem.");
+		RINDENT();
+		RDEBUG("The users session was previously rejected: returning reject (again.)");
+		RDEBUG("*** This means you need to read the PREVIOUS messages in the debug output");
+		RDEBUG("*** to find out the reason why the user was rejected");
+		RDEBUG("*** Look for \"reject\" or \"fail\".  Those earlier messages will tell you");
+		RDEBUG("*** what went wrong, and how to fix the problem");
+		REXDENT();
+
 		return RLM_MODULE_REJECT;
 
 		case PEAP_STATUS_PHASE2_INIT:
@@ -936,7 +939,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 		pairadd(&fake->packet->vps, vp);
 
 		if (t->default_method != 0) {
-			RDEBUG2("Setting default EAP type for tunneled EAP session.");
+			RDEBUG2("Setting default EAP type for tunneled EAP session");
 			vp = pairmake(fake, &fake->config_items, "EAP-Type", "0", T_OP_EQ);
 			vp->vp_integer = t->default_method;
 		}
@@ -990,7 +993,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 			 *	set it here.
 			 */
 			if (t->default_method != 0) {
-				DEBUG2("  PEAP: Setting default EAP type for tunneled EAP session.");
+				DEBUG2("  PEAP: Setting default EAP type for tunneled EAP session");
 				vp = pairmake(fake, &fake->config_items, "EAP-Type", "0", T_OP_EQ);
 				vp->vp_integer = t->default_method;
 			}
@@ -1062,7 +1065,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 			 *	done, THEN we proxy it...
 			 */
 			if (!t->proxy_tunneled_request_as_eap) {
-				fake->options |= RAD_REQUEST_OPTION_PROXY_EAP;
+				fake->log.lvl |= RAD_REQUEST_OPTION_PROXY_EAP;
 
 				/*
 				 *	Hmm... should we check for
@@ -1073,7 +1076,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 				/*
 				 *	Run the EAP authentication.
 				 */
-				DEBUG2("  PEAP: Calling authenticate in order to initiate tunneled EAP session.");
+				DEBUG2("  PEAP: Calling authenticate in order to initiate tunneled EAP session");
 				rcode = process_authenticate(PW_AUTHTYPE_EAP, fake);
 				if (rcode == RLM_MODULE_OK) {
 					/*
@@ -1093,7 +1096,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 				 *	The module decided it wasn't
 				 *	done.  Handle it like normal.
 				 */
-				if ((fake->options & RAD_REQUEST_OPTION_PROXY_EAP) == 0) {
+				if ((fake->log.lvl & RAD_REQUEST_OPTION_PROXY_EAP) == 0) {
 					DEBUG2("    PEAP: Cancelling proxy to realm %s until the tunneled EAP session has been established", vp->vp_strvalue);
 					goto do_process;
 				}
@@ -1122,7 +1125,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 			 *	tunneled request.
 			 */
 			rad_assert(!request->proxy);
-			request->proxy = fake->packet;
+			request->proxy = talloc_steal(request, fake->packet);
 			memset(&request->proxy->src_ipaddr, 0,
 			       sizeof(request->proxy->src_ipaddr));
 			memset(&request->proxy->dst_ipaddr, 0,
@@ -1153,8 +1156,8 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 			 *	We're not proxying it as EAP, so we've got
 			 *	to do the callback later.
 			 */
-			if ((fake->options & RAD_REQUEST_OPTION_PROXY_EAP) != 0) {
-				DEBUG2("  PEAP: Remembering to do EAP-MS-CHAP-V2 post-proxy.");
+			if ((fake->log.lvl & RAD_REQUEST_OPTION_PROXY_EAP) != 0) {
+				DEBUG2("  PEAP: Remembering to do EAP-MS-CHAP-V2 post-proxy");
 
 				/*
 				 *	rlm_eap.c has taken care of associating

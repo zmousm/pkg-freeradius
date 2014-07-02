@@ -31,6 +31,7 @@ RCSID("$Id$")
 #define PW_CACHE_STATUS_ONLY	1141
 #define PW_CACHE_MERGE		1142
 #define PW_CACHE_ENTRY_HITS	1143
+#define PW_CACHE_READ_ONLY	1144
 
 /*
  *	Define a structure for our module configuration.
@@ -41,10 +42,10 @@ RCSID("$Id$")
  */
 typedef struct rlm_cache_t {
 	char const		*xlat_name;
-	char			*key;
-	int			ttl;
-	int			max_entries;
-	int			epoch;
+	char const		*key;
+	uint32_t		ttl;
+	uint32_t		max_entries;
+	int32_t			epoch;
 	bool			stats;
 	CONF_SECTION		*cs;
 	rbtree_t		*cache;
@@ -77,6 +78,28 @@ typedef struct rlm_cache_entry_t {
 #endif
 
 #define MAX_ATTRMAP	128
+
+/*
+ *	A mapping of configuration file names to internal variables.
+ *
+ *	Note that the string is dynamically allocated, so it MUST
+ *	be freed.  When the configuration file parse re-reads the string,
+ *	it free's the old one, and strdup's the new one, placing the pointer
+ *	to the strdup'd string into 'config.string'.  This gets around
+ *	buffer over-flows.
+ */
+static const CONF_PARSER module_config[] = {
+	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_cache_t, key), NULL },
+	{ "ttl", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_cache_t, ttl), "500" },
+	{ "max_entries", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_cache_t, max_entries), "16384" },
+
+	/* Should be a type which matches time_t, @fixme before 2038 */
+	{ "epoch", FR_CONF_OFFSET(PW_TYPE_SIGNED, rlm_cache_t, epoch), "0" },
+	{ "add_stats", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_cache_t, stats), "no" },
+
+	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+};
+
 
 /*
  *	Compare two entries by key.  There may only be one entry with
@@ -217,12 +240,13 @@ static rlm_cache_entry_t *cache_find(rlm_cache_t *inst, REQUEST *request,
 	/*
 	 *	Update the expiry time based on the TTL.
 	 *	A TTL of 0 means "delete from the cache".
+	 *	A TTL < 0 means "delete from the cache and recreate the entry".
 	 */
 	vp = pairfind(request->config_items, PW_CACHE_TTL, 0, TAG_ANY);
 	if (vp) {
-		if (vp->vp_integer == 0) goto delete;
+		if (vp->vp_signed <= 0) goto delete;
 
-		ttl = vp->vp_integer;
+		ttl = vp->vp_signed;
 		c->expires = request->timestamp + ttl;
 		RDEBUG("Adding %d to the TTL", ttl);
 	}
@@ -232,23 +256,36 @@ static rlm_cache_entry_t *cache_find(rlm_cache_t *inst, REQUEST *request,
 }
 
 
+/** Callback for radius_map2request
+ *
+ * Simplifies merging VALUE_PAIRs into the current request.
+ */
+static int _cache_add(VALUE_PAIR **out, REQUEST *request, UNUSED value_pair_map_t const *map, void *ctx)
+{
+	VALUE_PAIR *vp;
+
+	vp = talloc_get_type_abort(ctx, VALUE_PAIR);
+	/* radius_map2request will reparent */
+	*out = paircopy(request, vp);
+
+	if (!*out) return -1;
+	return 0;
+}
+
 /*
  *	Add an entry to the cache.
  */
-static rlm_cache_entry_t *cache_add(rlm_cache_t *inst, REQUEST *request,
-				    char const *key)
+static rlm_cache_entry_t *cache_add(rlm_cache_t *inst, REQUEST *request, char const *key)
 {
 	int ttl;
-	VALUE_PAIR *vp, *found, **to_req, **to_cache, **from;
-	DICT_ATTR const *da;
+	VALUE_PAIR *vp, *to_cache;
+	vp_cursor_t src_list, cached_request, cached_reply, cached_control;
 
 	bool merge = true;
-	REQUEST *context;
 
 	value_pair_map_t const *map;
 
 	rlm_cache_entry_t *c;
-	char buffer[1024];
 
 	if (rbtree_num_elements(inst->cache) >= inst->max_entries) {
 		RDEBUG("Cache is full: %d entries", inst->max_entries);
@@ -259,20 +296,16 @@ static rlm_cache_entry_t *cache_add(rlm_cache_t *inst, REQUEST *request,
 	 *	TTL of 0 means "don't cache this entry"
 	 */
 	vp = pairfind(request->config_items, PW_CACHE_TTL, 0, TAG_ANY);
-	if (vp && (vp->vp_integer == 0)) return NULL;
+	if (vp && (vp->vp_signed == 0)) return NULL;
 
 	c = talloc_zero(inst, rlm_cache_entry_t);
 	c->key = talloc_typed_strdup(c, key);
 	c->created = c->expires = request->timestamp;
 
 	/*
-	 *	Use per-entry TTL, or globally defined one.
+	 *	Use per-entry TTL if > 0, or globally defined one.
 	 */
-	if (vp) {
-		ttl = vp->vp_integer;
-	} else {
-		ttl = inst->ttl;
-	}
+	ttl = vp && (vp->vp_signed > 0) ? vp->vp_integer : inst->ttl;
 	c->expires += ttl;
 
 	RDEBUG("Creating entry for \"%s\"", key);
@@ -286,250 +319,100 @@ static rlm_cache_entry_t *cache_add(rlm_cache_t *inst, REQUEST *request,
 		RDEBUG2("Told not to merge new entry into request");
 	}
 
+	fr_cursor_init(&cached_request, &c->packet);
+	fr_cursor_init(&cached_reply, &c->reply);
+	fr_cursor_init(&cached_control, &c->control);
+
 	for (map = inst->maps; map != NULL; map = map->next) {
+		bool do_merge = merge;
+
 		rad_assert(map->dst && map->src);
 
-		/*
-		 *	Specifying inner/outer request doesn't work here
-		 *	but there's no easy fix...
-		 */
-		switch (map->dst->vpt_list) {
-		case PAIR_LIST_REQUEST:
-			to_cache = &c->packet;
-			break;
-
-		case PAIR_LIST_REPLY:
-			to_cache = &c->reply;
-			break;
-
-		case PAIR_LIST_CONTROL:
-			to_cache = &c->control;
-			break;
-
-		default:
-			rad_assert(0);
-			return NULL;
+		if (radius_map2vp(&to_cache, request, map, NULL) < 0) {
+			RDEBUG("Skipping %s", map->src->name);
+			continue;
 		}
 
 		/*
-		 *	Resolve the destination in the current request.
-		 *	We need to add the to_cache there too if any of these
-		 *	are.
-		 *	true :
+		 *	Merge attributes into the current request if:
 		 *	  - Map specifies an xlat'd string.
 		 *	  - Map specifies a literal string.
+		 *	  - Map specifies an exec.
 		 *	  - Map src and dst lists differ.
 		 *	  - Map src and dst attributes differ
+		 *
+		 *	 Unless Cache-Merge = no
 		 */
-		to_req = NULL;
-		if (merge && (!map->src->vpt_da ||
-		    (map->src->vpt_list != map->dst->vpt_list) ||
-		    (map->src->vpt_da != map->dst->vpt_da))) {
-			context = request;
-			/*
-			 *	It's ok if the list isn't valid here...
-			 *	It might be valid later when we merge
-			 *	the cache entry.
-			 */
-			if (radius_request(&context, map->dst->vpt_request) == 0) {
-				to_req = radius_list(context, map->dst->vpt_list);
-			}
-		}
-
-		/*
-		 *	We infer that src was an attribute ref from the fact
-		 *	it contains a da.
-		 */
-		RDEBUG4(":: dst is \"%s\" src is \"%s\"",
-			fr_int2str(vpt_types, map->dst->type, "<INVALID>"),
-			fr_int2str(vpt_types, map->src->type, "<INVALID>"));
-
-		switch (map->src->type) {
-		case VPT_TYPE_ATTR:
-			{
-				vp_cursor_t cursor;
-
-				from = NULL;
-				da = map->src->vpt_da;
-				rad_assert(da != NULL);
-
-				context = request;
-				if (radius_request(&context, map->src->vpt_request) == 0) {
-					from = radius_list(context, map->src->vpt_list);
-				}
-
-				/*
-				 *	Can't add the attribute if the list isn't
-				 *	valid.
-				 */
-				if (!from) continue;
-
-				fr_cursor_init(&cursor, from);
-				found = fr_cursor_next_by_da(&cursor, da, TAG_ANY);
-				if (!found) {
-					RWDEBUG("\"%s\" not found, skipping",
-					       map->src->name);
-					continue;
-				}
-
-				RDEBUG("\t%s %s &%s", map->dst->name,
-				       fr_int2str(fr_tokens, map->op, "<INVALID>"),
-				       map->src->name);
-
-				switch (map->op) {
-				case T_OP_SET:
-				case T_OP_EQ:
-				case T_OP_SUB:
-					vp = map->dst->type == VPT_TYPE_LIST ?
-						paircopyvp(c, found) :
-						paircopyvpdata(c, map->dst->vpt_da, found);
-
-					if (!vp) continue;
-
-					pairadd(to_cache, vp);
-
-					if (to_req) {
-						vp = paircopyvp(request, vp);
-						radius_pairmove(request, to_req, vp, false);
-					}
-
-					break;
-				case T_OP_ADD:
-					do {
-						vp = map->dst->type == VPT_TYPE_LIST ?
-							paircopyvp(c, found) :
-							paircopyvpdata(c, map->dst->vpt_da, found);
-						if (!vp) continue;
-
-						vp->op = map->op;
-						pairadd(to_cache, vp);
-
-						if (to_req) {
-							vp = paircopyvp(request, vp);
-							radius_pairmove(request, to_req, vp, false);
-
-						}
-					} while ((found = fr_cursor_next_by_da(&cursor, da, TAG_ANY)));
-					break;
-
-				default:
-					rad_assert(0);
-					return NULL;
-				}
-				break;
-			}
-		case VPT_TYPE_LIST:
-			{
-				vp_cursor_t in, out;
-				VALUE_PAIR *i;
-
-				rad_assert(map->src->type == VPT_TYPE_LIST);
-
-				from = NULL;
-				context = request;
-				if (radius_request(&context, map->src->vpt_request) == 0) {
-					from = radius_list(context, map->src->vpt_list);
-				}
-				if (!from) continue;
-
-				found = NULL;
-				fr_cursor_init(&out, &found);
-				for (i = fr_cursor_init(&in, from);
-				     i != NULL;
-				     i = fr_cursor_next(&in)) {
-					/*
-					 *	Prevent cache control attributes being added to the cache.
-					 */
-					switch (i->da->attr) {
-					case PW_CACHE_TTL:
-					case PW_CACHE_STATUS_ONLY:
-					case PW_CACHE_MERGE:
-					case PW_CACHE_ENTRY_HITS:
-						RDEBUG("\tskipping %s", i->da->name);
-						continue;
-					default:
-						break;
-					}
-
-					vp = paircopyvp(c, i);
-					if (!vp) {
-						pairfree(&found);
-						return NULL;
-					}
-					RDEBUG("\t%s %s &%s:%s", map->dst->name,
-					       fr_int2str(fr_tokens, map->op, "<INVALID>"),
-					       fr_int2str(pair_lists, map->src->vpt_list, "<INVALID>"), vp->da->name);
-					vp->op = map->op;
-					fr_cursor_insert(&out, vp);
-				}
-
-				pairadd(to_cache, found);
-				if (to_req) {
-					vp = paircopy(request, found);
-					radius_pairmove(request, to_req, vp, false);
-				}
-
-				break;
-			}
-		/*
-		 *	It was most likely a double quoted string that now
-		 *	needs to be expanded.
-		 */
-		case VPT_TYPE_XLAT:
-			if (radius_xlat(buffer, sizeof(buffer), request, map->src->name, NULL, NULL) <= 0) {
-				continue;
-			}
-
-			RDEBUG("\t%s %s \"%s\"", map->dst->name,
-			       fr_int2str(fr_tokens, map->op, "<INVALID>"),
-			       buffer);
-
-			vp = pairalloc(map->dst, map->dst->vpt_da);
-			if (!vp) continue;
-
-			vp->op = map->op;
-			if (!pairparsevalue(vp, buffer)) {
-				pairfree(&vp);
-				continue;
-			}
-
-			pairadd(to_cache, vp);
-
-			if (to_req) {
-				vp = paircopyvp(request, vp);
-				radius_pairmove(request, to_req, vp, false);
-			}
-
-			break;
-		/*
-		 *	Literal string.
-		 */
+		if (do_merge) switch (map->src->type) {
 		case VPT_TYPE_LITERAL:
-			RDEBUG("\t%s %s '%s'", map->dst->name,
-			       fr_int2str(fr_tokens, map->op, "<INVALID>"),
-			       map->src->name);
+		case VPT_TYPE_XLAT:
+		case VPT_TYPE_EXEC:
+			break;
 
-			vp = pairalloc(map->dst, map->dst->vpt_da);
-			if (!vp) continue;
+		case VPT_TYPE_LIST:
+			if (map->src->vpt_list == map->dst->vpt_list) do_merge = false;
+			break;
 
-			vp->op = map->op;
-			if (!pairparsevalue(vp, map->src->name)) {
-				pairfree(&vp);
-				continue;
-			}
-
-			pairadd(to_cache, vp);
-
-			if (to_req) {
-				vp = paircopyvp(request, vp);
-				radius_pairmove(request, to_req, vp, false);
-			}
-
+		case VPT_TYPE_ATTR:
+			if (map->src->vpt_da == map->dst->vpt_da) do_merge = false;
 			break;
 
 		default:
-			rad_assert(0);
-			return NULL;
+			do_merge = false;
+		}
+
+		/*
+		 *	Reparent the VPs radius_map2vp may return multiple.
+		 */
+		for (vp = fr_cursor_init(&src_list, &to_cache);
+		     vp;
+		     vp = fr_cursor_next(&src_list)) {
+			VERIFY_VP(vp);
+
+			/*
+			 *	Prevent people from accidentally caching
+			 *	cache control attributes.
+			 */
+			if (map->src->type == VPT_TYPE_LIST) switch (vp->da->attr) {
+			case PW_CACHE_TTL:
+			case PW_CACHE_STATUS_ONLY:
+			case PW_CACHE_READ_ONLY:
+			case PW_CACHE_MERGE:
+			case PW_CACHE_ENTRY_HITS:
+				RDEBUG2("Skipping %s", vp->da->name);
+				continue;
+			default:
+				break;
+			}
+
+			RDEBUG2("Adding to cache entry:");
+			if (debug_flag) radius_map_debug(request, map, vp);
+			(void) talloc_steal(c, vp);
+
+			vp->op = map->op;
+
+			switch (map->dst->vpt_list) {
+			case PAIR_LIST_REQUEST:
+				fr_cursor_insert(&cached_request, vp);
+				break;
+
+			case PAIR_LIST_REPLY:
+				fr_cursor_insert(&cached_reply, vp);
+				break;
+
+			case PAIR_LIST_CONTROL:
+				fr_cursor_insert(&cached_control, vp);
+				break;
+
+			default:
+				rad_assert(0);	/* should have been caught by validation */
+			}
+
+			if (do_merge && radius_map_dst_valid(request, map)) {
+				/* There's no reason for this to fail (we checked the dst was valid) */
+				RDEBUG2("Adding to request:");
+				if (radius_map2request(request, map, _cache_add, vp) < 0) rad_assert(0);
+			}
 		}
 	}
 
@@ -613,14 +496,14 @@ static int cache_verify(rlm_cache_t *inst, value_pair_map_t **head)
 			 */
 			if (map->dst->type == VPT_TYPE_ATTR) {
 				VALUE_PAIR *vp;
-				bool ret;
+				int ret;
 
 				MEM(vp = pairalloc(map->dst, map->dst->vpt_da));
 				vp->op = map->op;
 
-				ret = pairparsevalue(vp, map->src->name);
+				ret = pairparsevalue(vp, map->src->name, 0);
 				talloc_free(vp);
-				if (!ret) {
+				if (ret < 0) {
 					cf_log_err(map->ci, "%s", fr_strerror());
 					return -1;
 				}
@@ -705,7 +588,7 @@ static ssize_t cache_xlat(void *instance, REQUEST *request,
 	default:
 		PTHREAD_MUTEX_UNLOCK(&inst->cache_mutex);
 		REDEBUG("Unsupported list \"%s\"",
-			fr_int2str(pair_lists, list, "¿Unknown?"));
+			fr_int2str(pair_lists, list, "<UNKNOWN>"));
 		return -1;
 	}
 
@@ -727,31 +610,6 @@ done:
 
 	return ret;
 }
-
-/*
- *	A mapping of configuration file names to internal variables.
- *
- *	Note that the string is dynamically allocated, so it MUST
- *	be freed.  When the configuration file parse re-reads the string,
- *	it free's the old one, and strdup's the new one, placing the pointer
- *	to the strdup'd string into 'config.string'.  This gets around
- *	buffer over-flows.
- */
-static const CONF_PARSER module_config[] = {
-	{ "key",  PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_cache_t, key), NULL, NULL},
-	{ "ttl", PW_TYPE_INTEGER,
-	  offsetof(rlm_cache_t, ttl), NULL, "500" },
-	{ "max_entries", PW_TYPE_INTEGER,
-	  offsetof(rlm_cache_t, max_entries), NULL, "16384" },
-	{ "epoch", PW_TYPE_INTEGER,
-	  offsetof(rlm_cache_t, epoch), NULL, "0" },
-	{ "add_stats", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_cache_t, stats), NULL, "no" },
-
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
-};
-
 
 /*
  *	Only free memory we allocated.  The strings allocated via
@@ -852,6 +710,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_cache_it(void *instance, REQUEST *reques
 {
 	rlm_cache_entry_t *c;
 	rlm_cache_t *inst = instance;
+	vp_cursor_t cursor;
 	VALUE_PAIR *vp;
 	char buffer[1024];
 	rlm_rcode_t rcode;
@@ -880,6 +739,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_cache_it(void *instance, REQUEST *reques
 		goto done;
 	}
 
+	vp = pairfind(request->config_items, PW_CACHE_READ_ONLY, 0, TAG_ANY);
+	if (vp && vp->vp_integer) {
+		rcode = RLM_MODULE_NOTFOUND;
+		goto done;
+	}
+
 	c = cache_add(inst, request, buffer);
 	if (!c) {
 		rcode = RLM_MODULE_NOOP;
@@ -890,6 +755,22 @@ static rlm_rcode_t CC_HINT(nonnull) mod_cache_it(void *instance, REQUEST *reques
 
 done:
 	PTHREAD_MUTEX_UNLOCK(&inst->cache_mutex);
+
+	/*
+	 *	Reset control attributes
+	 */
+	for (vp = fr_cursor_init(&cursor, &request->config_items);
+	     vp;
+	     vp = fr_cursor_next(&cursor)) {
+		if (vp->da->vendor == 0) switch (vp->da->attr) {
+		case PW_CACHE_TTL:
+		case PW_CACHE_READ_ONLY:
+		case PW_CACHE_MERGE:
+			fr_cursor_remove(&cursor);
+			break;
+		}
+	}
+
 	return rcode;
 }
 

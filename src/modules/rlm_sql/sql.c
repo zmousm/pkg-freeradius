@@ -64,7 +64,6 @@ static void *mod_conn_create(void *instance)
 	 *	destructor has access to the module configuration.
 	 */
 	handle->inst = inst;
-	handle->init = false;
 
 	/*
 	 *	When something frees this handle the destructor set by
@@ -94,7 +93,6 @@ static void *mod_conn_create(void *instance)
 	}
 
 	exec_trigger(NULL, inst->cs, "modules.sql.open", false);
-	handle->init = true;
 	return handle;
 }
 
@@ -181,7 +179,7 @@ int sql_userparse(TALLOC_CTX *ctx, VALUE_PAIR **head, rlm_sql_row_t row)
 	 *	Verify the 'Attribute' field
 	 */
 	if (!row[2] || row[2][0] == '\0') {
-		ERROR("rlm_sql: The 'Attribute' field is empty or NULL, skipping the entire row.");
+		ERROR("rlm_sql: The 'Attribute' field is empty or NULL, skipping the entire row");
 		return -1;
 	}
 
@@ -203,7 +201,7 @@ int sql_userparse(TALLOC_CTX *ctx, VALUE_PAIR **head, rlm_sql_row_t row)
 		 */
 		operator = T_OP_CMP_EQ;
 		ERROR("rlm_sql: The 'op' field for attribute '%s = %s' is NULL, or non-existent.", row[2], row[3]);
-		ERROR("rlm_sql: You MUST FIX THIS if you want the configuration to behave as you expect.");
+		ERROR("rlm_sql: You MUST FIX THIS if you want the configuration to behave as you expect");
 	}
 
 	/*
@@ -263,7 +261,7 @@ int sql_userparse(TALLOC_CTX *ctx, VALUE_PAIR **head, rlm_sql_row_t row)
 			return -1;
 		}
 	} else {
-		if (!pairparsevalue(vp, value)) {
+		if (pairparsevalue(vp, value, 0) < 0) {
 			ERROR("rlm_sql: Error parsing value: %s", fr_strerror());
 
 			talloc_free(vp);
@@ -362,29 +360,29 @@ static void rlm_sql_query_debug(rlm_sql_handle_t *handle, rlm_sql_t *inst)
 	}
 }
 
-/*************************************************************************
+/** Call the driver's sql_query method, reconnecting if necessary.
  *
- *	Function: rlm_sql_query
- *
- *	Purpose: call the module's sql_query and implement re-connect
- *
- *************************************************************************/
-int rlm_sql_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const *query)
+ * @param handle to query the database with. *handle should not be NULL, as this indicates
+ *	  previous reconnection attempt has failed.
+ * @param inst rlm_sql instance data.
+ * @param query to execute. Should not be zero length.
+ * @return RLM_SQL_OK on success, RLM_SQL_RECONNECT if a new handle is required (also sets *handle = NULL),
+ *         RLM_SQL_QUERY_ERROR/RLM_SQL_ERROR on invalid query or connection error, RLM_SQL_DUPLICATE on constraints
+ *         violation.
+ */
+sql_rcode_t rlm_sql_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const *query)
 {
-	int ret = -1;
+	int ret = RLM_SQL_ERROR;
+	int i;
 
-	/*
-	 *	If there's no query, return an error.
-	 */
-	if (!query || !*query) {
-		return -1;
-	}
+	/* There's no query to run, return an error */
+	if (query[0] == '\0') return RLM_SQL_QUERY_ERROR;
 
-	if (!*handle || !(*handle)->conn) {
-		goto sql_down;
-	}
+	/* There's no handle, we need a new one */
+	if (!*handle) return RLM_SQL_RECONNECT;
 
-	while (true) {
+	/* For sanity, for when no connections are viable, and we can't make a new one */
+	for (i = fr_connection_get_num(inst->pool); i >= 0; i--) {
 		DEBUG("rlm_sql (%s): Executing query: '%s'", inst->config->xlat_name, query);
 
 		ret = (inst->module->sql_query)(*handle, inst->config, query);
@@ -397,9 +395,10 @@ int rlm_sql_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const *query)
 		 *	sockets in the pool and fail to establish a *new* connection.
 		 */
 		case RLM_SQL_RECONNECT:
-		sql_down:
 			*handle = fr_connection_reconnect(inst->pool, *handle);
+			/* Reconnection failed */
 			if (!*handle) return RLM_SQL_RECONNECT;
+			/* Reconnection succeeded, try again with the new handle */
 			continue;
 
 		case RLM_SQL_QUERY_ERROR:
@@ -415,27 +414,34 @@ int rlm_sql_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const *query)
 
 		return ret;
 	}
+
+	ERROR("rlm_sql (%s): Hit reconnection limit", inst->config->xlat_name);
+
+	return RLM_SQL_ERROR;
 }
 
-/*************************************************************************
+/** Call the driver's sql_select_query method, reconnecting if necessary.
  *
- *	Function: rlm_sql_select_query
- *
- *	Purpose: call the module's sql_select_query and implement re-connect
- *
- *************************************************************************/
-int rlm_sql_select_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const *query)
+ * @param handle to query the database with. *handle should not be NULL, as this indicates
+ *	  previous reconnection attempt has failed.
+ * @param inst rlm_sql instance data.
+ * @param query to execute. Should not be zero length.
+ * @return RLM_SQL_OK on success, RLM_SQL_RECONNECT if a new handle is required (also sets *handle = NULL),
+ *         RLM_SQL_QUERY_ERROR/RLM_SQL_ERROR on invalid query or connection error.
+ */
+sql_rcode_t rlm_sql_select_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const *query)
 {
-	int ret = -1;
+	int ret = RLM_SQL_ERROR;
+	int i;
 
-	/*
-	 *	If there's no query, return an error.
-	 */
-	if (!query || !*query) return -1;
+	/* There's no query to run, return an error */
+	if (query[0] == '\0') return RLM_SQL_QUERY_ERROR;
 
-	if (!*handle || !(*handle)->conn) goto sql_down;
+	/* There's no handle, we need a new one */
+	if (!*handle) return RLM_SQL_RECONNECT;
 
-	while (true) {
+	/* For sanity, for when no connections are viable, and we can't make a new one */
+	for (i = fr_connection_get_num(inst->pool); i >= 0; i--) {
 		DEBUG("rlm_sql (%s): Executing query: '%s'", inst->config->xlat_name, query);
 
 		ret = (inst->module->sql_select_query)(*handle, inst->config, query);
@@ -448,27 +454,25 @@ int rlm_sql_select_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const 
 		 *	sockets in the pool and fail to establish a *new* connection.
 		 */
 		case RLM_SQL_RECONNECT:
-		sql_down:
-			if (!*handle) return RLM_SQL_RECONNECT;
-
-			if (!(*handle)->init) return RLM_SQL_RECONNECT;
-
 			*handle = fr_connection_reconnect(inst->pool, *handle);
+			/* Reconnection failed */
+			if (!*handle) return RLM_SQL_RECONNECT;
+			/* Reconnection succeeded, try again with the new handle */
 			continue;
 
 		case RLM_SQL_QUERY_ERROR:
 		case RLM_SQL_ERROR:
+		default:
 			rlm_sql_query_error(*handle, inst);
 			break;
-
-		case RLM_SQL_DUPLICATE:
-			rlm_sql_query_debug(*handle, inst);
-			break;
-
 		}
 
 		return ret;
 	}
+
+	ERROR("rlm_sql (%s): Hit reconnection limit", inst->config->xlat_name);
+
+	return RLM_SQL_ERROR;
 }
 
 

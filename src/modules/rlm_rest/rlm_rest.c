@@ -33,22 +33,14 @@ RCSID("$Id$")
  *	TLS Configuration
  */
 static CONF_PARSER tls_config[] = {
-	{ "ca_file", PW_TYPE_FILE_INPUT,
-	  offsetof(rlm_rest_section_t,tls_ca_file), NULL, NULL},
-	{ "ca_path", PW_TYPE_FILE_INPUT,
-	  offsetof(rlm_rest_section_t,tls_ca_path), NULL, NULL},
-	{ "certificate_file", PW_TYPE_FILE_INPUT,
-	  offsetof(rlm_rest_section_t,tls_certificate_file), NULL, NULL},
-	{ "private_key_file", PW_TYPE_FILE_INPUT,
-	  offsetof(rlm_rest_section_t,tls_private_key_file), NULL, NULL },
-	{ "private_key_password", PW_TYPE_STRING_PTR | PW_TYPE_SECRET,
-	  offsetof(rlm_rest_section_t, tls_private_key_password), NULL, NULL },
-	{ "random_file", PW_TYPE_STRING_PTR, /* OK if it changes on HUP */
-	  offsetof(rlm_rest_section_t,tls_random_file), NULL, NULL },
-	{ "check_cert", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_rest_section_t, tls_check_cert), NULL, "yes" },
-	{ "check_cert_cn", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_rest_section_t, tls_check_cert_cn), NULL, "yes" },
+	{ "ca_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, rlm_rest_section_t, tls_ca_file), NULL },
+	{ "ca_path", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, rlm_rest_section_t, tls_ca_path), NULL },
+	{ "certificate_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, rlm_rest_section_t, tls_certificate_file), NULL },
+	{ "private_key_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, rlm_rest_section_t, tls_private_key_file), NULL },
+	{ "private_key_password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, rlm_rest_section_t, tls_private_key_password), NULL },
+	{ "random_file", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, tls_random_file), NULL },
+	{ "check_cert", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, tls_check_cert), "yes" },
+	{ "check_cert_cn", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, tls_check_cert_cn), "yes" },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -63,29 +55,29 @@ static CONF_PARSER tls_config[] = {
  *	buffer over-flows.
  */
 static const CONF_PARSER section_config[] = {
-	{ "uri", PW_TYPE_STRING_PTR, offsetof(rlm_rest_section_t, uri), NULL, ""  },
-	{ "method", PW_TYPE_STRING_PTR, offsetof(rlm_rest_section_t, method_str), NULL, "GET" },
-	{ "body", PW_TYPE_STRING_PTR, offsetof(rlm_rest_section_t, body_str), NULL, "none" },
-	{ "data", PW_TYPE_STRING_PTR, offsetof(rlm_rest_section_t, data), NULL, NULL },
+	{ "uri", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, uri), ""   },
+	{ "method", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, method_str), "GET" },
+	{ "body", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, body_str), "none" },
+	{ "data", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, data), NULL },
 
 	/* User authentication */
-	{ "auth", PW_TYPE_STRING_PTR, offsetof(rlm_rest_section_t, auth_str), NULL, "none" },
-	{ "username", PW_TYPE_STRING_PTR, offsetof(rlm_rest_section_t, username), NULL, NULL },
-	{ "password", PW_TYPE_STRING_PTR, offsetof(rlm_rest_section_t, password), NULL, NULL },
-	{ "require_auth", PW_TYPE_BOOLEAN, offsetof(rlm_rest_section_t, require_auth), NULL, "no"},
+	{ "auth", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, auth_str), "none" },
+	{ "username", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, username), NULL },
+	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, password), NULL },
+	{ "require_auth", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, require_auth), "no" },
 
 	/* Transfer configuration */
-	{ "timeout", PW_TYPE_INTEGER, offsetof(rlm_rest_section_t, timeout), NULL, "4" },
-	{ "chunk", PW_TYPE_INTEGER, offsetof(rlm_rest_section_t, chunk), NULL, "0" },
+	{ "timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_rest_section_t, timeout), "4" },
+	{ "chunk", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_rest_section_t, chunk), "0" },
 
 	/* TLS Parameters */
-	{ "tls", PW_TYPE_SUBSECTION, 0, NULL, (void const *) tls_config },
+	{ "tls", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) tls_config },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
 
 static const CONF_PARSER module_config[] = {
-	{ "connect_uri", PW_TYPE_STRING_PTR, offsetof(rlm_rest_t, connect_uri), NULL, NULL },
+	{ "connect_uri", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_t, connect_uri), NULL },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -338,17 +330,17 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED REQU
 	VALUE_PAIR const *username;
 	VALUE_PAIR const *password;
 
-	username = pairfind(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
-	if (!username) {
+	username = request->username;
+	if (!request->username) {
 		REDEBUG("Can't perform authentication, 'User-Name' attribute not found in the request");
 
 		return RLM_MODULE_INVALID;
 	}
 
-	password = pairfind(request->config_items, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
-	if (!password) {
-		REDEBUG("Can't perform authentication, 'Cleartext-Password' attribute not found in the control list");
-
+	password = request->password;
+	if (!password ||
+	    (password->da->attr != PW_USER_PASSWORD)) {
+		REDEBUG("You set 'Auth-Type = REST' for a request that does not contain a User-Password attribute!");
 		return RLM_MODULE_INVALID;
 	}
 
@@ -416,7 +408,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED REQU
 }
 
 /*
- *	Write accounting information to this modules database.
+ *	Send accounting info to a REST API endpoint
  */
 static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, UNUSED REQUEST *request)
 {
@@ -451,8 +443,51 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, UNUSED REQUES
 		rcode = RLM_MODULE_INVALID;
 	}
 
-	end:
+end:
+	rlm_rest_cleanup(inst, section, handle);
 
+	fr_connection_release(inst->conn_pool, handle);
+
+	return rcode;
+}
+
+/*
+ *	Send post-auth info to a REST API endpoint
+ */
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, UNUSED REQUEST *request)
+{
+	rlm_rest_t *inst = instance;
+	rlm_rest_section_t *section = &inst->post_auth;
+
+	void *handle;
+	int hcode;
+	int rcode = RLM_MODULE_OK;
+	int ret;
+
+	handle = fr_connection_get(inst->conn_pool);
+	if (!handle) return RLM_MODULE_FAIL;
+
+	ret = rlm_rest_perform(inst, section, handle, request, NULL, NULL);
+	if (ret < 0) {
+		rcode = RLM_MODULE_FAIL;
+		goto end;
+	}
+
+	hcode = rest_get_handle_code(handle);
+	if (hcode >= 500) {
+		rcode = RLM_MODULE_FAIL;
+	} else if (hcode == 204) {
+		rcode = RLM_MODULE_OK;
+	} else if ((hcode >= 200) && (hcode < 300)) {
+		ret = rest_response_decode(inst, section, request, handle);
+		if (ret < 0) 	   rcode = RLM_MODULE_FAIL;
+		else if (ret == 0) rcode = RLM_MODULE_OK;
+		else		   rcode = RLM_MODULE_UPDATED;
+	} else {
+		rcode = RLM_MODULE_INVALID;
+	}
+
+end:
 	rlm_rest_cleanup(inst, section, handle);
 
 	fr_connection_release(inst->conn_pool, handle);
@@ -593,8 +628,10 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		(parse_sub_section(conf, &inst->authorize, RLM_COMPONENT_AUTZ) < 0) ||
 		(parse_sub_section(conf, &inst->authenticate, RLM_COMPONENT_AUTH) < 0) ||
 		(parse_sub_section(conf, &inst->accounting, RLM_COMPONENT_ACCT) < 0) ||
-		(parse_sub_section(conf, &inst->checksimul, RLM_COMPONENT_SESS) < 0) ||
-		(parse_sub_section(conf, &inst->postauth, RLM_COMPONENT_POST_AUTH) < 0))
+
+/* @todo add behaviour for checksimul */
+/*		(parse_sub_section(conf, &inst->checksimul, RLM_COMPONENT_SESS) < 0) || */
+		(parse_sub_section(conf, &inst->post_auth, RLM_COMPONENT_POST_AUTH) < 0))
 	{
 		return -1;
 	}
@@ -657,6 +694,6 @@ module_t rlm_rest = {
 		NULL,			/* checksimul */
 		NULL,			/* pre-proxy */
 		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+		mod_post_auth		/* post-auth */
 	},
 };

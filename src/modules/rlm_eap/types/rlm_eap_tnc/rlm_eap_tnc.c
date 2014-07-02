@@ -60,13 +60,11 @@
 #define SET_START(x) 		((x) | (0x20))
 
 typedef struct rlm_eap_tnc {
-	char	*connection_string;
+	char const	*connection_string;
 } rlm_eap_tnc_t;
 
 static CONF_PARSER module_config[] = {
-	{ "connection_string", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_tnc_t, connection_string), NULL,
-	  "NAS Port: %{NAS-Port} NAS IP: %{NAS-IP-Address} NAS_PORT_TYPE: %{NAS-Port-Type}"},
+	{ "connection_string", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_tnc_t, connection_string), "NAS Port: %{NAS-Port} NAS IP: %{NAS-IP-Address} NAS_PORT_TYPE: %{NAS-Port-Type}" },
 
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };

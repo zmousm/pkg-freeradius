@@ -73,6 +73,10 @@ RCSIDH(libradius_h, "$Id$")
 #include <stdbool.h>
 #include <signal.h>
 
+#ifdef HAVE_LIMITS_H
+#  include <limits.h>
+#endif
+
 #include <freeradius-devel/threads.h>
 #include <freeradius-devel/radius.h>
 #include <freeradius-devel/token.h>
@@ -102,13 +106,18 @@ extern "C" {
  *  Add if (_x->da) (void) talloc_get_type_abort(_x->da, DICT_ATTR);
  *  to the macro below when dictionaries are talloced.
  */
-#  define VERIFY_VP(_x) fr_verify_vp(_x)
-#  define VERIFY_LIST(_x) fr_verify_list(NULL, _x)
-#  define VERIFY_PACKET(_x) (void) talloc_get_type_abort(_x, RADIUS_PACKET)
+#  define VERIFY_VP(_x)		fr_verify_vp(_x)
+#  define VERIFY_LIST(_x)	fr_verify_list(NULL, _x)
+#  define VERIFY_PACKET(_x)	(void) talloc_get_type_abort(_x, RADIUS_PACKET)
 #else
-#  define VERIFY_VP(_x)
-#  define VERIFY_LIST(_x)
-#  define VERIFY_PACKET(_x)
+/*
+ *  Even if were building without WITH_VERIFY_PTR
+ *  the pointer must not be NULL when these various macros are used
+ *  so we can add some sneaky soft asserts.
+ */
+#  define VERIFY_VP(_x)		fr_assert(_x)
+#  define VERIFY_LIST(_x)	fr_assert(_x)
+#  define VERIFY_PACKET(_x)	fr_assert(_x)
 #endif
 
 #define AUTH_VECTOR_LEN		16
@@ -130,8 +139,18 @@ extern "C" {
 
 #define TAG_VALID(x)		((x) > 0 && (x) < 0x20)
 #define TAG_VALID_ZERO(x)	((x) < 0x20)
-#define TAG_ANY			-128	/* minimum signed char */
-#define TAG_UNUSED		0
+#define TAG_ANY			INT8_MIN
+#define TAG_NONE		0
+/** Check if tags are equal
+ *
+ * @param _s tag were matching on.
+ * @param _a tag belonging to the attribute were checking.
+ */
+#define TAG_EQ(_s, _a) ((_s == _a) || (_s == TAG_ANY) || ((_s == TAG_NONE) && (_a == TAG_ANY)))
+
+#define NUM_ANY			INT_MIN
+#define NUM_JOIN		(INT_MIN + 1)
+#define NUM_COUNT		(INT_MIN + 2)
 
 #define PAD(_x, _y)		(_y - ((_x) % _y))
 
@@ -208,7 +227,7 @@ typedef struct dict_vendor {
 
 /** Union containing all data types supported by the server
  *
- * This union contains all data types that can be represented with VALUE_PAIRs. It may also be used in other parts
+ * This union contains all data types that can be represented by VALUE_PAIRs. It may also be used in other parts
  * of the server where values of different types need to be stored.
  *
  * PW_TYPE should be an enumeration of the values in this union.
@@ -222,9 +241,9 @@ typedef union value_data {
 	size_t			filter[32/sizeof(size_t)];	//!< Ascend binary format a packed data
 								//!< structure.
 
-	uint8_t			ifid[8]; /* struct? */		//!< IPv6 interface ID.
+	uint8_t			ifid[8];			//!< IPv6 interface ID (should be struct?).
 	struct in6_addr		ipv6addr;			//!< IPv6 Address.
-	uint8_t			ipv6prefix[18]; /* struct? */	//!< IPv6 prefix.
+	uint8_t			ipv6prefix[18];			//!< IPv6 prefix (should be struct?).
 
 	uint8_t			byte;				//!< 8bit unsigned integer.
 	uint16_t		ushort;				//!< 16bit unsigned integer.
@@ -234,7 +253,7 @@ typedef union value_data {
 	int32_t			sinteger;			//!< 32bit signed integer.
 	uint64_t		integer64;			//!< 64bit unsigned integer.
 
-	uint8_t			ipv4prefix[6]; /* struct? */	//!< IPv4 prefix.
+	uint8_t			ipv4prefix[6];			//!< IPv4 prefix (should be struct?).
 
 	uint8_t			*tlv;				//!< Nested TLV (should go away).
 	void const		*ptr;				//!< generic pointer.
@@ -257,8 +276,7 @@ typedef enum value_type {
 
 /** Stores an attribute, a value and various bits of other data
  *
- * VALUE_PAIRs are the main data structure used in the server, they specify an attribute, it's children and
- * it's siblings.
+ * VALUE_PAIRs are the main data structure used in the server
  *
  * They also specify what behaviour should be used when the attribute is merged into a new list/tree.
  */
@@ -340,6 +358,7 @@ typedef struct fr_ipaddr_t {
 		struct in_addr	ip4addr;
 		struct in6_addr ip6addr; /* maybe defined in missing.h */
 	} ipaddr;
+	uint8_t		prefix;
 	uint32_t	scope;	/* for IPv6 */
 } fr_ipaddr_t;
 
@@ -469,8 +488,7 @@ void fr_hmac_sha1(uint8_t const *text, size_t text_len, uint8_t const *key, size
 int		rad_send(RADIUS_PACKET *, RADIUS_PACKET const *, char const *secret);
 bool		rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason);
 RADIUS_PACKET	*rad_recv(int fd, int flags);
-ssize_t rad_recv_header(int sockfd, fr_ipaddr_t *src_ipaddr, int *src_port,
-			int *code);
+ssize_t rad_recv_header(int sockfd, fr_ipaddr_t *src_ipaddr, uint16_t *src_port, int *code);
 void		rad_recv_discard(int sockfd);
 int		rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 			   char const *secret);
@@ -555,6 +573,7 @@ VALUE_PAIR	*pairfind_da(VALUE_PAIR *, DICT_ATTR const *da, int8_t tag);
 VALUE_PAIR	*_fr_cursor_init(vp_cursor_t *cursor, VALUE_PAIR const * const *node);
 void		fr_cursor_copy(vp_cursor_t *out, vp_cursor_t *in);
 VALUE_PAIR	*fr_cursor_first(vp_cursor_t *cursor);
+VALUE_PAIR	*fr_cursor_last(vp_cursor_t *cursor);
 VALUE_PAIR	*fr_cursor_next_by_num(vp_cursor_t *cursor, unsigned int attr, unsigned int vendor, int8_t tag);
 
 VALUE_PAIR	*fr_cursor_next_by_da(vp_cursor_t *cursor, DICT_ATTR const *da, int8_t tag)
@@ -596,7 +615,7 @@ void		pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from,
 			   unsigned int attr, unsigned int vendor, int8_t tag);
 VALUE_PAIR	*pairmake_ip(TALLOC_CTX *ctx, char const *value,
 			     DICT_ATTR *ipv4, DICT_ATTR *ipv6, DICT_ATTR *ipv4_prefix, DICT_ATTR *ipv6_prefix);
-bool		pairparsevalue(VALUE_PAIR *vp, char const *value);
+int		pairparsevalue(VALUE_PAIR *vp, char const *value, size_t len);
 VALUE_PAIR	*pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps, char const *attribute, char const *value, FR_TOKEN op);
 int 		pairmark_xlat(VALUE_PAIR *vp, char const *value);
 FR_TOKEN 	pairread(char const **ptr, VALUE_PAIR_RAW *raw);
@@ -623,7 +642,7 @@ extern char const *fr_syserror(int num);
 extern bool	fr_dns_lookups;	/* do IP -> hostname lookups? */
 extern bool	fr_hostname_lookups; /* do hostname -> IP lookups? */
 extern int	fr_debug_flag;	/* 0 = no debugging information */
-extern int	fr_max_attributes; /* per incoming packet */
+extern uint32_t	fr_max_attributes; /* per incoming packet */
 #define	FR_MAX_PACKET_CODE (52)
 extern char const *fr_packet_codes[FR_MAX_PACKET_CODE];
 #define is_radius_code(_x) ((_x > 0) && (_x < FR_MAX_PACKET_CODE))
@@ -638,6 +657,11 @@ int		fr_set_signal(int sig, sig_t func);
 TALLOC_CTX	*fr_autofree_ctx(void);
 char const	*fr_inet_ntop(int af, void const *src);
 char const 	*ip_ntoa(char *, uint32_t);
+int		fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bool fallback);
+int		fr_pton6(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bool fallback);
+int		fr_pton(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve);
+bool		is_wildcard(fr_ipaddr_t *addr);
+int		fr_ntop(char *out, size_t outlen, fr_ipaddr_t *addr);
 char		*ifid_ntoa(char *buffer, size_t size, uint8_t const *ifid);
 uint8_t		*ifid_aton(char const *ifid_str, uint8_t *ifid);
 int		rad_lockfd(int fd, int lock_len);
@@ -652,15 +676,15 @@ bool		is_zero(char const *value);
 
 int		fr_ipaddr_cmp(fr_ipaddr_t const *a, fr_ipaddr_t const *b);
 
-int		ip_ptonx(char const *src, fr_ipaddr_t *dst);
-int		ip_hton(char const *src, int af, fr_ipaddr_t *dst);
+int		ip_hton(fr_ipaddr_t *out, int af, char const *hostname, bool fallback);
 char const	*ip_ntoh(fr_ipaddr_t const *src, char *dst, size_t cnt);
-struct in_addr	fr_ipaddr_mask(struct in_addr const *ipaddr, uint8_t prefix);
-struct in6_addr	fr_ipaddr_mask6(struct in6_addr const *ipaddr, uint8_t prefix);
-int		fr_ipaddr2sockaddr(fr_ipaddr_t const *ipaddr, int port,
+struct in_addr	fr_inaddr_mask(struct in_addr const *ipaddr, uint8_t prefix);
+struct in6_addr	fr_in6addr_mask(struct in6_addr const *ipaddr, uint8_t prefix);
+void		fr_ipaddr_mask(fr_ipaddr_t *addr, uint8_t prefix);
+int		fr_ipaddr2sockaddr(fr_ipaddr_t const *ipaddr, uint16_t port,
 				   struct sockaddr_storage *sa, socklen_t *salen);
 int		fr_sockaddr2ipaddr(struct sockaddr_storage const *sa, socklen_t salen,
-				   fr_ipaddr_t *ipaddr, int * port);
+				   fr_ipaddr_t *ipaddr, uint16_t *port);
 ssize_t		fr_utf8_to_ucs2(uint8_t *out, size_t outlen, char const *in, size_t inlen);
 size_t		fr_prints_uint128(char *out, size_t outlen, uint128_t const num);
 int64_t		fr_pow(int32_t base, uint8_t exp);
@@ -683,7 +707,7 @@ void		fr_talloc_verify_cb(const void *ptr, int depth,
 
 #ifdef WITH_ASCEND_BINARY
 /* filters.c */
-int		ascend_parse_filter(VALUE_PAIR *vp, char const *value);
+int		ascend_parse_filter(VALUE_PAIR *vp, char const *value, size_t len);
 void		print_abinary(char *out, size_t outlen, VALUE_PAIR const *vp,  int8_t quote);
 #endif /*WITH_ASCEND_BINARY*/
 
@@ -734,6 +758,7 @@ fr_bt_marker_t	*fr_backtrace_attach(fr_cbuff_t **cbuff, TALLOC_CTX *obj);
 
 typedef void (*fr_fault_log_t)(char const *msg, ...) CC_HINT(format (printf, 1, 2));
 
+void		fr_panic_on_free(TALLOC_CTX *ctx);
 int		fr_set_dumpable_init(void);
 int		fr_set_dumpable(bool allow_core_dumps);
 int		fr_log_talloc_report(TALLOC_CTX *ctx);
@@ -776,7 +801,7 @@ void		rbtree_delete(rbtree_t *tree, rbnode_t *z);
 bool		rbtree_deletebydata(rbtree_t *tree, void const *data);
 rbnode_t	*rbtree_find(rbtree_t *tree, void const *data);
 void		*rbtree_finddata(rbtree_t *tree, void const *data);
-int		rbtree_num_elements(rbtree_t *tree);
+uint32_t	rbtree_num_elements(rbtree_t *tree);
 void		*rbtree_node2data(rbtree_t *tree, rbnode_t *node);
 
 /*

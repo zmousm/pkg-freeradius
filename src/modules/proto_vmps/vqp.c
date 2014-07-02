@@ -86,7 +86,7 @@ static int vqp_sendto(int sockfd, void *data, size_t data_len, int flags,
 		      UNUSED fr_ipaddr_t *src_ipaddr,
 #endif
 		      fr_ipaddr_t *dst_ipaddr,
-		      int dst_port)
+		      uint16_t dst_port)
 {
 	struct sockaddr_storage	dst;
 	socklen_t		sizeof_dst;
@@ -143,7 +143,7 @@ static ssize_t vqp_recvfrom(int sockfd, RADIUS_PACKET *packet, int flags,
 	ssize_t			data_len;
 	uint8_t			header[4];
 	size_t			len;
-	int			port;
+	uint16_t		port;
 
 	memset(&src, 0, sizeof_src);
 	memset(&dst, 0, sizeof_dst);
@@ -488,7 +488,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 		}
 
 		switch (vp->da->type) {
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 			if (length == 4) {
 				memcpy(&vp->vp_ipaddr, ptr, 4);
 				vp->length = 4;
@@ -691,7 +691,7 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 
 		/* Data */
 		switch (vp->da->type) {
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 			memcpy(ptr, &vp->vp_ipaddr, 4);
 			break;
 

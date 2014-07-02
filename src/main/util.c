@@ -331,7 +331,8 @@ void rad_const_free(void const *ptr)
 void NEVER_RETURNS rad_assert_fail(char const *file, unsigned int line, char const *expr)
 {
 	ERROR("ASSERT FAILED %s[%u]: %s", file, line, expr);
-	abort();
+	fr_fault(SIGABRT);
+	fr_exit_now(1);
 }
 
 
@@ -357,11 +358,11 @@ REQUEST *request_alloc(TALLOC_CTX *ctx)
 	request->username = NULL;
 	request->password = NULL;
 	request->timestamp = time(NULL);
-	request->options = debug_flag; /* Default to global debug level */
+	request->log.lvl = debug_flag; /* Default to global debug level */
 
 	request->module = "";
 	request->component = "<core>";
-	request->radlog = vradlog_request;
+	request->log.func = vradlog_request;
 
 	return request;
 }
@@ -449,8 +450,7 @@ REQUEST *request_alloc_fake(REQUEST *request)
 	/*
 	 *	Copy debug information.
 	 */
-	fake->options = request->options;
-	fake->radlog = request->radlog;
+	memcpy(&(fake->log), &(request->log), sizeof(fake->log));
 
 	return fake;
 }
@@ -601,9 +601,9 @@ int rad_copy_variable(char *to, char const *from)
 #define USEC 1000000
 #endif
 
-int rad_pps(int *past, int *present, time_t *then, struct timeval *now)
+uint32_t rad_pps(uint32_t *past, uint32_t *present, time_t *then, struct timeval *now)
 {
-	int pps;
+	uint32_t pps;
 
 	if (*then != now->tv_sec) {
 		*then = now->tv_sec;
@@ -751,7 +751,7 @@ int rad_expand_xlat(REQUEST *request, char const *cmd,
 	 *	We have to have SOMETHING, at least.
 	 */
 	if (argc <= 0) {
-		ERROR("rad_expand_xlat: Empty command line.");
+		ERROR("rad_expand_xlat: Empty command line");
 		return -1;
 	}
 
@@ -792,7 +792,7 @@ int rad_expand_xlat(REQUEST *request, char const *cmd,
 		left--;
 
 		if (left <= 0) {
-			ERROR("rad_expand_xlat: Ran out of space while expanding arguments.");
+			ERROR("rad_expand_xlat: Ran out of space while expanding arguments");
 			return -1;
 		}
 	}
@@ -804,8 +804,8 @@ int rad_expand_xlat(REQUEST *request, char const *cmd,
 const FR_NAME_NUMBER pair_lists[] = {
 	{ "request",		PAIR_LIST_REQUEST },
 	{ "reply",		PAIR_LIST_REPLY },
+	{ "control",		PAIR_LIST_CONTROL },		/* New name should have priority */
 	{ "config",		PAIR_LIST_CONTROL },
-	{ "control",		PAIR_LIST_CONTROL },
 #ifdef WITH_PROXY
 	{ "proxy-request",	PAIR_LIST_PROXY_REQUEST },
 	{ "proxy-reply",	PAIR_LIST_PROXY_REPLY },

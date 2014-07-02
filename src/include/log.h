@@ -67,8 +67,8 @@ typedef struct fr_log_t {
 					//!< colour.
 	int		fd;		//!< File descriptor to write messages to.
 	log_dst_t	dst;		//!< Log destination.
-	char		*file;		//!< Path to log file.
-	char		*debug_file;	//!< Path to debug log file.
+	char const	*file;		//!< Path to log file.
+	char const	*debug_file;	//!< Path to debug log file.
 } fr_log_t;
 
 typedef		void (*radlog_func_t)(log_type_t lvl, log_debug_t priority, REQUEST *, char const *, va_list ap);
@@ -192,6 +192,9 @@ int fr_logfile_unlock(fr_logfile_t *lf, int fd);
 #define REDEBUG2(fmt, ...)	_RMOD(L_DBG_ERR, L_DBG_LVL_2, fmt, ## __VA_ARGS__)
 #define REDEBUG3(fmt, ...)	_RMOD(L_DBG_ERR, L_DBG_LVL_3, fmt, ## __VA_ARGS__)
 #define REDEBUG4(fmt, ...)	_RMOD(L_DBG_ERR, L_DBG_LVL_MAX, fmt, ## __VA_ARGS__)
+
+#define RINDENT()		(request->log.indent++)
+#define REXDENT()		(request->log.indent--)
 
 /*
  * Output string with error marker, showing where format error occurred.

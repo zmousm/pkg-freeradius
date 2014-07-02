@@ -34,7 +34,7 @@ RCSIDH(radiusd_h, "$Id$")
 #include <freeradius-devel/connection.h>
 #include <freeradius-devel/map.h>
 
-typedef struct request REQUEST;
+typedef struct rad_request REQUEST;
 
 #include <freeradius-devel/log.h>
 
@@ -74,15 +74,14 @@ typedef struct request_data_t request_data_t;
 typedef struct radclient {
 	fr_ipaddr_t		ipaddr;
 	fr_ipaddr_t		src_ipaddr;
-	int			prefix;
 	char const		*longname;
 	char const		*secret;
 	char const		*shortname;
 	bool			message_authenticator;
-	char			*nas_type;
-	char			*login;
-	char			*password;
-	char			*server;
+	char const		*nas_type;
+	char const		*login;
+	char const		*password;
+	char const 		*server;
 	int			number;	/* internal use only */
 	CONF_SECTION const 	*cs;
 #ifdef WITH_STATS
@@ -96,6 +95,8 @@ typedef struct radclient {
 #endif
 #endif
 
+	struct timeval		response_window;
+
 	int			proto;
 #ifdef WITH_TCP
 	fr_socket_limit_t	limit;
@@ -105,16 +106,16 @@ typedef struct radclient {
 #endif
 
 #ifdef WITH_DYNAMIC_CLIENTS
-	int			lifetime;
-	int			dynamic; /* was dynamically defined */
+	uint32_t		lifetime;
+	uint32_t		dynamic; /* was dynamically defined */
 	time_t			created;
 	time_t			last_new_client;
-	char			*client_server;
+	char const		*client_server;
 	bool			rate_limit;
 #endif
 
 #ifdef WITH_COA
-	char			*coa_name;
+	char const		*coa_name;
 	home_server_t		*coa_server;
 	home_pool_t		*coa_pool;
 #endif
@@ -210,7 +211,7 @@ typedef enum {
 } rad_child_state_t;
 #define REQUEST_CHILD_NUM_STATES (REQUEST_DONE + 1)
 
-struct request {
+struct rad_request {
 #ifndef NDEBUG
 	uint32_t		magic; 		//!< Magic number used to detect memory corruption,
 						//!< or request structs that have not been properly initialised.
@@ -258,9 +259,6 @@ struct request {
 	int			simul_mpp; 	//!< WEIRD: 1 is false, 2 is true.
 #endif
 
-	log_debug_t		options;	//!< Request options, currently just holds the debug level or
-						//!< the request.
-
 	char const		*module;	//!< Module the request is currently being processed by.
 	char const		*component; 	//!< Section the request is in.
 
@@ -274,26 +272,36 @@ struct request {
 	int			timer_action;
 	fr_event_t		*ev;
 
-	int			in_request_hash;
+	bool			in_request_hash;
 #ifdef WITH_PROXY
-	int			in_proxy_hash;
+	bool			in_proxy_hash;
 
 	home_server_t	       	*home_server;
 	home_pool_t		*home_pool;	//!< For dynamic failover
 
 	struct timeval		proxy_retransmit;
 
-	int			num_proxied_requests;
-	int			num_proxied_responses;
+	uint32_t		num_proxied_requests;
+	uint32_t		num_proxied_responses;
 #endif
 
 	char const		*server;
 	REQUEST			*parent;
-	radlog_func_t		radlog;		//!< Function to call to output log messages about this
+
+	struct {
+		radlog_func_t	func;		//!< Function to call to output log messages about this
 						//!< request.
+
+		log_debug_t	lvl;		//!< Request options, currently just holds the debug level or
+						//!< the request.
+
+		uint8_t		indent;		//!< By how much to indent log messages. uin8_t so it's obvious
+						//!< when a request has been exdented too much.
+	} log;
+
 #ifdef WITH_COA
 	REQUEST			*coa;		//!< CoA request originated by this request.
-	int			num_coa_requests;//!< Counter for number of requests sent including
+	uint32_t		num_coa_requests;//!< Counter for number of requests sent including
 						//!< retransmits.
 #endif
 };				/* REQUEST typedef */
@@ -328,7 +336,7 @@ struct rad_listen_t {
 #endif
 	bool		nodup;
 	bool		synchronous;
-	int		workers;
+	uint32_t	workers;
 
 #ifdef WITH_TLS
 	fr_tls_server_conf_t *tls;
@@ -356,21 +364,21 @@ typedef struct listen_socket_t {
 	 *	For normal sockets.
 	 */
 	fr_ipaddr_t	my_ipaddr;
-	int		my_port;
+	uint16_t	my_port;
 
 	char const	*interface;
 #ifdef SO_BROADCAST
 	int		broadcast;
 #endif
 	time_t		rate_time;
-	int		rate_pps_old;
-	int		rate_pps_now;
-	int		max_rate;
+	uint32_t	rate_pps_old;
+	uint32_t	rate_pps_now;
+	uint32_t	max_rate;
 
 	/* for outgoing sockets */
 	home_server_t	*home;
 	fr_ipaddr_t	other_ipaddr;
-	int		other_port;
+	uint16_t	other_port;
 
 	int		proto;
 
@@ -408,29 +416,26 @@ typedef struct listen_socket_t {
 typedef struct main_config_t {
 	struct main_config *next;
 	fr_ipaddr_t	myip;	/* from the command-line only */
-	int		port;	/* from the command-line only */
+	uint16_t	port;	/* from the command-line only */
 	bool		log_auth;
 	bool		log_auth_badpass;
 	bool		log_auth_goodpass;
 	bool		allow_core_dumps;
-	int		debug_level;
+	uint32_t	debug_level;
 	bool		daemonize;
 #ifdef WITH_PROXY
 	bool		proxy_requests;
 #endif
-	int		reject_delay;
+	uint32_t	reject_delay;
 	bool		status_server;
 	char const	*allow_vulnerable_openssl;
 
-	int		max_request_time;
-	int		cleanup_delay;
-	int		max_requests;
-#ifdef DELETE_BLOCKED_REQUESTS
-	int		kill_unresponsive_children;
-#endif
-	char		*log_file;
+	uint32_t	max_request_time;
+	uint32_t	cleanup_delay;
+	uint32_t	max_requests;
+	char const	*log_file;
 	char const	*dictionary_dir;
-	char		*checkrad;
+	char const	*checkrad;
 	char const      *pid_file;
 	rad_listen_t	*listen;
 	int		syslog_facility;
@@ -442,6 +447,7 @@ typedef struct main_config_t {
 	bool		memory_report;
 	char const	*panic_action;
 	char const	*denied_msg;
+	struct timeval	init_delay; /* initial request processing delay */
 } MAIN_CONFIG_T;
 
 #define SECONDS_PER_DAY		86400
@@ -450,8 +456,8 @@ typedef struct main_config_t {
 #define MAX_REQUESTS		256
 #define RETRY_DELAY		5
 #define RETRY_COUNT		3
-#define DEAD_TIME	       120
-#define EXEC_TIMEOUT	       10
+#define DEAD_TIME		120
+#define EXEC_TIMEOUT		10
 
 /* for paircompare_register */
 typedef int (*RAD_COMPARE_FUNC)(void *instance, REQUEST *,VALUE_PAIR *, VALUE_PAIR *, VALUE_PAIR *, VALUE_PAIR **);
@@ -487,14 +493,15 @@ extern bool		log_auth_detail;
 extern char const	*radiusd_version;
 void			radius_signal_self(int flag);
 
-#define RADIUS_SIGNAL_SELF_NONE		(0)
-#define RADIUS_SIGNAL_SELF_HUP		(1 << 0)
-#define RADIUS_SIGNAL_SELF_TERM		(1 << 1)
-#define RADIUS_SIGNAL_SELF_EXIT		(1 << 2)
-#define RADIUS_SIGNAL_SELF_DETAIL	(1 << 3)
-#define RADIUS_SIGNAL_SELF_NEW_FD	(1 << 4)
-#define RADIUS_SIGNAL_SELF_MAX		(1 << 5)
-
+typedef enum {
+	RADIUS_SIGNAL_SELF_NONE		= (0),
+	RADIUS_SIGNAL_SELF_HUP		= (1 << 0),
+	RADIUS_SIGNAL_SELF_TERM		= (1 << 1),
+	RADIUS_SIGNAL_SELF_EXIT		= (1 << 2),
+	RADIUS_SIGNAL_SELF_DETAIL	= (1 << 3),
+	RADIUS_SIGNAL_SELF_NEW_FD	= (1 << 4),
+	RADIUS_SIGNAL_SELF_MAX		= (1 << 5)
+} radius_signal_t;
 /*
  *	Function prototypes.
  */
@@ -503,12 +510,11 @@ void			radius_signal_self(int flag);
 int		rad_accounting(REQUEST *);
 
 /* session.c */
-int		rad_check_ts(uint32_t nasaddr, unsigned int port, char const *user,
-			     char const *sessionid);
+int		rad_check_ts(uint32_t nasaddr, uint32_t nas_port, char const *user, char const *sessionid);
 int		session_zap(REQUEST *request, uint32_t nasaddr,
-			    unsigned int port, char const *user,
+			    uint32_t nas_port, char const *user,
 			    char const *sessionid, uint32_t cliaddr,
-			    char proto,int session_time);
+			    char proto, int session_time);
 
 /* radiusd.c */
 #undef debug_pair
@@ -538,8 +544,7 @@ void		*request_data_reference(REQUEST *request,
 int		rad_copy_string(char *dst, char const *src);
 int		rad_copy_string_bare(char *dst, char const *src);
 int		rad_copy_variable(char *dst, char const *from);
-int		rad_pps(int *past, int *present, time_t *then,
-			struct timeval *now);
+uint32_t	rad_pps(uint32_t *past, uint32_t *present, time_t *then, struct timeval *now);
 int		rad_expand_xlat(REQUEST *request, char const *cmd,
 				int max_argc, char *argv[], bool can_fail,
 				size_t argv_buflen, char *argv_buf);
@@ -558,7 +563,8 @@ void		client_delete(RADCLIENT_LIST *clients, RADCLIENT *client);
 RADCLIENT	*client_from_request(RADCLIENT_LIST *clients, REQUEST *request);
 #endif
 RADCLIENT	*client_from_query(TALLOC_CTX *ctx, char const *identifier, char const *secret, char const *shortname,
-				   char const *type, char const *server, bool require_ma);
+				   char const *type, char const *server, bool require_ma) CC_HINT(nonnull(2, 3));
+
 RADCLIENT	*client_find(RADCLIENT_LIST const *clients,
 			     fr_ipaddr_t const *ipaddr, int proto);
 
@@ -620,6 +626,10 @@ void vmodule_failure_msg(REQUEST *request, char const *fmt, va_list ap) CC_HINT(
 
 /*
  *	Less code == fewer bugs
+ *
+ * @param _a attribute
+ * @param _b value
+ * @param _c op
  */
 #define pairmake_packet(_a, _b, _c) pairmake(request->packet, &request->packet->vps, _a, _b, _c)
 #define pairmake_reply(_a, _b, _c) pairmake(request->reply, &request->reply->vps, _a, _b, _c)
@@ -680,16 +690,13 @@ void fr_suid_down_permanent(void);
 /* listen.c */
 void listen_free(rad_listen_t **head);
 int listen_init(CONF_SECTION *cs, rad_listen_t **head, bool spawn_flag);
-rad_listen_t *proxy_new_listener(home_server_t *home, int src_port);
-RADCLIENT *client_listener_find(rad_listen_t *listener,
-				fr_ipaddr_t const *ipaddr, int src_port);
+rad_listen_t *proxy_new_listener(home_server_t *home, uint16_t src_port);
+RADCLIENT *client_listener_find(rad_listen_t *listener, fr_ipaddr_t const *ipaddr, uint16_t src_port);
 
 #ifdef WITH_STATS
-RADCLIENT_LIST *listener_find_client_list(fr_ipaddr_t const *ipaddr,
-					  int port);
+RADCLIENT_LIST *listener_find_client_list(fr_ipaddr_t const *ipaddr, uint16_t port);
 #endif
-rad_listen_t *listener_find_byipaddr(fr_ipaddr_t const *ipaddr, int port,
-				     int proto);
+rad_listen_t *listener_find_byipaddr(fr_ipaddr_t const *ipaddr, uint16_t port, int proto);
 int rad_status_server(REQUEST *request);
 
 /* event.c */
@@ -727,15 +734,17 @@ request_refs_t radius_request_name(char const **name, request_refs_t unknown);
 
 int radius_mapexec(VALUE_PAIR **out, REQUEST *request, value_pair_map_t const *map);
 int radius_map2vp(VALUE_PAIR **out, REQUEST *request, value_pair_map_t const *map, void *ctx) CC_HINT(nonnull (1,2,3));
-int radius_map2request(REQUEST *request, value_pair_map_t const *map,
-		       char const *src, radius_tmpl_getvalue_t func, void *ctx);
+void radius_map_debug(REQUEST *request, value_pair_map_t const *map, VALUE_PAIR const *vp) CC_HINT(nonnull(1, 2));
+int radius_map2request(REQUEST *request, value_pair_map_t const *map, radius_tmpl_getvalue_t func, void *ctx);
 
 int radius_strpair2map(value_pair_map_t **out, REQUEST *request, char const *raw,
 		       request_refs_t dst_request_def, pair_lists_t dst_list_def,
 		       request_refs_t src_request_def, pair_lists_t src_list_def);
-VALUE_PAIR *radius_vpt_get_vp(REQUEST *request, value_pair_tmpl_t const *vpt);
+bool radius_map_dst_valid(REQUEST *request, value_pair_map_t const *map);
+int radius_tmpl_get_vp(VALUE_PAIR **out, REQUEST *request, value_pair_tmpl_t const *vpt);
 int radius_get_vp(VALUE_PAIR **out, REQUEST *request, char const *name);
-int radius_vpt_copy_vp(VALUE_PAIR **out, REQUEST *request, value_pair_tmpl_t const *vpt);
+int radius_tmpl_copy_vp(VALUE_PAIR **out, REQUEST *request, value_pair_tmpl_t const *vpt);
+int radius_copy_vp(VALUE_PAIR **out, REQUEST *request, char const *name);
 
 #ifdef WITH_TLS
 /*

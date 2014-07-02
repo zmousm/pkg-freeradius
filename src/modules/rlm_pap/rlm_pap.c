@@ -62,7 +62,7 @@ typedef struct rlm_pap_t {
  *      buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-	{ "normalise", PW_TYPE_BOOLEAN, offsetof(rlm_pap_t,normify), NULL, "yes" },
+	{ "normalise", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_pap_t, normify), "yes" },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -370,8 +370,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 			return RLM_MODULE_NOOP;
 		}
 
-		RWDEBUG("No \"known good\" password found for the user.  Not setting Auth-Type.");
-		RWDEBUG("Authentication will fail unless a \"known good\" password is available.");
+		RWDEBUG("No \"known good\" password found for the user.  Not setting Auth-Type");
+		RWDEBUG("Authentication will fail unless a \"known good\" password is available");
 		return RLM_MODULE_NOOP;
 	}
 

@@ -179,8 +179,7 @@ ATTRIBUTE	Home-Server-Pool			1111	string
 
 ATTRIBUTE	FreeRADIUS-Client-IP-Address		1120	ipaddr
 ATTRIBUTE	FreeRADIUS-Client-IPv6-Address		1121	ipv6addr
-ATTRIBUTE	FreeRADIUS-Client-IP-Prefix		1150	ipv4prefix
-ATTRIBUTE	FreeRADIUS-Client-IPv6-Prefix		1151	ipv6prefix
+# The rest of the FreeRADIUS-Client-* attributes are at 1150...
 
 ATTRIBUTE	FreeRADIUS-Client-Require-MA		1122	integer
 
@@ -229,6 +228,7 @@ ATTRIBUTE	Cache-TTL				1140	integer
 ATTRIBUTE	Cache-Status-Only			1141	integer
 ATTRIBUTE	Cache-Merge				1142	integer
 ATTRIBUTE	Cache-Entry-Hits			1143	integer
+ATTRIBUTE	Cache-Read-Only				1144	integer
 
 VALUE	Cache-Status-Only		no			0
 VALUE	Cache-Status-Only		yes			1
@@ -236,10 +236,8 @@ VALUE	Cache-Status-Only		yes			1
 VALUE	Cache-Merge			no			0
 VALUE	Cache-Merge			yes			1
 
-#	More dynamic client attributes
-
-ATTRIBUTE	FreeRADIUS-Client-Src-IP-Address	1143	ipaddr
-ATTRIBUTE	FreeRADIUS-Client-Src-IPv6-Address	1144	ipv6addr
+VALUE	Cache-Read-Only			no			0
+VALUE	Cache-Read-Only			yes			1
 
 ATTRIBUTE	OTP-Challenge				1145	string
 ATTRIBUTE	EAP-Session-Id				1146	octets
@@ -247,9 +245,11 @@ ATTRIBUTE	EAP-Session-Id				1146	octets
 ATTRIBUTE	Acct-Input-Octets64			1148	integer64
 ATTRIBUTE	Acct-Output-Octets64			1149	integer64
 
-# 1150 and 1151 are defined above, as FreeRADIUS-Client-...
-
-ATTRIBUTE  	FreeRADIUS-Response-Delay		1152	integer
+ATTRIBUTE	FreeRADIUS-Client-IP-Prefix		1150	ipv4prefix
+ATTRIBUTE	FreeRADIUS-Client-IPv6-Prefix		1151	ipv6prefix
+ATTRIBUTE	FreeRADIUS-Response-Delay		1152	integer
+ATTRIBUTE	FreeRADIUS-Client-Src-IP-Address	1153	ipaddr
+ATTRIBUTE	FreeRADIUS-Client-Src-IPv6-Address	1154	ipv6addr
 
 #
 #	Range:	1200-1279
@@ -360,6 +360,7 @@ ATTRIBUTE	EAP-Type-MS-CHAP-V2			1306	octets
 #
 
 # these are PW_EAP_SIM_X + 1536
+ATTRIBUTE	EAP_Sim-Base				1536	octets
 ATTRIBUTE	EAP-Sim-RAND				1537	octets
 ATTRIBUTE	EAP-Sim-PADDING				1542	octets
 ATTRIBUTE	EAP-Sim-NONCE_MT			1543	octets
@@ -491,7 +492,7 @@ ATTRIBUTE	TLS-Cert-Subject			1913	string
 ATTRIBUTE	TLS-Cert-Common-Name			1914	string
 ATTRIBUTE	TLS-Cert-Subject-Alt-Name-Email		1915	string
 ATTRIBUTE	TLS-Cert-Subject-Alt-Name-Dns		1916	string
-ATTRIBUTE	TLS-Cert-Subject-Alt-Name-Upn   	1917	string
+ATTRIBUTE	TLS-Cert-Subject-Alt-Name-Upn		1917	string
 # 1918 - 1919: reserved for future cert attributes
 ATTRIBUTE	TLS-Client-Cert-Serial			1920	string
 ATTRIBUTE	TLS-Client-Cert-Expiration		1921	string

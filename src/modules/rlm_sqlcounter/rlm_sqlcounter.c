@@ -57,15 +57,15 @@ RCSID("$Id$")
  *	be used as the instance handle.
  */
 typedef struct rlm_sqlcounter_t {
-	char		*counter_name;  //!< Daily-Session-Time.
-	char		*limit_name;  	//!< Max-Daily-Session.
-	char		*reply_name;  	//!< Session-Timeout.
-	char		*key_name;  	//!< User-Name.
-	char		*sqlmod_inst;	//!< Instance of SQL module to use,
+	char const	*counter_name;  //!< Daily-Session-Time.
+	char const	*limit_name;  	//!< Max-Daily-Session.
+	char const	*reply_name;  	//!< Session-Timeout.
+	char const	*key_name;  	//!< User-Name.
+	char const	*sqlmod_inst;	//!< Instance of SQL module to use,
 					//!< usually just 'sql'.
-	char		*query;		//!< SQL query to retrieve current
+	char const	*query;		//!< SQL query to retrieve current
 					//!< session time.
-	char		*reset;  	//!< Daily, weekly, monthly,
+	char const	*reset;  	//!< Daily, weekly, monthly,
 					//!< never or user defined.
 	time_t		reset_time;
 	time_t		last_reset;
@@ -84,32 +84,21 @@ typedef struct rlm_sqlcounter_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-	{ "sql-module-instance", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_sqlcounter_t,sqlmod_inst), NULL, NULL },
-	{ "sql_module_instance", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_sqlcounter_t,sqlmod_inst), NULL, NULL },
+	{ "sql-module-instance", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sqlcounter_t, sqlmod_inst), NULL },
+	{ "sql_module_instance", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_sqlcounter_t, sqlmod_inst), NULL },
 
-	{ "key", PW_TYPE_STRING_PTR | PW_TYPE_ATTRIBUTE,
-	  offsetof(rlm_sqlcounter_t,key_name), NULL, NULL },
-	{ "query", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_sqlcounter_t,query), NULL, NULL },
-	{ "reset", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_sqlcounter_t,reset), NULL,  NULL },
+	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_ATTRIBUTE, rlm_sqlcounter_t, key_name), NULL },
+	{ "query", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_sqlcounter_t, query), NULL },
+	{ "reset", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_sqlcounter_t, reset), NULL },
 
-	{ "counter-name", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_sqlcounter_t,counter_name), NULL,  NULL },
-	{ "counter_name", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_sqlcounter_t,counter_name), NULL,  NULL },
+	{ "counter-name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sqlcounter_t, counter_name), NULL },
+	{ "counter_name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_sqlcounter_t, counter_name), NULL },
 
-	{ "check-name", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_sqlcounter_t,limit_name), NULL, NULL },
-	{ "check_name", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_sqlcounter_t,limit_name), NULL, NULL },
+	{ "check-name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sqlcounter_t, limit_name), NULL },
+	{ "check_name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_sqlcounter_t, limit_name), NULL },
 
-	{ "reply-name", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_sqlcounter_t,reply_name), NULL, NULL },
-	{ "reply_name", PW_TYPE_STRING_PTR | PW_TYPE_ATTRIBUTE,
-	  offsetof(rlm_sqlcounter_t,reply_name), NULL, "Session-Timeout" },
+	{ "reply-name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sqlcounter_t, reply_name), NULL },
+	{ "reply_name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_ATTRIBUTE, rlm_sqlcounter_t, reply_name), "Session-Timeout" },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -395,7 +384,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	 */
 	rad_assert(inst->counter_name && *inst->counter_name);
 	memset(&flags, 0, sizeof(flags));
-	dict_addattr(inst->counter_name, -1, 0, PW_TYPE_INTEGER, flags);
+	dict_addattr(inst->counter_name, -1, 0, PW_TYPE_INTEGER64, flags);
 	da = dict_attrbyname(inst->counter_name);
 	if (!da) {
 		cf_log_err_cs(conf, "Failed to create counter attribute %s", inst->counter_name);
@@ -407,7 +396,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	 *  Create a new attribute for the check item.
 	 */
 	rad_assert(inst->limit_name && *inst->limit_name);
-	dict_addattr(inst->limit_name, -1, 0, PW_TYPE_INTEGER, flags);
+	dict_addattr(inst->limit_name, -1, 0, PW_TYPE_INTEGER64, flags);
 	da = dict_attrbyname(inst->limit_name);
 	if (!da) {
 		cf_log_err_cs(conf, "Failed to create check attribute %s", inst->limit_name);
