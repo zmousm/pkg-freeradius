@@ -73,7 +73,7 @@ static int _pairfree(VALUE_PAIR *vp) {
 	}
 
 #ifndef NDEBUG
-	vp->vp_integer = FREE_MAGIC;
+	vp->vp_integer = 0xf4eef4ee;
 #endif
 
 #ifdef TALLOC_DEBUG
@@ -110,6 +110,7 @@ VALUE_PAIR *pairalloc(TALLOC_CTX *ctx, DICT_ATTR const *da)
 
 	vp->da = da;
 	vp->op = T_OP_EQ;
+	vp->tag = TAG_ANY;
 	vp->type = VT_NONE;
 
 	vp->length = da->flags.length;
@@ -196,6 +197,7 @@ int pair2unknown(VALUE_PAIR *vp)
 
 	return 0;
 }
+
 /** Find the pair with the matching DAs
  *
  */
@@ -212,7 +214,7 @@ VALUE_PAIR *pairfind_da(VALUE_PAIR *vp, DICT_ATTR const *da, int8_t tag)
 	     i;
 	     i = fr_cursor_next(&cursor)) {
 		VERIFY_VP(i);
-		if ((i->da == da) && (!i->da->flags.has_tag || (tag == TAG_ANY) || (i->tag == tag))) {
+		if ((i->da == da) && (!i->da->flags.has_tag || TAG_EQ(tag, i->tag))) {
 			return i;
 		}
 	}
@@ -236,7 +238,7 @@ VALUE_PAIR *pairfind(VALUE_PAIR *vp, unsigned int attr, unsigned int vendor, int
 	     i;
 	     i = fr_cursor_next(&cursor)) {
 		if ((i->da->attr == attr) && (i->da->vendor == vendor) && \
-		    (!i->da->flags.has_tag || (tag == TAG_ANY) || (i->tag == tag))) {
+		    (!i->da->flags.has_tag || TAG_EQ(tag, i->tag))) {
 			return i;
 		}
 	}
@@ -251,7 +253,7 @@ VALUE_PAIR *pairfind(VALUE_PAIR *vp, unsigned int attr, unsigned int vendor, int
  * @param[in,out] first VP in list.
  * @param[in] attr to match.
  * @param[in] vendor to match.
- * @param[in] tag to match. TAG_ANY matches any tag, TAG_UNUSED matches tagless VPs.
+ * @param[in] tag to match. TAG_ANY matches any tag, TAG_NONE matches tagless VPs.
  *
  * @todo should take DAs and do a point comparison.
  */
@@ -265,8 +267,7 @@ void pairdelete(VALUE_PAIR **first, unsigned int attr, unsigned int vendor,
 		VERIFY_VP(i);
 		next = i->next;
 		if ((i->da->attr == attr) && (i->da->vendor == vendor) &&
-		    ((tag == TAG_ANY) ||
-		     (i->da->flags.has_tag && (i->tag == tag)))) {
+		    (!i->da->flags.has_tag || TAG_EQ(tag, i->tag))) {
 			*last = next;
 			talloc_free(i);
 		} else {
@@ -334,9 +335,7 @@ void pairreplace(VALUE_PAIR **first, VALUE_PAIR *replace)
 		 *	Found the first attribute, replace it,
 		 *	and return.
 		 */
-		if ((i->da == replace->da) &&
-		    (!i->da->flags.has_tag || (i->tag == replace->tag))
-		) {
+		if ((i->da == replace->da) && (!i->da->flags.has_tag || TAG_EQ(replace->tag, i->tag))) {
 			*prev = replace;
 
 			/*
@@ -500,9 +499,9 @@ void pairvalidate_debug(TALLOC_CTX *ctx, VALUE_PAIR const *failed[2])
 		return;
 	}
 
-	if (filter->tag != list->tag) {
+	if (TAG_EQ(filter->tag, list->tag)) {
 		fr_strerror_printf("Attribute \"%s\" tag \"%i\" didn't match filter tag \"%i\"",
-				   list->da->name, list->tag, list->tag);
+				   list->da->name, list->tag, filter->tag);
 		return;
 	}
 
@@ -698,16 +697,16 @@ VALUE_PAIR *paircopyvp(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
 
 	n->next = NULL;
 
-	if (n->data.ptr) switch (n->da->type) {
+	switch (vp->da->type) {
 	case PW_TYPE_TLV:
 	case PW_TYPE_OCTETS:
-		n->vp_octets = talloc_memdup(n, vp->vp_octets, n->length);
-		talloc_set_type(n->vp_octets, uint8_t);
+		n->vp_octets = NULL;	/* else pairmemcpy will free vp's value */
+		pairmemcpy(n, vp->vp_octets, n->length);
 		break;
 
 	case PW_TYPE_STRING:
-		n->vp_strvalue = talloc_memdup(n, vp->vp_strvalue, n->length + 1);	/* NULL byte */
-		talloc_set_type(n->vp_strvalue, char);
+		n->vp_strvalue = NULL;	/* else pairstrnpy will free vp's value */
+		pairstrncpy(n, vp->vp_strvalue, n->length);
 		break;
 
 	default:
@@ -766,17 +765,17 @@ VALUE_PAIR *paircopyvpdata(TALLOC_CTX *ctx, DICT_ATTR const *da, VALUE_PAIR cons
 			return NULL; /* can't do it */
 
 		case PW_TYPE_INTEGER:
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 		case PW_TYPE_DATE:
 		case PW_TYPE_IFID:
-		case PW_TYPE_IPV6ADDR:
-		case PW_TYPE_IPV6PREFIX:
+		case PW_TYPE_IPV6_ADDR:
+		case PW_TYPE_IPV6_PREFIX:
 		case PW_TYPE_BYTE:
 		case PW_TYPE_SHORT:
 		case PW_TYPE_ETHERNET:
 		case PW_TYPE_SIGNED:
 		case PW_TYPE_INTEGER64:
-		case PW_TYPE_IPV4PREFIX:
+		case PW_TYPE_IPV4_PREFIX:
 			break;
 		}
 
@@ -868,7 +867,7 @@ VALUE_PAIR *paircopy(TALLOC_CTX *ctx, VALUE_PAIR *from)
  * @param[in] from whence to copy VALUE_PAIRs.
  * @param[in] attr to match, if 0 input list will not be filtered by attr.
  * @param[in] vendor to match.
- * @param[in] tag to match, TAG_ANY matches any tag, TAG_UNUSED matches tagless VPs.
+ * @param[in] tag to match, TAG_ANY matches any tag, TAG_NONE matches tagless VPs.
  * @return the head of the new VALUE_PAIR list or NULL on error.
  */
 VALUE_PAIR *paircopy2(TALLOC_CTX *ctx, VALUE_PAIR *from,
@@ -888,7 +887,7 @@ VALUE_PAIR *paircopy2(TALLOC_CTX *ctx, VALUE_PAIR *from,
 			continue;
 		}
 
-		if ((tag != TAG_ANY) && vp->da->flags.has_tag && (vp->tag != tag)) {
+		if (vp->da->flags.has_tag && TAG_EQ(tag, vp->tag)) {
 			continue;
 		}
 
@@ -992,8 +991,7 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
 			 *	it doesn't already exist.
 			 */
 			case T_OP_EQ:
-				found = pairfind(*to, i->da->attr, i->da->vendor,
-						 TAG_ANY);
+				found = pairfind(*to, i->da->attr, i->da->vendor, TAG_ANY);
 				if (!found) goto do_add;
 
 				tail_from = &(i->next);
@@ -1004,8 +1002,7 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
 			 *	of the same vendor/attr which already exists.
 			 */
 			case T_OP_SET:
-				found = pairfind(*to, i->da->attr, i->da->vendor,
-						 TAG_ANY);
+				found = pairfind(*to, i->da->attr, i->da->vendor, TAG_ANY);
 				if (!found) goto do_add;
 
 				/*
@@ -1096,7 +1093,7 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
  * @param[in] attr to match, if PW_VENDOR_SPECIFIC and vendor 0, only VSAs will
  *	      be copied.  If 0 and 0, all attributes will match
  * @param[in] vendor to match.
- * @param[in] tag to match, TAG_ANY matches any tag, TAG_UNUSED matches tagless VPs.
+ * @param[in] tag to match, TAG_ANY matches any tag, TAG_NONE matches tagless VPs.
  */
 void pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from, unsigned int attr, unsigned int vendor, int8_t tag)
 {
@@ -1140,8 +1137,7 @@ void pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from, unsigned in
 		VERIFY_VP(i);
 		next = i->next;
 
-		if ((tag != TAG_ANY) && i->da->flags.has_tag &&
-		    (i->tag != tag)) {
+		if (i->da->flags.has_tag && TAG_EQ(tag, i->tag)) {
 			continue;
 		}
 
@@ -1199,16 +1195,21 @@ void pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from, unsigned in
 
 static char const *hextab = "0123456789abcdef";
 
-bool pairparsevalue(VALUE_PAIR *vp, char const *value)
+/** Convert string value to native attribute value
+ *
+ * @param vp to assign value to.
+ * @param value string to convert. Binary safe for variable length values if len is provided.
+ * @param inlen may be 0 in which case strlen(len) is used to determine length, else inline
+ *	  should be the length of the string or sub string to parse.
+ * @return true on success, else false.
+ */
+int pairparsevalue(VALUE_PAIR *vp, char const *value, size_t inlen)
 {
-	char		*p;
-	char const	*cp, *cs;
-	int		x;
-	uint64_t	y;
-	size_t		length;
 	DICT_VALUE	*dval;
+	size_t		len;
+	char		buffer[256];
 
-	if (!value) return false;
+	if (!value) return -1;
 	VERIFY_VP(vp);
 
 	/*
@@ -1219,16 +1220,29 @@ bool pairparsevalue(VALUE_PAIR *vp, char const *value)
 		goto finish;
 	}
 
+	len = (inlen == 0) ? strlen(value) : inlen;
+
+	/*
+	 *	It's a variable length type so we just alloc a new buffer
+	 *	of size len and copy.
+	 */
 	switch(vp->da->type) {
 	case PW_TYPE_STRING:
+	{
+		size_t		vp_len;
+		char const	*cp;
+		char		*p;
+		int		x;
+
 		/*
 		 *	Do escaping here
 		 */
-		p = talloc_typed_strdup(vp, value);
-		vp->vp_strvalue = p;
-		cp = value;
-		length = 0;
+		vp->vp_strvalue = p = talloc_memdup(vp, value, len + 1);
+		p[len] = '\0';
+		talloc_set_type(p, char);
 
+		cp = value;
+		vp_len = 0;
 		while (*cp) {
 			char c = *cp++;
 
@@ -1283,63 +1297,191 @@ bool pairparsevalue(VALUE_PAIR *vp, char const *value)
 				} /* else at EOL \ --> \ */
 			}
 			*p++ = c;
-			length++;
+			vp_len++;
 		}
 		*p = '\0';
-		vp->length = length;
-		break;
+		vp->length = vp_len;
+	}
+		goto finish;
 
-	case PW_TYPE_IPADDR:
+	/* raw octets: 0x01020304... */
+	case PW_TYPE_VSA:
+		if (strcmp(value, "ANY") == 0) {
+			vp->length = 0;
+			goto finish;
+		} /* else it's hex */
+
+	case PW_TYPE_OCTETS:
+	{
+		uint8_t	*p;
+
 		/*
-		 *	FIXME: complain if hostname
-		 *	cannot be resolved, or resolve later!
+		 *	No 0x prefix, just copy verbatim.
 		 */
-		p = NULL;
-		{
-			fr_ipaddr_t ipaddr;
-			char ipv4[16];
-
-			/*
-			 *	Convert things which are obviously integers to IP addresses
-			 *
-			 *	We assume the number is the bigendian representation of the
-			 *	IP address.
-			 */
-			if (is_integer(value)) {
-				vp->vp_ipaddr = htonl(atol(value));
-				break;
-			}
-
-			/*
-			 *	Certain applications/databases print IPv4 addresses with a
-			 *	/32 suffix. Strip it off if the mask is 32, else error out.
-			 */
-			p = strchr(value, '/');
-			if (p) {
-				if ((p[1] != '3') || (p[2] != '2') || (p[3] != '\0')) {
-					fr_strerror_printf("Invalid IP address suffix \"%s\".  Only '/32' permitted "
-							   "for non-prefix types", p);
-					return false;
-				}
-
-				strlcpy(ipv4, value, sizeof(ipv4));
-				ipv4[p - value] = '\0';
-				cs = ipv4;
-			} else {
-				cs = value;
-			}
-
-			if (ip_hton(cs, AF_INET, &ipaddr) < 0) {
-				fr_strerror_printf("Failed to find IP address for %s", cs);
-				return false;
-			}
-
-			vp->vp_ipaddr = ipaddr.ipaddr.ip4addr.s_addr;
+		if ((len < 2) || (strncasecmp(value, "0x", 2) != 0)) {
+			pairmemcpy(vp, (uint8_t const *) value, len);
+			goto finish;
 		}
-		vp->length = 4;
-		break;
 
+
+#ifdef WITH_ASCEND_BINARY
+	do_octets:
+#endif
+		len -= 2;
+
+		/*
+		 *	Invalid.
+		 */
+		if ((len & 0x01) != 0) {
+			fr_strerror_printf("Length of Hex String is not even, got %zu bytes", vp->length);
+			return -1;
+		}
+
+		vp->length = len >> 1;
+		p = talloc_array(vp, uint8_t, vp->length);
+		if (fr_hex2bin(p, value + 2, len) != vp->length) {
+			talloc_free(p);
+			fr_strerror_printf("Invalid hex data");
+			return -1;
+		}
+
+		vp->vp_octets = p;
+	}
+		goto finish;
+
+	case PW_TYPE_ABINARY:
+#ifdef WITH_ASCEND_BINARY
+		if ((len > 1) && (strncasecmp(value, "0x", 2) == 0)) goto do_octets;
+
+		if (ascend_parse_filter(vp, value, len) < 0 ) {
+			/* Allow ascend_parse_filter's strerror to bubble up */
+			return -1;
+		}
+		goto finish;
+#else
+		/*
+		 *	If Ascend binary is NOT defined,
+		 *	then fall through to raw octets, so that
+		 *	the user can at least make them by hand...
+		 */
+	 	goto do_octets;
+#endif
+
+	/* don't use this! */
+	case PW_TYPE_TLV:
+	{
+		uint8_t	*p;
+
+		if ((len < 2) || (len & 0x01) || (strncasecmp(value, "0x", 2) != 0)) {
+			fr_strerror_printf("Invalid TLV specification");
+			return -1;
+		}
+		len -= 2;
+
+		vp->length = len >> 1;
+		p = talloc_array(vp, uint8_t, vp->length);
+		if (!p) {
+			fr_strerror_printf("No memory");
+			return -1;
+		}
+		if (fr_hex2bin(p, value + 2, len) != vp->length) {
+			fr_strerror_printf("Invalid hex data in TLV");
+			return -1;
+		}
+
+		vp->vp_tlv = p;
+	}
+		goto finish;
+
+	case PW_TYPE_IPV4_ADDR:
+	{
+		fr_ipaddr_t addr;
+
+		if (fr_pton4(&addr, value, inlen, false, false) < 0) return -1;
+
+		/*
+		 *	We allow v4 addresses to have a /32 suffix as some databases (PostgreSQL)
+		 *	print them this way.
+		 */
+		if (addr.prefix != 32) {
+			fr_strerror_printf("Invalid IPv4 mask length \"/%i\".  Only \"/32\" permitted "
+					   "for non-prefix types", addr.prefix);
+			return -1;
+		}
+
+		vp->vp_ipaddr = addr.ipaddr.ip4addr.s_addr;
+		vp->length = sizeof(vp->vp_ipaddr);
+	}
+		goto finish;
+
+	case PW_TYPE_IPV4_PREFIX:
+	{
+		fr_ipaddr_t addr;
+
+		if (fr_pton4(&addr, value, inlen, false, false) < 0) return -1;
+
+		vp->vp_ipv4prefix[1] = addr.prefix;
+		memcpy(vp->vp_ipv4prefix + 2, &addr.ipaddr.ip4addr.s_addr, sizeof(vp->vp_ipv4prefix) - 2);
+		vp->length = sizeof(vp->vp_ipv4prefix);
+	}
+		goto finish;
+
+	case PW_TYPE_IPV6_ADDR:
+	{
+		fr_ipaddr_t addr;
+
+		if (fr_pton6(&addr, value, inlen, false, false) < 0) return -1;
+
+		/*
+		 *	We allow v6 addresses to have a /128 suffix as some databases (PostgreSQL)
+		 *	print them this way.
+		 */
+		if (addr.prefix != 128) {
+			fr_strerror_printf("Invalid IPv6 mask length \"/%i\".  Only \"/128\" permitted "
+					   "for non-prefix types", addr.prefix);
+			return -1;
+		}
+
+		memcpy(&vp->vp_ipv6addr, &addr.ipaddr.ip6addr.s6_addr, sizeof(vp->vp_ipv6addr));
+		vp->length = sizeof(vp->vp_ipv6addr);
+	}
+		goto finish;
+
+	case PW_TYPE_IPV6_PREFIX:
+	{
+		fr_ipaddr_t addr;
+
+		if (fr_pton6(&addr, value, inlen, false, false) < 0) return -1;
+
+		vp->vp_ipv6prefix[1] = addr.prefix;
+		memcpy(vp->vp_ipv6prefix + 2, &addr.ipaddr.ip6addr.s6_addr, sizeof(vp->vp_ipv6prefix) - 2);
+		vp->length = sizeof(vp->vp_ipv6prefix);
+	}
+		goto finish;
+
+	default:
+		break;
+	}
+
+	/*
+	 *	It's a fixed size type, copy to a temporary buffer and
+	 *	\0 terminate if insize >= 0.
+	 */
+	if (inlen > 0) {
+		if (len >= sizeof(buffer)) {
+			fr_strerror_printf("Temporary buffer too small");
+			return -1;
+		}
+
+		memcpy(buffer, value, inlen);
+		buffer[inlen] = '\0';
+		value = buffer;
+	}
+
+	switch(vp->da->type) {
 	case PW_TYPE_BYTE:
+	{
+		char *p;
 		vp->length = 1;
 
 		/*
@@ -1349,14 +1491,18 @@ bool pairparsevalue(VALUE_PAIR *vp, char const *value)
 		if (!*p) {
 			if (vp->vp_integer > 255) {
 				fr_strerror_printf("Byte value \"%s\" is larger than 255", value);
-				return false;
+				return -1;
 			}
 			break;
 		}
 		if (is_whitespace(p)) break;
+	}
 		goto check_for_value;
 
 	case PW_TYPE_SHORT:
+	{
+		char *p;
+
 		/*
 		 *	Note that ALL integers are unsigned!
 		 */
@@ -1365,14 +1511,18 @@ bool pairparsevalue(VALUE_PAIR *vp, char const *value)
 		if (!*p) {
 			if (vp->vp_integer > 65535) {
 				fr_strerror_printf("Byte value \"%s\" is larger than 65535", value);
-				return false;
+				return -1;
 			}
 			break;
 		}
 		if (is_whitespace(p)) break;
+	}
 		goto check_for_value;
 
 	case PW_TYPE_INTEGER:
+	{
+		char *p;
+
 		/*
 		 *	Note that ALL integers are unsigned!
 		 */
@@ -1388,258 +1538,101 @@ bool pairparsevalue(VALUE_PAIR *vp, char const *value)
 		 */
 		if ((dval = dict_valbyname(vp->da->attr, vp->da->vendor, value)) == NULL) {
 			fr_strerror_printf("Unknown value '%s' for attribute '%s'", value, vp->da->name);
-			return false;
+			return -1;
 		}
 		vp->vp_integer = dval->value;
+	}
 		break;
 
 	case PW_TYPE_INTEGER64:
+	{
+		uint64_t y;
+
 		/*
 		 *	Note that ALL integers are unsigned!
 		 */
 		if (sscanf(value, "%" PRIu64, &y) != 1) {
 			fr_strerror_printf("Invalid value '%s' for attribute '%s'",
 					   value, vp->da->name);
-			return false;
+			return -1;
 		}
 		vp->vp_integer64 = y;
 		vp->length = 8;
-		length = strspn(value, "0123456789");
-		if (is_whitespace(value + length)) break;
+	}
 		break;
 
 	case PW_TYPE_DATE:
-		{
-			/*
-			 *	time_t may be 64 bits, whule vp_date
-			 *	MUST be 32-bits.  We need an
-			 *	intermediary variable to handle
-			 *	the conversions.
-			 */
-			time_t date;
-
-			if (fr_get_time(value, &date) < 0) {
-				fr_strerror_printf("failed to parse time string "
-					   "\"%s\"", value);
-				return false;
-			}
-
-			vp->vp_date = date;
-		}
-		vp->length = 4;
-		break;
-
-	case PW_TYPE_ABINARY:
-#ifdef WITH_ASCEND_BINARY
-		if (strncasecmp(value, "0x", 2) == 0) {
-			goto do_octets;
-		}
-
-		if (ascend_parse_filter(vp, value) < 0 ) {
-			/* Allow ascend_parse_filter's strerror to bubble up */
-			return false;
-		}
-		break;
-
+	{
 		/*
-		 *	If Ascend binary is NOT defined,
-		 *	then fall through to raw octets, so that
-		 *	the user can at least make them by hand...
+		 *	time_t may be 64 bits, whule vp_date
+		 *	MUST be 32-bits.  We need an
+		 *	intermediary variable to handle
+		 *	the conversions.
 		 */
-#endif
-	/* raw octets: 0x01020304... */
-	case PW_TYPE_VSA:
-		if (strcmp(value, "ANY") == 0) {
-			vp->length = 0;
-			break;
-		} /* else it's hex */
+		time_t date;
 
-	case PW_TYPE_OCTETS:
-		if (strncasecmp(value, "0x", 2) == 0) {
-			size_t size;
-			uint8_t *us;
-
-#ifdef WITH_ASCEND_BINARY
-		do_octets:
-#endif
-			cp = value + 2;
-			size = strlen(cp);
-			vp->length = size >> 1;
-			us = talloc_array(vp, uint8_t, vp->length);
-
-			/*
-			 *	Invalid.
-			 */
-			if ((size & 0x01) != 0) {
-				fr_strerror_printf("Hex string is not an even length string");
-				return false;
-			}
-
-			if (fr_hex2bin(us, cp, vp->length) != vp->length) {
-				fr_strerror_printf("Invalid hex data");
-				return false;
-			}
-			vp->vp_octets = us;
-		} else {
-			pairmemcpy(vp, (const uint8_t *) value, strlen(value));
+		if (fr_get_time(value, &date) < 0) {
+			fr_strerror_printf("failed to parse time string "
+				   "\"%s\"", value);
+			return -1;
 		}
+
+		vp->vp_date = date;
+		vp->length = 4;
+	}
+
 		break;
 
 	case PW_TYPE_IFID:
 		if (ifid_aton(value, (void *) &vp->vp_ifid) == NULL) {
 			fr_strerror_printf("Failed to parse interface-id string \"%s\"", value);
-			return false;
+			return -1;
 		}
 		vp->length = 8;
 		break;
 
-	case PW_TYPE_IPV6ADDR:
-		{
-			fr_ipaddr_t ipaddr;
-
-			if (ip_hton(value, AF_INET6, &ipaddr) < 0) {
-				char buffer[1024];
-
-				strlcpy(buffer, fr_strerror(), sizeof(buffer));
-
-				fr_strerror_printf("failed to parse IPv6 address "
-						   "string \"%s\": %s", value, buffer);
-				return false;
-			}
-			vp->vp_ipv6addr = ipaddr.ipaddr.ip6addr;
-			vp->length = 16; /* length of IPv6 address */
-		}
-		break;
-
-	case PW_TYPE_IPV6PREFIX:
-		p = strchr(value, '/');
-		if (!p || ((p - value) >= 256)) {
-			fr_strerror_printf("invalid IPv6 prefix string \"%s\"", value);
-			return false;
-		} else {
-			unsigned int prefix;
-			char buffer[256], *eptr;
-
-			memcpy(buffer, value, p - value);
-			buffer[p - value] = '\0';
-
-			if (inet_pton(AF_INET6, buffer, vp->vp_ipv6prefix + 2) <= 0) {
-				fr_strerror_printf("failed to parse IPv6 address string \"%s\"", value);
-				return false;
-			}
-
-			prefix = strtoul(p + 1, &eptr, 10);
-			if ((prefix > 128) || *eptr) {
-				fr_strerror_printf("failed to parse IPv6 address string \"%s\"", value);
-				return false;
-			}
-			vp->vp_ipv6prefix[1] = prefix;
-
-			if (prefix < 128) {
-				struct in6_addr addr;
-
-				addr = fr_ipaddr_mask6((struct in6_addr *)(&vp->vp_ipv6prefix[2]), prefix);
-				memcpy(vp->vp_ipv6prefix + 2, &addr, sizeof(addr));
-			}
-		}
-		vp->length = 16 + 2;
-		break;
-
-	case PW_TYPE_IPV4PREFIX:
-		p = strchr(value, '/');
+	case PW_TYPE_ETHERNET:
+	{
+		char const *c1, *c2, *cp;
+		size_t vp_len = 0;
 
 		/*
-		 *	192.0.2.2 is parsed as if it was /32
+		 *	Convert things which are obviously integers to Ethernet addresses
+		 *
+		 *	We assume the number is the bigendian representation of the
+		 *	ethernet address.
 		 */
-		if (!p) {
-			vp->vp_ipv4prefix[1] = 32;
+		if (is_integer(value)) {
+			uint64_t integer = htonll(atoll(value));
 
-			if (inet_pton(AF_INET, value, vp->vp_ipv4prefix + 2) <= 0) {
-				fr_strerror_printf("failed to parse IPv4 address string \"%s\"", value);
-				return false;
-			}
-			vp->length = sizeof(vp->vp_ipv4prefix);
+			memcpy(&vp->vp_ether, &integer, sizeof(vp->vp_ether));
 			break;
 		}
 
-		/*
-		 *	Otherwise parse the prefix
-		 */
-		if ((p - value) >= 256) {
-			fr_strerror_printf("invalid IPv4 prefix string \"%s\"", value);
-			return false;
-		} else {
-			unsigned int prefix;
-			char buffer[256], *eptr;
-
-			memcpy(buffer, value, p - value);
-			buffer[p - value] = '\0';
-
-			if (inet_pton(AF_INET, buffer, vp->vp_ipv4prefix + 2) <= 0) {
-				fr_strerror_printf("failed to parse IPv4 address string \"%s\"", value);
-				return false;
+		cp = value;
+		while (*cp) {
+			if (cp[1] == ':') {
+				c1 = hextab;
+				c2 = memchr(hextab, tolower((int) cp[0]), 16);
+				cp += 2;
+			} else if ((cp[1] != '\0') && ((cp[2] == ':') || (cp[2] == '\0'))) {
+				c1 = memchr(hextab, tolower((int) cp[0]), 16);
+				c2 = memchr(hextab, tolower((int) cp[1]), 16);
+				cp += 2;
+				if (*cp == ':') cp++;
+			} else {
+				c1 = c2 = NULL;
 			}
-
-			prefix = strtoul(p + 1, &eptr, 10);
-			if ((prefix > 32) || *eptr) {
-				fr_strerror_printf("failed to parse IPv4 address string \"%s\"", value);
-				return false;
+			if (!c1 || !c2 || (vp_len >= sizeof(vp->vp_ether))) {
+				fr_strerror_printf("failed to parse Ethernet address \"%s\"", value);
+				return -1;
 			}
-			vp->vp_ipv4prefix[1] = prefix;
-
-			if (prefix < 32) {
-				struct in_addr addr;
-
-				addr = fr_ipaddr_mask((struct in_addr *)(&vp->vp_ipv4prefix[2]), prefix);
-				memcpy(vp->vp_ipv4prefix + 2, &addr, sizeof(addr));
-			}
+			vp->vp_ether[vp_len] = ((c1-hextab)<<4) + (c2-hextab);
+			vp_len++;
 		}
-		vp->length = sizeof(vp->vp_ipv4prefix);
-		break;
 
-	case PW_TYPE_ETHERNET:
-		{
-			char const *c1, *c2;
-
-			/*
-			 *	Convert things which are obviously integers to Ethernet addresses
-			 *
-			 *	We assume the number is the bigendian representation of the
-			 *	ethernet address.
-			 */
-			if (is_integer(value)) {
-				uint64_t integer = htonll(atoll(value));
-
-				memcpy(&vp->vp_ether, &integer, sizeof(vp->vp_ether));
-				break;
-			}
-
-			length = 0;
-			cp = value;
-			while (*cp) {
-				if (cp[1] == ':') {
-					c1 = hextab;
-					c2 = memchr(hextab, tolower((int) cp[0]), 16);
-					cp += 2;
-				} else if ((cp[1] != '\0') &&
-					   ((cp[2] == ':') ||
-					    (cp[2] == '\0'))) {
-					   c1 = memchr(hextab, tolower((int) cp[0]), 16);
-					   c2 = memchr(hextab, tolower((int) cp[1]), 16);
-					   cp += 2;
-					   if (*cp == ':') cp++;
-				} else {
-					c1 = c2 = NULL;
-				}
-				if (!c1 || !c2 || (length >= sizeof(vp->vp_ether))) {
-					fr_strerror_printf("failed to parse Ethernet address \"%s\"", value);
-					return false;
-				}
-				vp->vp_ether[length] = ((c1-hextab)<<4) + (c2-hextab);
-				length++;
-			}
-		}
 		vp->length = 6;
+	}
 		break;
 
 	/*
@@ -1651,66 +1644,45 @@ bool pairparsevalue(VALUE_PAIR *vp, char const *value)
 	 *	These are not dynamic da, and will have the same vendor
 	 *	and attribute as the original.
 	 */
-	case PW_TYPE_COMBO_IP:
-		{
-			DICT_ATTR const *da;
+	case PW_TYPE_IP_ADDR:
+	{
+		DICT_ATTR const *da;
 
-			if (inet_pton(AF_INET6, value, &vp->vp_ipv6addr) > 0) {
-				da = dict_attrbytype(vp->da->attr, vp->da->vendor,
-						     PW_TYPE_IPV6ADDR);
-				if (!da) {
-					fr_strerror_printf("Cannot find ipv6addr for %s", vp->da->name);
-					return false;
-				}
-
-				vp->length = 16; /* length of IPv6 address */
-			} else {
-				fr_ipaddr_t ipaddr;
-
-				da = dict_attrbytype(vp->da->attr, vp->da->vendor,
-						     PW_TYPE_IPADDR);
-				if (!da) {
-					fr_strerror_printf("Cannot find ipaddr for %s", vp->da->name);
-					return false;
-				}
-
-				if (ip_hton(value, AF_INET, &ipaddr) < 0) {
-					fr_strerror_printf("Failed to find IPv4 address for %s", value);
-					return false;
-				}
-
-				vp->vp_ipaddr = ipaddr.ipaddr.ip4addr.s_addr;
-				vp->length = 4;
+		if (inet_pton(AF_INET6, value, &vp->vp_ipv6addr) > 0) {
+			da = dict_attrbytype(vp->da->attr, vp->da->vendor, PW_TYPE_IPV6_ADDR);
+			if (!da) {
+				fr_strerror_printf("Cannot find ipv6addr for %s", vp->da->name);
+				return -1;
 			}
 
-			vp->da = da;
+			vp->length = 16; /* length of IPv6 address */
+		} else {
+			fr_ipaddr_t ipaddr;
+
+			da = dict_attrbytype(vp->da->attr, vp->da->vendor,
+					     PW_TYPE_IPV4_ADDR);
+			if (!da) {
+				fr_strerror_printf("Cannot find ipaddr for %s", vp->da->name);
+				return -1;
+			}
+
+			if (ip_hton(&ipaddr, AF_INET, value, false) < 0) {
+				fr_strerror_printf("Failed to find IPv4 address for %s", value);
+				return -1;
+			}
+
+			vp->vp_ipaddr = ipaddr.ipaddr.ip4addr.s_addr;
+			vp->length = 4;
 		}
+
+		vp->da = da;
+	}
 		break;
 
-	case PW_TYPE_SIGNED: /* Damned code for 1 WiMAX attribute */
-		vp->vp_signed = (int32_t) strtol(value, &p, 10);
+	case PW_TYPE_SIGNED:
+		/* Damned code for 1 WiMAX attribute */
+		vp->vp_signed = (int32_t) strtol(value, NULL, 10);
 		vp->length = 4;
-		break;
-
-	case PW_TYPE_TLV: /* don't use this! */
-		if (strncasecmp(value, "0x", 2) != 0) {
-			fr_strerror_printf("Invalid TLV specification");
-			return false;
-		}
-		length = strlen(value + 2) / 2;
-		if (vp->length < length) {
-			TALLOC_FREE(vp->vp_tlv);
-		}
-		vp->vp_tlv = talloc_array(vp, uint8_t, length);
-		if (!vp->vp_tlv) {
-			fr_strerror_printf("No memory");
-			return false;
-		}
-		if (fr_hex2bin(vp->vp_tlv, value + 2, length) != length) {
-			fr_strerror_printf("Invalid hex data in TLV");
-			return false;
-		}
-		vp->length = length;
 		break;
 
 		/*
@@ -1718,12 +1690,12 @@ bool pairparsevalue(VALUE_PAIR *vp, char const *value)
 		 */
 	default:
 		fr_strerror_printf("unknown attribute type %d", vp->da->type);
-		return false;
+		return -1;
 	}
 
-	finish:
+finish:
 	vp->type = VT_DATA;
-	return true;
+	return 0;
 }
 
 /** Use simple heuristics to create an VALUE_PAIR from an unknown address string
@@ -1777,7 +1749,7 @@ VALUE_PAIR *pairmake_ip(TALLOC_CTX *ctx, char const *value, DICT_ATTR *ipv4, DIC
 finish:
 	vp = pairalloc(ctx, da);
 	if (!vp) return NULL;
-	if (!pairparsevalue(vp, value)) {
+	if (pairparsevalue(vp, value, 0) < 0) {
 		talloc_free(vp);
 		return NULL;
 	}
@@ -1876,15 +1848,15 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 	VALUE_PAIR	*vp;
 	char		*tc, *ts;
 	int8_t		tag;
-	int		found_tag;
+	bool		found_tag;
 	char		buffer[256];
 	char const	*attrname = attribute;
 
 	/*
 	 *    Check for tags in 'Attribute:Tag' format.
 	 */
-	found_tag = 0;
-	tag = 0;
+	found_tag = false;
+	tag = TAG_ANY;
 
 	ts = strrchr(attribute, ':');
 	if (ts && !ts[1]) {
@@ -1902,18 +1874,18 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 		 if (ts[1] == '*' && ts[2] == 0) {
 			 /* Wildcard tag for check items */
 			 tag = TAG_ANY;
-			 *ts = 0;
+			 *ts = '\0';
 		 } else if ((ts[1] >= '0') && (ts[1] <= '9')) {
 			 /* It's not a wild card tag */
 			 tag = strtol(ts + 1, &tc, 0);
 			 if (tc && !*tc && TAG_VALID_ZERO(tag))
-				 *ts = 0;
-			 else tag = 0;
+				 *ts = '\0';
+			 else tag = TAG_ANY;
 		 } else {
 			 fr_strerror_printf("Invalid tag for attribute %s", attribute);
 			 return NULL;
 		 }
-		 found_tag = 1;
+		 found_tag = true;
 	}
 
 	/*
@@ -2025,7 +1997,7 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 	 *	We probably want to fix pairparsevalue to accept
 	 *	octets as values for any attribute.
 	 */
-	if (value && !pairparsevalue(vp, value)) {
+	if (value && (pairparsevalue(vp, value, 0) < 0)) {
 		talloc_free(vp);
 		return NULL;
 	}
@@ -2421,6 +2393,7 @@ int8_t paircmp_value(VALUE_PAIR const *one, VALUE_PAIR const *two)
 		compare = strcmp(one->vp_strvalue, two->vp_strvalue);
 		break;
 
+	case PW_TYPE_BOOLEAN:
 	case PW_TYPE_BYTE:
 	case PW_TYPE_SHORT:
 	case PW_TYPE_INTEGER:
@@ -2447,19 +2420,19 @@ int8_t paircmp_value(VALUE_PAIR const *one, VALUE_PAIR const *two)
 		compare = memcmp(&one->vp_ether, &two->vp_ether, sizeof(one->vp_ether));
 		break;
 
-	case PW_TYPE_IPADDR:
+	case PW_TYPE_IPV4_ADDR:
 		compare = (int64_t) ntohl(one->vp_ipaddr) - (int64_t) ntohl(two->vp_ipaddr);
 		break;
 
-	case PW_TYPE_IPV6ADDR:
+	case PW_TYPE_IPV6_ADDR:
 		compare = memcmp(&one->vp_ipv6addr, &two->vp_ipv6addr, sizeof(one->vp_ipv6addr));
 		break;
 
-	case PW_TYPE_IPV6PREFIX:
+	case PW_TYPE_IPV6_PREFIX:
 		compare = memcmp(&one->vp_ipv6prefix, &two->vp_ipv6prefix, sizeof(one->vp_ipv6prefix));
 		break;
 
-	case PW_TYPE_IPV4PREFIX:
+	case PW_TYPE_IPV4_PREFIX:
 		compare = memcmp(&one->vp_ipv4prefix, &two->vp_ipv4prefix, sizeof(one->vp_ipv4prefix));
 		break;
 
@@ -2470,13 +2443,15 @@ int8_t paircmp_value(VALUE_PAIR const *one, VALUE_PAIR const *two)
 	/*
 	 *	None of the types below should be in the REQUEST
 	 */
-	case PW_TYPE_COMBO_IP:		/* This should of been converted into IPADDR/IPV6ADDR */
+	case PW_TYPE_INVALID:		/* We should never see these */
+	case PW_TYPE_IP_ADDR:		/* This should of been converted into IPADDR/IPV6ADDR */
+	case PW_TYPE_IP_PREFIX:	/* This should of been converted into IPADDR/IPV6ADDR */
 	case PW_TYPE_TLV:
 	case PW_TYPE_EXTENDED:
 	case PW_TYPE_LONG_EXTENDED:
 	case PW_TYPE_EVS:
 	case PW_TYPE_VSA:
-	case PW_TYPE_INVALID:		/* We should never see these */
+	case PW_TYPE_TIMEVAL:
 	case PW_TYPE_MAX:
 		fr_assert(0);	/* unknown type */
 		return -2;
@@ -2622,12 +2597,12 @@ int8_t paircmp_op(VALUE_PAIR const *a, FR_TOKEN op, VALUE_PAIR const *b)
 	if (!a || !b) return -1;
 
 	switch (a->da->type) {
-	case PW_TYPE_IPADDR:
+	case PW_TYPE_IPV4_ADDR:
 		switch (b->da->type) {
-		case PW_TYPE_IPADDR:		/* IPv4 and IPv4 */
+		case PW_TYPE_IPV4_ADDR:		/* IPv4 and IPv4 */
 			goto cmp;
 
-		case PW_TYPE_IPV4PREFIX:	/* IPv4 and IPv4 Prefix */
+		case PW_TYPE_IPV4_PREFIX:	/* IPv4 and IPv4 Prefix */
 			return paircmp_op_cidr(op, 4, 32, (uint8_t const *) &a->vp_ipaddr,
 					       b->vp_ipv4prefix[1], (uint8_t const *) &b->vp_ipv4prefix + 2);
 
@@ -2637,14 +2612,14 @@ int8_t paircmp_op(VALUE_PAIR const *a, FR_TOKEN op, VALUE_PAIR const *b)
 		}
 		break;
 
-	case PW_TYPE_IPV4PREFIX:		/* IPv4 and IPv4 Prefix */
+	case PW_TYPE_IPV4_PREFIX:		/* IPv4 and IPv4 Prefix */
 		switch (b->da->type) {
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 			return paircmp_op_cidr(op, 4, a->vp_ipv4prefix[1],
 					       (uint8_t const *) &a->vp_ipv4prefix + 2,
 					       32, (uint8_t const *) &b->vp_ipaddr);
 
-		case PW_TYPE_IPV4PREFIX:	/* IPv4 Prefix and IPv4 Prefix */
+		case PW_TYPE_IPV4_PREFIX:	/* IPv4 Prefix and IPv4 Prefix */
 			return paircmp_op_cidr(op, 4, a->vp_ipv4prefix[1],
 					       (uint8_t const *) &a->vp_ipv4prefix + 2,
 					       b->vp_ipv4prefix[1], (uint8_t const *) &b->vp_ipv4prefix + 2);
@@ -2655,12 +2630,12 @@ int8_t paircmp_op(VALUE_PAIR const *a, FR_TOKEN op, VALUE_PAIR const *b)
 		}
 		break;
 
-	case PW_TYPE_IPV6ADDR:
+	case PW_TYPE_IPV6_ADDR:
 		switch (b->da->type) {
-		case PW_TYPE_IPV6ADDR:		/* IPv6 and IPv6 */
+		case PW_TYPE_IPV6_ADDR:		/* IPv6 and IPv6 */
 			goto cmp;
 
-		case PW_TYPE_IPV6PREFIX:	/* IPv6 and IPv6 Preifx */
+		case PW_TYPE_IPV6_PREFIX:	/* IPv6 and IPv6 Preifx */
 			return paircmp_op_cidr(op, 16, 128, (uint8_t const *) &a->vp_ipv6addr,
 					       b->vp_ipv6prefix[1], (uint8_t const *) &b->vp_ipv6prefix + 2);
 			break;
@@ -2671,14 +2646,14 @@ int8_t paircmp_op(VALUE_PAIR const *a, FR_TOKEN op, VALUE_PAIR const *b)
 		}
 		break;
 
-	case PW_TYPE_IPV6PREFIX:
+	case PW_TYPE_IPV6_PREFIX:
 		switch (b->da->type) {
-		case PW_TYPE_IPV6ADDR:		/* IPv6 Prefix and IPv6 */
+		case PW_TYPE_IPV6_ADDR:		/* IPv6 Prefix and IPv6 */
 			return paircmp_op_cidr(op, 16, a->vp_ipv6prefix[1],
 					       (uint8_t const *) &a->vp_ipv6prefix + 2,
 					       128, (uint8_t const *) &b->vp_ipv6addr);
 
-		case PW_TYPE_IPV6PREFIX:	/* IPv6 Prefix and IPv6 */
+		case PW_TYPE_IPV6_PREFIX:	/* IPv6 Prefix and IPv6 */
 			return paircmp_op_cidr(op, 16, a->vp_ipv6prefix[1],
 					       (uint8_t const *) &a->vp_ipv6prefix + 2,
 					       b->vp_ipv6prefix[1], (uint8_t const *) &b->vp_ipv6prefix + 2);
@@ -2883,24 +2858,27 @@ static void pairtypeset(VALUE_PAIR *vp)
  *
  * @param[in,out] vp to update
  * @param[in] src data to copy
- * @param[in] size of the data
+ * @param[in] size of the data, may be 0 in which case previous value will be freed.
  */
 void pairmemcpy(VALUE_PAIR *vp, uint8_t const *src, size_t size)
 {
-	uint8_t *p, *q;
+	uint8_t *p = NULL, *q;
 
 	VERIFY_VP(vp);
 
-	p = talloc_memdup(vp, src, size);
-	if (!p) return;
-	talloc_set_type(p, uint8_t);
+	if (size > 0) {
+		p = talloc_memdup(vp, src, size);
+		if (!p) return;
+		talloc_set_type(p, uint8_t);
+	}
 
 	memcpy(&q, &vp->vp_octets, sizeof(q));
-	talloc_free(q);
+	TALLOC_FREE(q);
 
 	vp->vp_octets = p;
 	vp->length = size;
-	pairtypeset(vp);
+
+	if (size > 0) pairtypeset(vp);
 }
 
 /** Reparent an allocated octet buffer to a VALUE_PAIR
@@ -2980,10 +2958,10 @@ void pairstrncpy(VALUE_PAIR *vp, char const *src, size_t len)
 	VERIFY_VP(vp);
 
 	p = talloc_array(vp, char, len + 1);
+	if (!p) return;
+
 	memcpy(p, src, len);	/* embdedded \0 safe */
 	p[len] = '\0';
-
-	if (!p) return;
 
 	memcpy(&q, &vp->vp_strvalue, sizeof(q));
 	talloc_free(q);

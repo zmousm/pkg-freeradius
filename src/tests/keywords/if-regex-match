@@ -1,16 +1,96 @@
 # PRE: if
 #
-# May as well exercise the regular expression engine
-if (User-Name !~ /^([0-9])_([0-9])?_([0-9]*)_([0-9]+)_([^_])_(6)_([7-8])/) {
-	reject
+
+# Non matching on attribute ref
+if (User-Name !~ /^([0-9])_([0-9])?_([0-9]*)_([0-9]+)_([^_])_(6)_([7-8])%{Tmp-String-0}/) {
+	update reply {
+		Filter-Id += 'Fail 0'
+	}
 }
 
-if ("%{User-Name}" !~ /^([0-9])_([0-9])?_([0-9]*)_([0-9]+)_([^_])_(6)_([7-8])/) {
-	reject
+# Matching on xlat expanded value
+if ("%{User-Name}" !~ /^([0-9])_([0-9])?_([0-9]*)_([0-9]+)_([^_])_(6)_([7-8])%{Tmp-String-0}/) {
+	update reply {
+		Filter-Id += 'Fail 1'
+	}
 }
 
-if (User-Name =~ /^([0-9])_([0-9])?_([0-9]*)_([0-9]+)_([^_])_(6)_([7-8])/) {
+# Matching on attribute ref with capture groups
+if (User-Name =~ /^([0-9])_([0-9])?_([0-9]*)_([0-9]+)_([^_])_(6)_([7-8])%{Tmp-String-0}/) {
+	# Test all the capture groups
 	update {
 		reply:User-Name := "%{7}_%{6}_%{5}_%{4}_%{3}_%{2}_%{1}_%{0}"
 	}
 }
+else {
+	update reply {
+		Filter-Id += 'Fail 2'
+	}
+}
+
+# Checking capture groups are cleared out correctly
+if (User-Name =~ /^([0-9])_%{Tmp-String-0}/) {
+	if ("%{0}%{1}%{2}%{3}%{4}%{5}%{6}%{7}" != '1_1') {
+		update reply {
+			Filter-Id += 'Fail 3'
+		}
+	}
+}
+else {
+	update reply {
+		Filter-Id += 'Fail 3.5'
+	}
+}
+
+# Checking capture groups are cleared out correctly when there are no matches
+if (User-Name =~ /^.%{Tmp-String-0}/) {
+	if ("%{0}%{1}%{2}%{3}%{4}%{5}%{6}%{7}" != '1') {
+		update reply {
+			Filter-Id += 'Fail 4'
+		}
+	}
+}
+else {
+	update reply {
+		Filter-Id += 'Fail 4.5'
+	}
+}
+
+# uncompiled - ref - insensitive
+if (Calling-Station-Id !~ /:roamyroam%{Tmp-String-0}$/i) {
+	update reply {
+		Filter-Id += 'Fail 5'
+	}
+}
+
+# uncompiled - expansion - insensitive
+if ("%{Calling-Station-Id}" !~ /:roamyroam%{Tmp-String-0}$/i) {
+	update reply {
+		Filter-Id += 'Fail 6'
+	}
+}
+
+# uncompiled - enum - ref - insensitive
+if (Service-Type !~ /^framed-user%{Tmp-String-0}$/i) {
+	update reply {
+		Filter-Id += 'Fail 7'
+	}
+}
+
+# uncompiled - enum - expansion - insensitive
+if ("%{Service-Type}" !~ /^framed-user%{Tmp-String-0}$/i) {
+	update reply {
+		Filter-Id += 'Fail 8'
+	}
+}
+
+# uncompiled - enum - ref
+if (Service-Type =~ /^framed-user%{Tmp-String-0}$/) {
+	update reply {
+		Filter-Id += 'Fail 9'
+	}
+}
+
+
+
+

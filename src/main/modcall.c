@@ -77,6 +77,7 @@ typedef struct {
 	value_pair_map_t	*map;		/* update */
 	value_pair_tmpl_t	*vpt;		/* switch */
 	fr_cond_t		*cond;		/* if/elsif */
+	bool			done_pass2;
 } modgroup;
 
 typedef struct {
@@ -289,7 +290,8 @@ static rlm_rcode_t CC_HINT(nonnull) call_modsingle(rlm_components_t component, m
 	blocked = (request->master_state == REQUEST_STOP_PROCESSING);
 	if (blocked) return RLM_MODULE_NOOP;
 
-	RDEBUG3("  modsingle[%s]: calling %s (%s) for request %d",
+	RINDENT();
+	RDEBUG3("modsingle[%s]: calling %s (%s) for request %d",
 	       comp2str[component], sp->modinst->name,
 	       sp->modinst->entry->name, request->number);
 
@@ -319,7 +321,8 @@ static rlm_rcode_t CC_HINT(nonnull) call_modsingle(rlm_components_t component, m
 	}
 
  fail:
-	RDEBUG3("  modsingle[%s]: returned from %s (%s) for request %d",
+	REXDENT();
+	RDEBUG3("modsingle[%s]: returned from %s (%s) for request %d",
 	       comp2str[component], sp->modinst->name,
 	       sp->modinst->entry->name, request->number);
 
@@ -590,7 +593,7 @@ redo:
 
 		MOD_LOG_OPEN_BRACE("update");
 		for (map = g->map; map != NULL; map = map->next) {
-			rcode = radius_map2request(request, map, "update", radius_map2vp, NULL);
+			rcode = radius_map2request(request, map, radius_map2vp, NULL);
 			if (rcode < 0) {
 				result = (rcode == -2) ? RLM_MODULE_INVALID : RLM_MODULE_FAIL;
 				MOD_LOG_CLOSE_BRACE();
@@ -608,9 +611,9 @@ redo:
 	 */
 	if (c->type == MOD_FOREACH) {
 		int i, foreach_depth = -1;
-		VALUE_PAIR *vps, **tail, *vp;
+		VALUE_PAIR *vps, *vp;
 		modcall_stack_entry_t *next = NULL;
-		vp_cursor_t cursor;
+		vp_cursor_t cursor, copy;
 		modgroup *g = mod_callabletogroup(c);
 
 		if (depth >= MODCALL_STACK_MAX) {
@@ -636,8 +639,7 @@ redo:
 			goto calculate_result;
 		}
 
-		vp = radius_vpt_get_vp(request, g->vpt);
-		if (!vp) {	/* nothing to loop over */
+		if (radius_tmpl_get_vp(&vp, request, g->vpt) < 0) {	/* nothing to loop over */
 			MOD_LOG_OPEN_BRACE("foreach");
 			result = RLM_MODULE_NOOP;
 			MOD_LOG_CLOSE_BRACE();
@@ -645,31 +647,35 @@ redo:
 		}
 
 		/*
-		 *	Copy the VPs from the original request.
+		 *	Copy the VPs from the original request, this ensures deterministic
+		 *	behaviour if someone decides to add or remove VPs in the set were
+		 *	iterating over.
 		 */
+		vps = NULL;
+
 		fr_cursor_init(&cursor, &vp);
+
 		/* Prime the cursor. */
 		cursor.found = cursor.current;
+		for (fr_cursor_init(&copy, &vps);
+		     vp;
+		     vp = fr_cursor_next_by_da(&cursor, vp->da, g->vpt->attribute.tag)) {
+		     VALUE_PAIR *tmp;
 
-		vps = NULL;
-		tail = &vps;
-
-		while (vp) {
-			*tail = paircopyvp(request, vp);
-			if (!*tail) break;
-
-			tail = &((*tail)->next); /* really should be using cursors... */
-
-			vp = fr_cursor_next_by_da(&cursor, vp->da, g->vpt->attribute.tag);
+		     MEM(tmp = paircopyvp(request, vp));
+		     fr_cursor_insert(&copy, tmp);
 		}
 
-		RDEBUG2("%.*sforeach %s ", depth + 1, modcall_spaces,
-			c->name);
+		RDEBUG2("%.*sforeach %s ", depth + 1, modcall_spaces, c->name);
+
 		rad_assert(vps != NULL);
 
-		for (vp = fr_cursor_init(&cursor, &vps);
+		/*
+		 *	This is the actual body of the foreach loop
+		 */
+		for (vp = fr_cursor_first(&copy);
 		     vp != NULL;
-		     vp = fr_cursor_next(&cursor)) {
+		     vp = fr_cursor_next(&copy)) {
 #ifndef NDEBUG
 			if (fr_debug_flag >= 2) {
 				char buffer[1024];
@@ -709,7 +715,7 @@ redo:
 			}
 		} /* loop over VPs */
 
-		talloc_free(vps);
+		pairfree(&vps);
 
 		rad_assert(next != NULL);
 		result = next->result;
@@ -728,9 +734,7 @@ redo:
 		for (i = 8; i >= 0; i--) {
 			copy_p = request_data_get(request, radius_get_vp, i);
 			if (copy_p) {
-				RDEBUG2("%.*s # break Foreach-Variable-%d", depth + 1,
-					modcall_spaces, i);
-				pairfree(copy_p);
+				RDEBUG2("%.*s # break Foreach-Variable-%d", depth + 1, modcall_spaces, i);
 				break;
 			}
 		}
@@ -811,8 +815,7 @@ redo:
 		 *	The attribute doesn't exist.  We can skip
 		 *	directly to the default 'case' statement.
 		 */
-		if ((g->vpt->type == VPT_TYPE_ATTR) &&
-		    !radius_vpt_get_vp(request, g->vpt)) {
+		if ((g->vpt->type == VPT_TYPE_ATTR) && (radius_tmpl_get_vp(NULL, request, g->vpt) < 0)) {
 			for (this = g->children; this; this = this->next) {
 				rad_assert(this->type == MOD_CASE);
 
@@ -1622,8 +1625,8 @@ static modcallable *do_compile_modupdate(modcallable *parent, UNUSED rlm_compone
 				map->src->vpt_length = talloc_array_length(vpd->strvalue) - 1;
 			} else {
 				if (!radius_cast_tmpl(map->src, map->dst->vpt_da)) {
-					talloc_free(head);
 					cf_log_err(map->ci, "%s", fr_strerror());
+					talloc_free(head);
 					return NULL;
 				}
 			}
@@ -1671,12 +1674,12 @@ static modcallable *do_compile_modswitch(modcallable *parent, rlm_components_t c
 	name2 = cf_section_name2(cs);
 	if (!name2) {
 		cf_log_err_cs(cs,
-			   "You must specify a variable to switch over for 'switch'.");
+			   "You must specify a variable to switch over for 'switch'");
 		return NULL;
 	}
 
 	if (!cf_item_find_next(cs, NULL)) {
-		cf_log_err_cs(cs, "'switch' statements cannot be empty.");
+		cf_log_err_cs(cs, "'switch' statements cannot be empty");
 		return NULL;
 	}
 
@@ -1834,12 +1837,12 @@ static modcallable *do_compile_modforeach(modcallable *parent,
 	name2 = cf_section_name2(cs);
 	if (!name2) {
 		cf_log_err_cs(cs,
-			   "You must specify an attribute to loop over in 'foreach'.");
+			   "You must specify an attribute to loop over in 'foreach'");
 		return NULL;
 	}
 
 	if (!cf_item_find_next(cs, NULL)) {
-		cf_log_err_cs(cs, "'foreach' blocks cannot be empty.");
+		cf_log_err_cs(cs, "'foreach' blocks cannot be empty");
 		return NULL;
 	}
 
@@ -2093,7 +2096,7 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 #ifdef WITH_UNLANG
 		} else 	if (strcmp(modrefname, "if") == 0) {
 			if (!cf_section_name2(cs)) {
-				cf_log_err(ci, "'if' without condition.");
+				cf_log_err(ci, "'if' without condition");
 				return NULL;
 			}
 
@@ -2110,12 +2113,12 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 			if (parent &&
 			    ((parent->type == MOD_LOAD_BALANCE) ||
 			     (parent->type == MOD_REDUNDANT_LOAD_BALANCE))) {
-				cf_log_err(ci, "'elsif' cannot be used in this section.");
+				cf_log_err(ci, "'elsif' cannot be used in this section");
 				return NULL;
 			}
 
 			if (!cf_section_name2(cs)) {
-				cf_log_err(ci, "'elsif' without condition.");
+				cf_log_err(ci, "'elsif' without condition");
 				return NULL;
 			}
 
@@ -2128,12 +2131,12 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 			if (parent &&
 			    ((parent->type == MOD_LOAD_BALANCE) ||
 			     (parent->type == MOD_REDUNDANT_LOAD_BALANCE))) {
-				cf_log_err(ci, "'else' cannot be used in this section section.");
+				cf_log_err(ci, "'else' cannot be used in this section section");
 				return NULL;
 			}
 
 			if (cf_section_name2(cs)) {
-				cf_log_err(ci, "Cannot have conditions on 'else'.");
+				cf_log_err(ci, "Cannot have conditions on 'else'");
 				return NULL;
 			}
 
@@ -2829,7 +2832,7 @@ static bool pass2_regex_compile(CONF_ITEM const *ci, value_pair_tmpl_t *vpt)
 	talloc_set_destructor(preg, _free_compiled_regex);
 	if (!preg) return false;
 
-	rcode = regcomp(preg, vpt->name, REG_EXTENDED);
+	rcode = regcomp(preg, vpt->name, REG_EXTENDED | (vpt->vpt_iflag ? REG_ICASE : 0));
 	if (rcode != 0) {
 		char buffer[256];
 		regerror(rcode, preg, buffer, sizeof(buffer));
@@ -2969,6 +2972,25 @@ check_paircmp:
 		}
 	}
 
+	/*
+	 *	Convert bare refs to %{Foreach-Variable-N}
+	 */
+	if ((map->dst->type == VPT_TYPE_LITERAL) &&
+	    (strncmp(map->dst->name, "Foreach-Variable-", 17) == 0)) {
+		char *fmt;
+		value_pair_tmpl_t *vpt;
+
+		fmt = talloc_asprintf(map->dst, "%%{%s}", map->dst->name);
+		vpt = radius_str2tmpl(map, fmt, T_DOUBLE_QUOTED_STRING, REQUEST_CURRENT, PAIR_LIST_REQUEST);
+		if (!vpt) {
+			cf_log_err(map->ci, "Failed compiling %s", map->dst->name);
+			talloc_free(fmt);
+			return false;
+		}
+		talloc_free(map->dst);
+		map->dst = vpt;
+	}
+
 #ifdef HAVE_REGEX_H
 	if (map->src->type == VPT_TYPE_REGEX) {
 		if (!pass2_regex_compile(map->ci, map->src)) {
@@ -3069,9 +3091,12 @@ bool modcall_pass2(modcallable *mc)
 #ifdef WITH_UNLANG
 		case MOD_UPDATE:
 			g = mod_callabletogroup(this);
+			if (g->done_pass2) return true;
+
 			if (!modcall_pass2_update(g)) {
 				return false;
 			}
+			g->done_pass2 = true;
 			break;
 
 		case MOD_XLAT:   /* @todo: pre-parse xlat's */
@@ -3086,6 +3111,7 @@ bool modcall_pass2(modcallable *mc)
 		case MOD_IF:
 		case MOD_ELSIF:
 			g = mod_callabletogroup(this);
+			if (g->done_pass2) return true;
 
 			/*
 			 *	Don't walk over these.
@@ -3106,12 +3132,14 @@ bool modcall_pass2(modcallable *mc)
 			}
 
 			if (!modcall_pass2(g->children)) return false;
+			g->done_pass2 = true;
 			break;
 #endif
 
 #ifdef WITH_UNLANG
 		case MOD_SWITCH:
 			g = mod_callabletogroup(this);
+			if (g->done_pass2) return true;
 
 			/*
 			 *	We had &Foo-Bar, where Foo-Bar is
@@ -3165,10 +3193,12 @@ bool modcall_pass2(modcallable *mc)
 			}
 
 			if (!modcall_pass2(g->children)) return false;
+			g->done_pass2 = true;
 			break;
 
 		case MOD_CASE:
 			g = mod_callabletogroup(this);
+			if (g->done_pass2) return true;
 
 		do_case:
 			/*
@@ -3231,10 +3261,12 @@ bool modcall_pass2(modcallable *mc)
 			}
 
 			if (!modcall_pass2(g->children)) return false;
+			g->done_pass2 = true;
 			break;
 
 		case MOD_FOREACH:
 			g = mod_callabletogroup(this);
+			if (g->done_pass2) return true;
 
 			/*
 			 *	Already parsed, handle the children.
@@ -3266,11 +3298,12 @@ bool modcall_pass2(modcallable *mc)
 
 		check_children:
 			rad_assert(g->vpt->type == VPT_TYPE_ATTR);
-			if (g->vpt->attribute.num != 0) {
+			if (g->vpt->vpt_num != NUM_ANY) {
 				cf_log_err_cs(g->cs, "MUST NOT use array references in 'foreach'");
 				return false;
 			}
 			if (!modcall_pass2(g->children)) return false;
+			g->done_pass2 = true;
 			break;
 
 		case MOD_ELSE:
@@ -3282,7 +3315,9 @@ bool modcall_pass2(modcallable *mc)
 		case MOD_LOAD_BALANCE:
 		case MOD_REDUNDANT_LOAD_BALANCE:
 			g = mod_callabletogroup(this);
+			if (g->done_pass2) return true;
 			if (!modcall_pass2(g->children)) return false;
+			g->done_pass2 = true;
 			break;
 		}
 	}

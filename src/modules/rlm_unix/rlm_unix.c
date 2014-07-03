@@ -64,8 +64,7 @@ struct unix_instance {
 };
 
 static const CONF_PARSER module_config[] = {
-	{ "radwtmp",  PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED,
-	  offsetof(struct unix_instance,radwtmp), NULL,   "NULL" },
+	{ "radwtmp", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, struct unix_instance, radwtmp), "NULL" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -350,7 +349,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 #ifdef USER_PROCESS
 	int		protocol = -1;
 #endif
-	int		nas_port = 0;
+	uint32_t	nas_port = 0;
 	bool		port_seen = true;
 	struct unix_instance *inst = (struct unix_instance *) instance;
 
@@ -358,7 +357,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	 *	No radwtmp.  Don't do anything.
 	 */
 	if (!inst->radwtmp) {
-		RDEBUG2("No radwtmp file configured.  Ignoring accounting request.");
+		RDEBUG2("No radwtmp file configured.  Ignoring accounting request");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -371,7 +370,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	 *	Which type is this.
 	 */
 	if ((vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY))==NULL) {
-		RDEBUG("no Accounting-Status-Type attribute in request.");
+		RDEBUG("no Accounting-Status-Type attribute in request");
 		return RLM_MODULE_NOOP;
 	}
 	status = vp->vp_integer;

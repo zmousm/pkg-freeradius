@@ -26,6 +26,12 @@
 #include <freeradius-devel/rad_assert.h>
 #include "ldap.h"
 
+/** Callback for radius_map2request
+ *
+ * Performs exactly the same job as radius_map2vp, but pulls attribute values from LDAP entries
+ *
+ * @see radius_map2vp
+ */
 static int rlm_ldap_map_getvalue(VALUE_PAIR **out, REQUEST *request, value_pair_map_t const *map, void *ctx)
 {
 	rlm_ldap_result_t *self = ctx;
@@ -51,17 +57,17 @@ static int rlm_ldap_map_getvalue(VALUE_PAIR **out, REQUEST *request, value_pair_
 		for (i = 0; i < self->count; i++) {
 			value_pair_map_t *attr = NULL;
 
-			RDEBUG3("Parsing valuepair string \"%s\"", self->values[i]);
-			if (radius_strpair2map(&attr, request, self->values[i],
+			RDEBUG3("Parsing valuepair string \"%s\"", self->values[i]->bv_val);
+			if (radius_strpair2map(&attr, request, self->values[i]->bv_val,
 					       map->dst->vpt_request, map->dst->vpt_list,
 					       REQUEST_CURRENT, PAIR_LIST_REQUEST) < 0) {
-				RWDEBUG("Failed parsing \"%s\" as valuepair, skipping...", self->values[i]);
+				RWDEBUG("Failed parsing \"%s\" as valuepair, skipping...", self->values[i]->bv_val);
 				continue;
 			}
 
 			if (attr->dst->vpt_request != map->dst->vpt_request) {
 				RWDEBUG("valuepair \"%s\" has conflicting request qualifier (%s vs %s), skipping...",
-					self->values[i],
+					self->values[i]->bv_val,
 					fr_int2str(request_refs, attr->dst->vpt_request, "<INVALID>"),
 					fr_int2str(request_refs, map->dst->vpt_request, "<INVALID>"));
 			next_pair:
@@ -71,14 +77,14 @@ static int rlm_ldap_map_getvalue(VALUE_PAIR **out, REQUEST *request, value_pair_
 
 			if ((attr->dst->vpt_list != map->dst->vpt_list)) {
 				RWDEBUG("valuepair \"%s\" has conflicting list qualifier (%s vs %s), skipping...",
-					self->values[i],
+					self->values[i]->bv_val,
 					fr_int2str(pair_lists, attr->dst->vpt_list, "<INVALID>"),
 					fr_int2str(pair_lists, map->dst->vpt_list, "<INVALID>"));
 				goto next_pair;
 			}
 
 			if (radius_map2vp(&vp, request, attr, NULL) < 0) {
-				RWDEBUG("Failed creating attribute for \"%s\", skipping...", self->values[i]);
+				RWDEBUG("Failed creating attribute for \"%s\", skipping...", self->values[i]->bv_val);
 				goto next_pair;
 			}
 
@@ -94,10 +100,12 @@ static int rlm_ldap_map_getvalue(VALUE_PAIR **out, REQUEST *request, value_pair_
 	 */
 	case VPT_TYPE_ATTR:
 		for (i = 0; i < self->count; i++) {
+			if (!self->values[i]->bv_len) continue;
+
 			vp = pairalloc(request, map->dst->vpt_da);
 			rad_assert(vp);
 
-			if (!pairparsevalue(vp, self->values[i])) {
+			if (pairparsevalue(vp, self->values[i]->bv_val, self->values[i]->bv_len) < 0) {
 				RDEBUG("Failed parsing value for \"%s\"", map->dst->vpt_da->name);
 
 				talloc_free(vp);
@@ -348,7 +356,10 @@ void rlm_ldap_map_do(UNUSED const ldap_instance_t *inst, REQUEST *request, LDAP 
 	for (map = expanded->maps; map != NULL; map = map->next) {
 		name = expanded->attrs[total++];
 
-		result.values = ldap_get_values(handle, entry, name);
+		/*
+		 *	Binary safe
+		 */
+		result.values = ldap_get_values_len(handle, entry, name);
 		if (!result.values) {
 			RDEBUG3("Attribute \"%s\" not found in LDAP object", name);
 
@@ -359,20 +370,20 @@ void rlm_ldap_map_do(UNUSED const ldap_instance_t *inst, REQUEST *request, LDAP 
 		 *	Find out how many values there are for the
 		 *	attribute and extract all of them.
 		 */
-		result.count = ldap_count_values(result.values);
+		result.count = ldap_count_values_len(result.values);
 
 		/*
 		 *	If something bad happened, just skip, this is probably
 		 *	a case of the dst being incorrect for the current
 		 *	request context
 		 */
-		if (radius_map2request(request, map, name, rlm_ldap_map_getvalue, &result) == -1) {
+		if (radius_map2request(request, map, rlm_ldap_map_getvalue, &result) == -1) {
 			return;	/* Fail */
 		}
 
 		next:
 
-		ldap_value_free(result.values);
+		ldap_value_free_len(result.values);
 	}
 
 	/*
@@ -397,7 +408,7 @@ void rlm_ldap_map_do(UNUSED const ldap_instance_t *inst, REQUEST *request, LDAP 
 					inst->valuepair_attr, values[i]);
 				continue;
 			}
-			if (radius_map2request(request, attr, NULL, radius_map2vp, NULL) < 0) {
+			if (radius_map2request(request, attr, radius_map2vp, NULL) < 0) {
 				RWDEBUG("Failed adding \"%s\" to request, skipping...", values[i]);
 			}
 			talloc_free(attr);

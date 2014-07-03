@@ -43,12 +43,12 @@ static int success = 0;
 static int retries = 3;
 static float timeout = 5;
 
-static int server_port = 0;
+static uint16_t server_port = 0;
 static int packet_code = 0;
 static fr_ipaddr_t server_ipaddr;
 
 static fr_ipaddr_t client_ipaddr;
-static int client_port = 0;
+static uint16_t client_port = 0;
 
 static int sockfd;
 
@@ -340,7 +340,7 @@ int main(int argc, char **argv)
 			portname = NULL;
 		}
 
-		if (ip_hton(hostname, AF_INET, &server_ipaddr) < 0) {
+		if (ip_hton(&server_ipaddr, AF_INET, hostname, false) < 0) {
 			fprintf(stderr, "dhcpclient: Failed to find IP address for host %s: %s\n", hostname, fr_syserror(errno));
 			exit(1);
 		}

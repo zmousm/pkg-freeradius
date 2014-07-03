@@ -31,29 +31,23 @@ RCSID("$Id$")
 
 #include	<ctype.h>
 #include	<fcntl.h>
-#include	<limits.h>
-
 
 /*
  *	Define a structure with the module configuration, so it can
  *	be used as the instance handle.
  */
 typedef struct rlm_attr_filter {
-	char		*filename;
-	char		*key;
+	char const	*filename;
+	char const	*key;
 	bool		relaxed;
 	PAIR_LIST	*attrs;
 } rlm_attr_filter_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "attrsfile",     PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_attr_filter_t, filename), NULL, NULL},
-	{ "filename",     PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED,
-	  offsetof(rlm_attr_filter_t, filename), NULL, NULL},
-	{ "key",     PW_TYPE_STRING_PTR,
-	  offsetof(rlm_attr_filter_t, key), NULL, "%{Realm}" },
-	{ "relaxed",    PW_TYPE_BOOLEAN,
-	  offsetof(rlm_attr_filter_t, relaxed), NULL, "no" },
+	{ "attrsfile", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED, rlm_attr_filter_t, filename), NULL },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED, rlm_attr_filter_t, filename), NULL },
+	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_attr_filter_t, key), "%{Realm}" },
+	{ "relaxed", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_attr_filter_t, relaxed), "no" },
 	{ NULL, -1, 0, NULL, NULL }
 };
 

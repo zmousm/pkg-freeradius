@@ -129,6 +129,7 @@ tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
 {
 	int verify_mode;
 	tls_session_t *ssn = NULL;
+	REQUEST *request;
 
 	ssn = talloc_zero(conf, tls_session_t);
 	if (!ssn) return NULL;
@@ -138,7 +139,13 @@ tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
 	SSL_CTX_set_mode(ssn->ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_AUTO_RETRY);
 
 	ssn->ssl = SSL_new(ssn->ctx);
-	rad_assert(ssn->ssl != NULL);
+	if (!ssn->ssl) {
+		talloc_free(ssn);
+		return NULL;
+	}
+
+	request = talloc_zero(ssn, REQUEST);
+	SSL_set_ex_data(ssn->ssl, FR_TLS_EX_INDEX_REQUEST, (void *)request);
 
 	/*
 	 *	Add the message callback to identify what type of
@@ -162,11 +169,11 @@ tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
 	if (SSL_connect(ssn->ssl) <= 0) {
 		int err;
 		while ((err = ERR_get_error())) {
-			DEBUG("OpenSSL Err says %s",
-			      ERR_error_string(err, NULL));
+			ERROR("tls: %s", ERR_error_string(err, NULL));
 		}
 		SSL_free(ssn->ssl);
 		talloc_free(ssn);
+
 		return NULL;
 	}
 
@@ -193,7 +200,7 @@ tls_session_t *tls_new_session(fr_tls_server_conf_t *conf, REQUEST *request,
 	 *	FIXME: Also do it every N sessions?
 	 */
 	if (conf->session_cache_enable &&
-	    ((conf->session_last_flushed + (conf->session_timeout * 1800)) <= request->timestamp)){
+	    ((conf->session_last_flushed + ((int)conf->session_timeout * 1800)) <= request->timestamp)){
 		RDEBUG2("Flushing SSL sessions (of #%ld)",
 			SSL_CTX_sess_number(conf->ctx));
 
@@ -772,117 +779,81 @@ void tls_session_information(tls_session_t *tls_session)
 		 str_details1, str_details2);
 
 	request = SSL_get_ex_data(tls_session->ssl, FR_TLS_EX_INDEX_REQUEST);
-
-	RDEBUG2("%s\n", tls_session->info.info_description);
+	if (request) {
+		RDEBUG2("%s", tls_session->info.info_description);
+	} else {
+		DEBUG2("%s", tls_session->info.info_description);
+	}
 }
 
 static CONF_PARSER cache_config[] = {
-	{ "enable", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, session_cache_enable), NULL, "no" },
-	{ "lifetime", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, session_timeout), NULL, "24" },
-	{ "max_entries", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, session_cache_size), NULL, "255" },
-	{ "name", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, session_id_name), NULL, NULL},
-	{ "persist_dir", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, session_cache_path), NULL, NULL},
+	{ "enable", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, session_cache_enable), "no" },
+	{ "lifetime", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, session_timeout), "24" },
+	{ "max_entries", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, session_cache_size), "255" },
+	{ "name", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, session_id_name), NULL },
+	{ "persist_dir", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, session_cache_path), NULL },
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
 static CONF_PARSER verify_config[] = {
-	{ "tmpdir", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, verify_tmp_dir), NULL, NULL},
-	{ "client", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, verify_client_cert_cmd), NULL, NULL},
+	{ "tmpdir", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, verify_tmp_dir), NULL },
+	{ "client", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, verify_client_cert_cmd), NULL },
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
 #ifdef HAVE_OPENSSL_OCSP_H
 static CONF_PARSER ocsp_config[] = {
-	{ "enable", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, ocsp_enable), NULL, "no"},
-	{ "override_cert_url", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, ocsp_override_url), NULL, "no"},
-	{ "url", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, ocsp_url), NULL, NULL },
-	{ "use_nonce", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, ocsp_use_nonce), NULL, "yes"},
-	{ "timeout", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, ocsp_timeout), NULL, "yes"},
-	{ "softfail", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, ocsp_softfail), NULL, "yes"},
+	{ "enable", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, ocsp_enable), "no" },
+	{ "override_cert_url", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, ocsp_override_url), "no" },
+	{ "url", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, ocsp_url), NULL },
+	{ "use_nonce", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, ocsp_use_nonce), "yes" },
+	{ "timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, ocsp_timeout), "yes" },
+	{ "softfail", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, ocsp_softfail), "yes" },
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 #endif
 
 static CONF_PARSER tls_server_config[] = {
-	{ "rsa_key_exchange", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, rsa_key), NULL, "no" },
-	{ "dh_key_exchange", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, dh_key), NULL, "yes" },
-	{ "rsa_key_length", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, rsa_key_length), NULL, "512" },
-	{ "dh_key_length", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, dh_key_length), NULL, "512" },
-	{ "verify_depth", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, verify_depth), NULL, "0" },
-	{ "CA_path", PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED,
-	  offsetof(fr_tls_server_conf_t, ca_path), NULL, NULL },
-	{ "ca_path", PW_TYPE_FILE_INPUT,
-	  offsetof(fr_tls_server_conf_t, ca_path), NULL, NULL },
-	{ "pem_file_type", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, file_type), NULL, "yes" },
-	{ "private_key_file", PW_TYPE_FILE_INPUT,
-	  offsetof(fr_tls_server_conf_t, private_key_file), NULL, NULL },
-	{ "certificate_file", PW_TYPE_FILE_INPUT,
-	  offsetof(fr_tls_server_conf_t, certificate_file), NULL, NULL },
-	{ "CA_file", PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED,
-	  offsetof(fr_tls_server_conf_t, ca_file), NULL, NULL },
-	{ "ca_file", PW_TYPE_FILE_INPUT,
-	  offsetof(fr_tls_server_conf_t, ca_file), NULL, NULL },
-	{ "private_key_password", PW_TYPE_STRING_PTR | PW_TYPE_SECRET,
-	  offsetof(fr_tls_server_conf_t, private_key_password), NULL, NULL },
+	{ "rsa_key_exchange", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, rsa_key), "no" },
+	{ "dh_key_exchange", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, dh_key), "yes" },
+	{ "rsa_key_length", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, rsa_key_length), "512" },
+	{ "dh_key_length", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, dh_key_length), "512" },
+	{ "verify_depth", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, verify_depth), "0" },
+	{ "CA_path", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED, fr_tls_server_conf_t, ca_path), NULL },
+	{ "ca_path", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, ca_path), NULL },
+	{ "pem_file_type", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, file_type), "yes" },
+	{ "private_key_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, private_key_file), NULL },
+	{ "certificate_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, certificate_file), NULL },
+	{ "CA_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED, fr_tls_server_conf_t, ca_file), NULL },
+	{ "ca_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, ca_file), NULL },
+	{ "private_key_password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, fr_tls_server_conf_t, private_key_password), NULL },
 #ifdef PSK_MAX_IDENTITY_LEN
-	{ "psk_identity", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, psk_identity), NULL, NULL },
-	{ "psk_hexphrase", PW_TYPE_STRING_PTR | PW_TYPE_SECRET,
-	  offsetof(fr_tls_server_conf_t, psk_password), NULL, NULL },
+	{ "psk_identity", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, psk_identity), NULL },
+	{ "psk_hexphrase", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, fr_tls_server_conf_t, psk_password), NULL },
 #endif
-	{ "dh_file", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, dh_file), NULL, NULL },
-	{ "random_file", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, random_file), NULL, NULL },
-	{ "fragment_size", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, fragment_size), NULL, "1024" },
-	{ "include_length", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, include_length), NULL, "yes" },
-	{ "check_crl", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, check_crl), NULL, "no"},
-	{ "allow_expired_crl", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, allow_expired_crl), NULL, NULL},
-	{ "check_cert_cn", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, check_cert_cn), NULL, NULL},
-	{ "cipher_list", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, cipher_list), NULL, NULL},
-	{ "check_cert_issuer", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, check_cert_issuer), NULL, NULL},
-	{ "require_client_cert", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, require_client_cert), NULL, NULL },
+	{ "dh_file", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, dh_file), NULL },
+	{ "random_file", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, random_file), NULL },
+	{ "fragment_size", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, fragment_size), "1024" },
+	{ "include_length", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, include_length), "yes" },
+	{ "check_crl", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, check_crl), "no" },
+	{ "allow_expired_crl", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, allow_expired_crl), NULL },
+	{ "check_cert_cn", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, check_cert_cn), NULL },
+	{ "cipher_list", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, cipher_list), NULL },
+	{ "check_cert_issuer", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, check_cert_issuer), NULL },
+	{ "require_client_cert", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, require_client_cert), NULL },
 
 #if OPENSSL_VERSION_NUMBER >= 0x0090800fL
 #ifndef OPENSSL_NO_ECDH
-	{ "ecdh_curve", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, ecdh_curve), NULL, "prime256v1"},
+	{ "ecdh_curve", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, ecdh_curve), "prime256v1" },
 #endif
 #endif
 
-	{ "cache", PW_TYPE_SUBSECTION, 0, NULL, (void const *) cache_config },
+	{ "cache", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) cache_config },
 
-	{ "verify", PW_TYPE_SUBSECTION, 0, NULL, (void const *) verify_config },
+	{ "verify", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) verify_config },
 
 #ifdef HAVE_OPENSSL_OCSP_H
-	{ "ocsp", PW_TYPE_SUBSECTION, 0, NULL, (void const *) ocsp_config },
+	{ "ocsp", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) ocsp_config },
 #endif
 
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
@@ -890,49 +861,29 @@ static CONF_PARSER tls_server_config[] = {
 
 
 static CONF_PARSER tls_client_config[] = {
-	{ "rsa_key_exchange", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, rsa_key), NULL, "no" },
-	{ "dh_key_exchange", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, dh_key), NULL, "yes" },
-	{ "rsa_key_length", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, rsa_key_length), NULL, "512" },
-	{ "dh_key_length", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, dh_key_length), NULL, "512" },
-	{ "verify_depth", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, verify_depth), NULL, "0" },
-	{ "ca_path", PW_TYPE_FILE_INPUT,
-	  offsetof(fr_tls_server_conf_t, ca_path), NULL, NULL },
-	{ "pem_file_type", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, file_type), NULL, "yes" },
-	{ "private_key_file", PW_TYPE_FILE_INPUT,
-	  offsetof(fr_tls_server_conf_t, private_key_file), NULL, NULL },
-	{ "certificate_file", PW_TYPE_FILE_INPUT,
-	  offsetof(fr_tls_server_conf_t, certificate_file), NULL, NULL },
-	{ "ca_file", PW_TYPE_FILE_INPUT,
-	  offsetof(fr_tls_server_conf_t, ca_file), NULL, NULL },
-	{ "private_key_password", PW_TYPE_STRING_PTR | PW_TYPE_SECRET,
-	  offsetof(fr_tls_server_conf_t, private_key_password), NULL, NULL },
-	{ "dh_file", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, dh_file), NULL, NULL },
-	{ "random_file", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, random_file), NULL, NULL },
-	{ "fragment_size", PW_TYPE_INTEGER,
-	  offsetof(fr_tls_server_conf_t, fragment_size), NULL, "1024" },
-	{ "include_length", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, include_length), NULL, "yes" },
-	{ "check_crl", PW_TYPE_BOOLEAN,
-	  offsetof(fr_tls_server_conf_t, check_crl), NULL, "no"},
-	{ "check_cert_cn", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, check_cert_cn), NULL, NULL},
-	{ "cipher_list", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, cipher_list), NULL, NULL},
-	{ "check_cert_issuer", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, check_cert_issuer), NULL, NULL},
+	{ "rsa_key_exchange", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, rsa_key), "no" },
+	{ "dh_key_exchange", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, dh_key), "yes" },
+	{ "rsa_key_length", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, rsa_key_length), "512" },
+	{ "dh_key_length", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, dh_key_length), "512" },
+	{ "verify_depth", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, verify_depth), "0" },
+	{ "ca_path", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, ca_path), NULL },
+	{ "pem_file_type", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, file_type), "yes" },
+	{ "private_key_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, private_key_file), NULL },
+	{ "certificate_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, certificate_file), NULL },
+	{ "ca_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, fr_tls_server_conf_t, ca_file), NULL },
+	{ "private_key_password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, fr_tls_server_conf_t, private_key_password), NULL },
+	{ "dh_file", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, dh_file), NULL },
+	{ "random_file", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, random_file), NULL },
+	{ "fragment_size", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, fragment_size), "1024" },
+	{ "include_length", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, include_length), "yes" },
+	{ "check_crl", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, check_crl), "no" },
+	{ "check_cert_cn", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, check_cert_cn), NULL },
+	{ "cipher_list", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, cipher_list), NULL },
+	{ "check_cert_issuer", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, check_cert_issuer), NULL },
 
 #if OPENSSL_VERSION_NUMBER >= 0x0090800fL
 #ifndef OPENSSL_NO_ECDH
-	{ "ecdh_curve", PW_TYPE_STRING_PTR,
-	  offsetof(fr_tls_server_conf_t, ecdh_curve), NULL, "prime256v1"},
+	{ "ecdh_curve", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, ecdh_curve), "prime256v1" },
 #endif
 #endif
 
@@ -1286,15 +1237,19 @@ static int ocsp_check(X509_STORE *store, X509 *issuer_cert, X509 *client_cert,
 	 */
 
 	/* Get OCSP responder URL */
-	if(conf->ocsp_override_url) {
-		OCSP_parse_url(conf->ocsp_url, &host, &port, &path, &use_ssl);
+	if (conf->ocsp_override_url) {
+		char *url;
+
+		memcpy(&url, &conf->ocsp_url, sizeof(url));
+		/* Reading the libssl src, they do a strdup on the URL, so it could of been const *sigh* */
+		OCSP_parse_url(url, &host, &port, &path, &use_ssl);
 	}
 	else {
 		ocsp_parse_cert_url(client_cert, &host, &port, &path, &use_ssl);
 	}
 
 	if (!host || !port || !path) {
-		DEBUG2("[ocsp] - Host / port / path missing.  Not doing OCSP.");
+		DEBUG2("[ocsp] - Host / port / path missing.  Not doing OCSP");
 		ocsp_ok = 2;
 		goto ocsp_skip;
 	}
@@ -1434,8 +1389,8 @@ ocsp_end:
 		break;
 	case 2:
 		if (conf->ocsp_softfail) {
-			DEBUG2("[ocsp] --> Unable to check certificate; assuming valid.");
-			DEBUG2("[ocsp] --> Warning! This may be insecure.");
+			DEBUG2("[ocsp] --> Unable to check certificate; assuming valid");
+			DEBUG2("[ocsp] --> Warning! This may be insecure");
 			ocsp_ok = 1;
 		} else {
 			DEBUG2("[ocsp] --> Unable to check certificate; failing!");
@@ -1547,12 +1502,9 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	if (!conf) return 1;
 
 	request = (REQUEST *)SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_REQUEST);
-
-	if (!request) return 1;	/* FIXME: outbound TLS */
-
 	rad_assert(request != NULL);
 	certs = (VALUE_PAIR **)SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_CERTS);
-	rad_assert(certs != NULL);
+
 	identity = (char **)SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_IDENTITY);
 #ifdef HAVE_OPENSSL_OCSP_H
 	ocsp_store = (X509_STORE *)SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_STORE);
@@ -1572,7 +1524,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	 *	have a user identity.  i.e. we don't create the
 	 *	attributes for RadSec connections.
 	 */
-	if (identity &&
+	if (certs && identity &&
 	    (lookup <= 1) && sn && ((size_t) sn->length < (sizeof(buf) / 2))) {
 		char *p = buf;
 		int i;
@@ -1590,7 +1542,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	 */
 	buf[0] = '\0';
 	asn_time = X509_get_notAfter(client_cert);
-	if (identity && (lookup <= 1) && asn_time &&
+	if (certs && identity && (lookup <= 1) && asn_time &&
 	    (asn_time->length < (int) sizeof(buf))) {
 		memcpy(buf, (char*) asn_time->data, asn_time->length);
 		buf[asn_time->length] = '\0';
@@ -1604,14 +1556,14 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	X509_NAME_oneline(X509_get_subject_name(client_cert), subject,
 			  sizeof(subject));
 	subject[sizeof(subject) - 1] = '\0';
-	if (identity && (lookup <= 1) && subject[0]) {
+	if (certs && identity && (lookup <= 1) && subject[0]) {
 		pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SUBJECT][lookup], subject, T_OP_SET);
 	}
 
 	X509_NAME_oneline(X509_get_issuer_name(ctx->current_cert), issuer,
 			  sizeof(issuer));
 	issuer[sizeof(issuer) - 1] = '\0';
-	if (identity && (lookup <= 1) && issuer[0]) {
+	if (certs && identity && (lookup <= 1) && issuer[0]) {
 		pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_ISSUER][lookup], issuer, T_OP_SET);
 	}
 
@@ -1621,7 +1573,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	X509_NAME_get_text_by_NID(X509_get_subject_name(client_cert),
 				  NID_commonName, common_name, sizeof(common_name));
 	common_name[sizeof(common_name) - 1] = '\0';
-	if (identity && (lookup <= 1) && common_name[0] && subject[0]) {
+	if (certs && identity && (lookup <= 1) && common_name[0] && subject[0]) {
 		pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_CN][lookup], common_name, T_OP_SET);
 	}
 
@@ -1629,7 +1581,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	 *	Get the RFC822 Subject Alternative Name
 	 */
 	loc = X509_get_ext_by_NID(client_cert, NID_subject_alt_name, 0);
-	if (lookup <= 1 && loc >= 0) {
+	if (certs && (lookup <= 1) && (loc >= 0)) {
 		X509_EXTENSION *ext = NULL;
 		GENERAL_NAMES *names = NULL;
 		int i;
@@ -1975,20 +1927,27 @@ static void sess_free_certs(UNUSED void *parent, void *data_ptr,
 	pairfree(certs);
 }
 
-/*
- *	Add all the default ciphers and message digests
- *	Create our context.
+/** Add all the default ciphers and message digests reate our context.
  *
- *	This should be called exactly once from main.
+ * This should be called exactly once from main, before reading the main config
+ * or initialising any modules.
  */
-int tls_global_init(char const *acknowledged)
+void tls_global_init(void)
 {
-	uint64_t v;
-
 	SSL_load_error_strings();	/* readable error messages (examples show call before library_init) */
 	SSL_library_init();		/* initialize library */
 	OpenSSL_add_all_algorithms();	/* required for SHA2 in OpenSSL < 0.9.8o and 1.0.0.a */
 	OPENSSL_config(NULL);
+}
+
+/** Check for vulnerable versions of libssl
+ *
+ * @param acknowledged The highest CVE number a user has confirmed is not present in the system's libssl.
+ * @return 0 if the CVE specified by the user matches the most recent CVE we have, else -1.
+ */
+int tls_global_version_check(char const *acknowledged)
+{
+	uint64_t v;
 
 	if ((strcmp(acknowledged, libssl_defects[0].id) != 0) && (strcmp(acknowledged, "yes") != 0)) {
 		bool bad = false;
@@ -2018,6 +1977,19 @@ int tls_global_init(char const *acknowledged)
 	}
 
 	return 0;
+}
+
+/** Free any memory alloced by libssl
+ *
+ */
+void tls_global_cleanup(void)
+{
+	ERR_remove_state(0);
+	ENGINE_cleanup();
+	CONF_modules_unload(1);
+	ERR_free_strings();
+	EVP_cleanup();
+	CRYPTO_cleanup_all_ex_data();
 }
 
 /*
@@ -2080,15 +2052,12 @@ static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
 		 * programmatically.
 		 */
 		char const* special_string = "Apple:UseCertAdmin";
-		if (strncmp(conf->private_key_password,
-					special_string,
-					strlen(special_string)) == 0)
-		{
+		if (strncmp(conf->private_key_password, special_string, strlen(special_string)) == 0) {
 			char cmd[256];
+			char *password;
 			long const max_password_len = 128;
-			snprintf(cmd, sizeof(cmd) - 1,
-					 "/usr/sbin/certadmin --get-private-key-passphrase \"%s\"",
-					 conf->private_key_file);
+			snprintf(cmd, sizeof(cmd) - 1, "/usr/sbin/certadmin --get-private-key-passphrase \"%s\"",
+				 conf->private_key_file);
 
 			DEBUG2("tls: Getting private key passphrase using command \"%s\"", cmd);
 
@@ -2099,26 +2068,33 @@ static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
 				return NULL;
 			}
 
-			talloc_free(conf->private_key_password);
-			conf->private_key_password = talloc_array(conf, char, max_password_len);
-			if (!conf->private_key_password) {
+			rad_const_free(conf->private_key_password);
+			password = talloc_array(conf, char, max_password_len);
+			if (!password) {
 				ERROR("TLS: Can't allocate space for private_key_password");
 				ERROR("TLS: Error reading private_key_file %s", conf->private_key_file);
 				pclose(cmd_pipe);
 				return NULL;
 			}
 
-			fgets(conf->private_key_password, max_password_len, cmd_pipe);
+			fgets(password, max_password_len, cmd_pipe);
 			pclose(cmd_pipe);
 
 			/* Get rid of newline at end of password. */
-			conf->private_key_password[strlen(conf->private_key_password) - 1] = '\0';
+			password[strlen(password) - 1] = '\0';
 
-			DEBUG3("tls:  Password from command = \"%s\"", conf->private_key_password);
+			DEBUG3("tls:  Password from command = \"%s\"", password);
+			conf->private_key_password = password;
 		}
 #endif
-		SSL_CTX_set_default_passwd_cb_userdata(ctx, conf->private_key_password);
-		SSL_CTX_set_default_passwd_cb(ctx, cbtls_password);
+
+		{
+			char *password;
+
+			memcpy(&password, &conf->private_key_password, sizeof(password));
+			SSL_CTX_set_default_passwd_cb_userdata(ctx, password);
+			SSL_CTX_set_default_passwd_cb(ctx, cbtls_password);
+		}
 	}
 
 #ifdef PSK_MAX_IDENTITY_LEN
@@ -2474,9 +2450,13 @@ fr_tls_server_conf_t *tls_server_conf_parse(CONF_SECTION *cs)
 		if (conf->ocsp_store == NULL) goto error;
 	}
 #endif /*HAVE_OPENSSL_OCSP_H*/
+	{
+		char *dh_file;
 
-	if (load_dh_params(conf->ctx, conf->dh_file) < 0) {
-		goto error;
+		memcpy(&dh_file, &conf->dh_file, sizeof(dh_file));
+		if (load_dh_params(conf->ctx, dh_file) < 0) {
+			goto error;
+		}
 	}
 
 	if (generate_eph_rsa_key(conf->ctx) < 0) {
@@ -2540,8 +2520,13 @@ fr_tls_server_conf_t *tls_client_conf_parse(CONF_SECTION *cs)
 		goto error;
 	}
 
-	if (load_dh_params(conf->ctx, conf->dh_file) < 0) {
-		goto error;
+	{
+		char *dh_file;
+
+		memcpy(&dh_file, &conf->dh_file, sizeof(dh_file));
+		if (load_dh_params(conf->ctx, dh_file) < 0) {
+			goto error;
+		}
 	}
 
 	if (generate_eph_rsa_key(conf->ctx) < 0) {
@@ -2585,7 +2570,7 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 		 *	not allowed,
 		 */
 		if (SSL_session_reused(ssn->ssl)) {
-			RDEBUG("FAIL: Forcibly stopping session resumption as it is not allowed.");
+			RDEBUG("FAIL: Forcibly stopping session resumption as it is not allowed");
 			return -1;
 		}
 
@@ -2800,7 +2785,7 @@ fr_tls_status_t tls_application_data(tls_session_t *ssn,
 	}
 
 	if (err == 0) {
-		RWDEBUG("No data inside of the tunnel.");
+		RWDEBUG("No data inside of the tunnel");
 	}
 
 	/*
@@ -2823,16 +2808,16 @@ fr_tls_status_t tls_ack_handler(tls_session_t *ssn, REQUEST *request)
 	RDEBUG2("Received TLS ACK");
 
 	if (ssn == NULL){
-		RERROR("FAIL: Unexpected ACK received.  Could not obtain session information.");
+		RERROR("FAIL: Unexpected ACK received.  Could not obtain session information");
 		return FR_TLS_INVALID;
 	}
 	if (ssn->info.initialized == 0) {
-		RDEBUG("No SSL info available. Waiting for more SSL data.");
+		RDEBUG("No SSL info available. Waiting for more SSL data");
 		return FR_TLS_REQUEST;
 	}
 	if ((ssn->info.content_type == handshake) &&
 	    (ssn->info.origin == 0)) {
-		RERROR("FAIL: ACK without earlier message.");
+		RERROR("FAIL: ACK without earlier message");
 		return FR_TLS_INVALID;
 	}
 

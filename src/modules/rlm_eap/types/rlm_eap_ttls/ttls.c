@@ -53,7 +53,7 @@ static int diameter_verify(REQUEST *request, uint8_t const *data, unsigned int d
 		hdr_len = 12;
 
 		if (remaining < hdr_len) {
-		  RDEBUG2(" Diameter attribute is too small (%u) to contain a Diameter header", remaining);
+		  RDEBUG2("Diameter attribute is too small (%u) to contain a Diameter header", remaining);
 			return 0;
 		}
 
@@ -64,7 +64,7 @@ static int diameter_verify(REQUEST *request, uint8_t const *data, unsigned int d
 
 		if ((data[4] & 0x80) != 0) {
 			if (remaining < 16) {
-				RDEBUG2(" Diameter attribute is too small to contain a Diameter header with Vendor-Id");
+				RDEBUG2("Diameter attribute is too small to contain a Diameter header with Vendor-Id");
 				return 0;
 			}
 
@@ -307,7 +307,7 @@ static VALUE_PAIR *diameter2vp(REQUEST *request, REQUEST *fake, SSL *ssl,
 			vp->vp_integer64 = ntohll(vp->vp_integer64);
 			break;
 
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 			if (size != vp->length) {
 				RDEBUG2("Invalid length attribute %d",
 				       attr);
@@ -338,12 +338,12 @@ static VALUE_PAIR *diameter2vp(REQUEST *request, REQUEST *fake, SSL *ssl,
 			vp->vp_signed = ntohl(vp->vp_signed);
 			break;
 
-		case PW_TYPE_IPV6ADDR:
+		case PW_TYPE_IPV6_ADDR:
 			if (size != vp->length) goto raw;
 			memcpy(&vp->vp_ipv6addr, data, vp->length);
 			break;
 
-		case PW_TYPE_IPV6PREFIX:
+		case PW_TYPE_IPV6_PREFIX:
 			if (size != vp->length) goto raw;
 			memcpy(&vp->vp_ipv6prefix, data, vp->length);
 			break;
@@ -541,7 +541,7 @@ static int vp2diameter(REQUEST *request, tls_session_t *tls_session, VALUE_PAIR 
 			length = 8;
 			break;
 
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 			memcpy(p, &vp->vp_ipaddr, 4); /* network order */
 			length = 4;
 			break;
@@ -658,7 +658,7 @@ static rlm_rcode_t CC_HINT(nonnull) process_reply(UNUSED eap_handler_t *handler,
 		vp = NULL;
 		pairfilter(tls_session, &vp, &reply->vps, PW_MSCHAP2_SUCCESS, VENDORPEC_MICROSOFT, TAG_ANY);
 		if (vp) {
-			RDEBUG("Got MS-CHAP2-Success, tunneling it to the client in a challenge.");
+			RDEBUG("Got MS-CHAP2-Success, tunneling it to the client in a challenge");
 			rcode = RLM_MODULE_HANDLED;
 			t->authenticated = true;
 
@@ -792,7 +792,7 @@ static int CC_HINT(nonnull) eapttls_postproxy(eap_handler_t *handler, void *data
 	tls_session_t *tls_session = (tls_session_t *) data;
 	REQUEST *fake, *request = handler->request;
 
-	RDEBUG("Passing reply from proxy back into the tunnel.");
+	RDEBUG("Passing reply from proxy back into the tunnel");
 
 	/*
 	 *	If there was a fake request associated with the proxied
@@ -827,7 +827,7 @@ static int CC_HINT(nonnull) eapttls_postproxy(eap_handler_t *handler, void *data
 		 *	Perform a post-auth stage for the tunneled
 		 *	session.
 		 */
-		fake->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
+		fake->log.lvl &= ~RAD_REQUEST_OPTION_PROXY_EAP;
 		rcode = rad_postauth(fake);
 		RDEBUG2("post-auth returns %d", rcode);
 
@@ -843,9 +843,9 @@ static int CC_HINT(nonnull) eapttls_postproxy(eap_handler_t *handler, void *data
 		/*
 		 *	Terrible hacks.
 		 */
-		request->proxy = fake->packet;
+		request->proxy = talloc_steal(request, fake->packet);
 		fake->packet = NULL;
-		request->proxy_reply = fake->reply;
+		request->proxy_reply = talloc_steal(request, fake->reply);
 		fake->reply = NULL;
 
 		/*
@@ -897,7 +897,7 @@ static int CC_HINT(nonnull) eapttls_postproxy(eap_handler_t *handler, void *data
 		return eaptls_success(handler, 0);
 
 	default:
-		RDEBUG("Reply was unknown.");
+		RDEBUG("Reply was unknown");
 		break;
 	}
 
@@ -937,7 +937,7 @@ int eapttls_process(eap_handler_t *handler, tls_session_t *tls_session)
 	 */
 	if (data_len == 0) {
 		if (t->authenticated) {
-			RDEBUG("Got ACK, and the user was already authenticated.");
+			RDEBUG("Got ACK, and the user was already authenticated");
 			return PW_CODE_AUTHENTICATION_ACK;
 		} /* else no session, no data, die. */
 
@@ -1038,7 +1038,7 @@ int eapttls_process(eap_handler_t *handler, tls_session_t *tls_session)
 				 *	set it here.
 				 */
 				if (t->default_method != 0) {
-					RDEBUG("Setting default EAP type for tunneled EAP session.");
+					RDEBUG("Setting default EAP type for tunneled EAP session");
 					vp = paircreate(fake, PW_EAP_TYPE, 0);
 					rad_assert(vp != NULL);
 					vp->vp_integer = t->default_method;
@@ -1051,7 +1051,7 @@ int eapttls_process(eap_handler_t *handler, tls_session_t *tls_session)
 				 *	as it's permitted to do EAP without
 				 *	user-name.
 				 */
-				RWDEBUG2("No EAP-Identity found to start EAP conversation.");
+				RWDEBUG2("No EAP-Identity found to start EAP conversation");
 			}
 		} /* else there WAS a t->username */
 

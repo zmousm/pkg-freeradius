@@ -74,6 +74,26 @@ VALUE_PAIR *fr_cursor_first(vp_cursor_t *cursor)
 	return cursor->current;
 }
 
+/** Return the last pair in the list
+ *
+ */
+VALUE_PAIR *fr_cursor_last(vp_cursor_t *cursor)
+{
+	if (!*cursor->first) return NULL;
+
+	/* Need to start at the start */
+	if (!cursor->current) {
+		fr_cursor_first(cursor);
+	}
+
+	/* Wind to the end */
+	while (cursor->next) {
+		fr_cursor_next(cursor);
+	}
+
+	return fr_cursor_current(cursor);
+}
+
 /** Iterate over attributes of a given type in the pairlist
  *
  *
@@ -244,6 +264,9 @@ VALUE_PAIR *fr_cursor_remove(vp_cursor_t *cursor)
 
 	*last = vp->next;
 	vp->next = NULL;
+
+	/* Fixup cursor->found if we removed the VP it was referring to */
+	if (vp == cursor->found) cursor->found = *last;
 
 	return vp;
 }

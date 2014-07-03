@@ -44,13 +44,22 @@ RCSID("$Id$")
 #include <sys/stat.h>
 
 #include <libpq-fe.h>
+#include <postgres_ext.h>
 
 #include "config.h"
 #include "rlm_sql.h"
 #include "sql_postgresql.h"
 
+#ifndef NAMEDATALEN
+#  define NAMEDATALEN 64
+#endif
+
+typedef struct rlm_sql_postgres_config {
+	char const	*db_string;
+	bool		send_application_name;
+} rlm_sql_postgres_config_t;
+
 typedef struct rlm_sql_postgres_conn {
-	char const	*dbstring;	//!< String describing parameters for the connection
 	PGconn		*db;
 	PGresult	*result;
 	int		cur_row;
@@ -59,20 +68,67 @@ typedef struct rlm_sql_postgres_conn {
 	char		**row;
 } rlm_sql_postgres_conn_t;
 
-static int mod_instantiate(UNUSED CONF_SECTION *conf, UNUSED rlm_sql_config_t *config)
+static CONF_PARSER driver_config[] = {
+	{ "send_application_name", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sql_postgres_config_t, send_application_name), "yes" },
+
+	{ NULL, -1, 0, NULL, NULL }
+};
+
+static int mod_instantiate(CONF_SECTION *conf, UNUSED rlm_sql_config_t *config)
 {
 #if defined(HAVE_OPENSSL_CRYPTO_H) && (defined(HAVE_PQINITOPENSSL) || defined(HAVE_PQINITSSL))
-	static bool ssl_init = false;
-
-	if (!ssl_init) {
-#ifdef HAVE_PQINITOPENSSL
-		PQinitOpenSSL(0, 0);
-#else
-		PQinitSSL(0);
+	static bool			ssl_init = false;
 #endif
+
+	rlm_sql_postgres_config_t	*driver;
+	char 				application_name[NAMEDATALEN];
+	char				*db_string;
+
+#if defined(HAVE_OPENSSL_CRYPTO_H) && (defined(HAVE_PQINITOPENSSL) || defined(HAVE_PQINITSSL))
+	if (!ssl_init) {
+#  ifdef HAVE_PQINITOPENSSL
+		PQinitOpenSSL(0, 0);
+#  else
+		PQinitSSL(0);
+#  endif
 		ssl_init = true;
 	}
 #endif
+
+	MEM(driver = config->driver = talloc_zero(config, rlm_sql_postgres_config_t));
+	if (cf_section_parse(conf, driver, driver_config) < 0) {
+		return -1;
+	}
+
+	db_string = strchr(config->sql_db, '=') ?
+		talloc_typed_strdup(driver, config->sql_db) :
+		talloc_typed_asprintf(driver, "dbname='%s'", config->sql_db);
+
+	if (config->sql_server[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " host='%s'", config->sql_server);
+	}
+
+	if (config->sql_port[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " port=%s", config->sql_port);
+	}
+
+	if (config->sql_login[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " user='%s'", config->sql_login);
+	}
+
+	if (config->sql_password[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " password='%s'", config->sql_password);
+	}
+
+	/*
+	 *	Allow the user to set their own, or disable it
+	 */
+	if (driver->send_application_name) {
+		snprintf(application_name, sizeof(application_name),
+			 "FreeRADIUS "  RADIUSD_VERSION_STRING " - %s (%s)", progname, config->xlat_name);
+		db_string = talloc_asprintf_append(db_string, " application_name='%s'", application_name);
+	}
+	driver->db_string = db_string;
 
 	return 0;
 }
@@ -178,36 +234,14 @@ static int sql_socket_destructor(void *c)
  *************************************************************************/
 static int CC_HINT(nonnull) sql_init_socket(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 {
-	char *dbstring;
+	rlm_sql_postgres_config_t *driver = config->driver;
 	rlm_sql_postgres_conn_t *conn;
 
 	MEM(conn = handle->conn = talloc_zero(handle, rlm_sql_postgres_conn_t));
 	talloc_set_destructor((void *) conn, sql_socket_destructor);
 
-	dbstring = strchr(config->sql_db, '=') ?
-		talloc_typed_strdup(conn, config->sql_db) :
-		talloc_typed_asprintf(conn, "dbname='%s'", config->sql_db);
-
-	if (config->sql_server[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " host='%s'", config->sql_server);
-	}
-
-	if (config->sql_port[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " port=%s", config->sql_port);
-	}
-
-	if (config->sql_login[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " user='%s'", config->sql_login);
-	}
-
-	if (config->sql_password[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " password='%s'", config->sql_password);
-	}
-
-	conn->dbstring = dbstring;
-
-	DEBUG2("rlm_sql_postgresql: Connecting using parameters: %s", dbstring);
-	conn->db = PQconnectdb(dbstring);
+	DEBUG2("rlm_sql_postgresql: Connecting using parameters: %s", driver->db_string);
+	conn->db = PQconnectdb(driver->db_string);
 	if (!conn->db) {
 		ERROR("rlm_sql_postgresql: Connection failed: Out of memory");
 		return -1;
@@ -436,31 +470,6 @@ static char const *sql_error(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t 
 
 /*************************************************************************
  *
- *	Function: sql_finish_query
- *
- *	Purpose: End the query, such as freeing memory
- *
- *************************************************************************/
-static sql_rcode_t sql_finish_query(rlm_sql_handle_t * handle, rlm_sql_config_t *config) {
-
-	return sql_free_result(handle, config);
-}
-
-/*************************************************************************
- *
- *	Function: sql_finish_select_query
- *
- *	Purpose: End the select query, such as freeing memory or result
- *
- *************************************************************************/
-static sql_rcode_t sql_finish_select_query(rlm_sql_handle_t * handle, rlm_sql_config_t *config) {
-
-	return sql_free_result(handle, config);
-}
-
-
-/*************************************************************************
- *
  *	Function: sql_affected_rows
  *
  *	Purpose: Return the number of rows affected by the last query.
@@ -485,7 +494,7 @@ rlm_sql_module_t rlm_sql_postgresql = {
 	sql_fetch_row,
 	NULL, /* sql_free_result */
 	sql_error,
-	sql_finish_query,
-	sql_finish_select_query,
+	sql_free_result,
+	sql_free_result,
 	sql_affected_rows,
 };

@@ -74,7 +74,7 @@ static void VP_HEXDUMP(char const *msg, uint8_t const *data, size_t len)
  *	is unsigned, and the attacker can use resources on the server,
  *	even if the end request is rejected.
  */
-int fr_max_attributes = 0;
+uint32_t fr_max_attributes = 0;
 FILE *fr_log_fp = NULL;
 
 typedef struct radius_packet_t {
@@ -251,11 +251,11 @@ void rad_print_hex(RADIUS_PACKET *packet)
  */
 static int rad_sendto(int sockfd, void *data, size_t data_len, int flags,
 #ifdef WITH_UDPFROMTO
-		      fr_ipaddr_t *src_ipaddr, int src_port,
+		      fr_ipaddr_t *src_ipaddr, uint16_t src_port,
 #else
-		      UNUSED fr_ipaddr_t *src_ipaddr, UNUSED int src_port,
+		      UNUSED fr_ipaddr_t *src_ipaddr, UNUSED uint16_t src_port,
 #endif
-		      fr_ipaddr_t *dst_ipaddr, int dst_port)
+		      fr_ipaddr_t *dst_ipaddr, uint16_t dst_port)
 {
 	int rcode;
 	struct sockaddr_storage	dst;
@@ -314,8 +314,7 @@ void rad_recv_discard(int sockfd)
 }
 
 
-ssize_t rad_recv_header(int sockfd, fr_ipaddr_t *src_ipaddr, int *src_port,
-			int *code)
+ssize_t rad_recv_header(int sockfd, fr_ipaddr_t *src_ipaddr, uint16_t *src_port, int *code)
 {
 	ssize_t			data_len, packet_len;
 	uint8_t			header[4];
@@ -397,7 +396,7 @@ static ssize_t rad_recvfrom(int sockfd, RADIUS_PACKET *packet, int flags,
 	ssize_t			data_len;
 	uint8_t			header[4];
 	size_t			len;
-	int			port;
+	uint16_t		port;
 
 	memset(&src, 0, sizeof_src);
 	memset(&dst, 0, sizeof_dst);
@@ -847,10 +846,10 @@ static ssize_t vp2data_any(RADIUS_PACKET const *packet,
 		break;
 
 	case PW_TYPE_IFID:
-	case PW_TYPE_IPADDR:
-	case PW_TYPE_IPV6ADDR:
-	case PW_TYPE_IPV6PREFIX:
-	case PW_TYPE_IPV4PREFIX:
+	case PW_TYPE_IPV4_ADDR:
+	case PW_TYPE_IPV6_ADDR:
+	case PW_TYPE_IPV6_PREFIX:
+	case PW_TYPE_IPV4_PREFIX:
 	case PW_TYPE_ABINARY:
 	case PW_TYPE_ETHERNET:	/* just in case */
 		data = (uint8_t const *) &vp->data;
@@ -955,7 +954,7 @@ static ssize_t vp2data_any(RADIUS_PACKET const *packet,
 				return -1;
 			}
 
-			if (lvalue) ptr[0] = vp->tag;
+			if (lvalue) ptr[0] = TAG_VALID(vp->tag) ? vp->tag : TAG_NONE;
 			make_tunnel_passwd(ptr + lvalue, &len, data, len,
 					   room - lvalue,
 					   secret, original->vector);
@@ -963,7 +962,7 @@ static ssize_t vp2data_any(RADIUS_PACKET const *packet,
 		case PW_CODE_ACCOUNTING_REQUEST:
 		case PW_CODE_DISCONNECT_REQUEST:
 		case PW_CODE_COA_REQUEST:
-			ptr[0] = vp->tag;
+			ptr[0] = TAG_VALID(vp->tag) ? vp->tag : TAG_NONE;
 			make_tunnel_passwd(ptr + 1, &len, data, len - 1, room,
 					   secret, packet->vector);
 			break;
@@ -2305,7 +2304,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 	char			host_ipaddr[128];
 	bool			require_ma = false;
 	bool			seen_ma = false;
-	int			num_attributes;
+	uint32_t		num_attributes;
 	decode_fail_t		failure = DECODE_FAIL_NONE;
 
 	/*
@@ -3399,7 +3398,7 @@ ssize_t data2vp(RADIUS_PACKET *packet,
 		size_t const attrlen, size_t const packetlen,
 		VALUE_PAIR **pvp)
 {
-	int tag = 0;
+	int8_t tag = TAG_NONE;
 	size_t datalen;
 	ssize_t rcode;
 	uint32_t vendor;
@@ -3444,11 +3443,11 @@ ssize_t data2vp(RADIUS_PACKET *packet,
 		 *	will break assumptions about CUI.  We know
 		 *	this, but Coverity doesn't.
 		 */
-		if (da->type != PW_TYPE_STRING) return -1;
+		if (da->type != PW_TYPE_OCTETS) return -1;
 #endif
 
-		data = (uint8_t const *) "";
-		datalen = 1;
+		data = NULL;
+		datalen = 0;
 		goto alloc_cui;	/* skip everything */
 	}
 
@@ -3569,7 +3568,7 @@ ssize_t data2vp(RADIUS_PACKET *packet,
 		break;
 
 	case PW_TYPE_INTEGER:
-	case PW_TYPE_IPADDR:
+	case PW_TYPE_IPV4_ADDR:
 	case PW_TYPE_DATE:
 	case PW_TYPE_SIGNED:
 		if (datalen != 4) goto raw;
@@ -3580,11 +3579,11 @@ ssize_t data2vp(RADIUS_PACKET *packet,
 		if (datalen != 8) goto raw;
 		break;
 
-	case PW_TYPE_IPV6ADDR:
+	case PW_TYPE_IPV6_ADDR:
 		if (datalen != 16) goto raw;
 		break;
 
-	case PW_TYPE_IPV6PREFIX:
+	case PW_TYPE_IPV6_PREFIX:
 		if ((datalen < 2) || (datalen > 18)) goto raw;
 		if (data[1] > 128) goto raw;
 		break;
@@ -3601,13 +3600,13 @@ ssize_t data2vp(RADIUS_PACKET *packet,
 		if (datalen != 6) goto raw;
 		break;
 
-	case PW_TYPE_COMBO_IP:
+	case PW_TYPE_IP_ADDR:
 		if (datalen == 4) {
 			child = dict_attrbytype(da->attr, da->vendor,
-						PW_TYPE_IPADDR);
+						PW_TYPE_IPV4_ADDR);
 		} else if (datalen == 16) {
 			child = dict_attrbytype(da->attr, da->vendor,
-					     PW_TYPE_IPV6ADDR);
+					     PW_TYPE_IPV6_ADDR);
 		} else {
 			goto raw;
 		}
@@ -3615,7 +3614,7 @@ ssize_t data2vp(RADIUS_PACKET *packet,
 		da = child;	/* re-write it */
 		break;
 
-	case PW_TYPE_IPV4PREFIX:
+	case PW_TYPE_IPV4_PREFIX:
 		if (datalen != 6) goto raw;
 		if ((data[1] & 0x3f) > 32) goto raw;
 		break;
@@ -3744,7 +3743,7 @@ ssize_t data2vp(RADIUS_PACKET *packet,
 			fr_strerror_printf("Internal sanity check %d", __LINE__);
 			return -1;
 		}
-		tag = 0;
+		tag = TAG_NONE;
 #ifndef NDEBUG
 		/*
 		 *	Fix for Coverity.
@@ -3814,7 +3813,7 @@ ssize_t data2vp(RADIUS_PACKET *packet,
 		memcpy(&vp->vp_ether, data, 6);
 		break;
 
-	case PW_TYPE_IPADDR:
+	case PW_TYPE_IPV4_ADDR:
 		memcpy(&vp->vp_ipaddr, data, 4);
 		break;
 
@@ -3822,11 +3821,11 @@ ssize_t data2vp(RADIUS_PACKET *packet,
 		memcpy(&vp->vp_ifid, data, 8);
 		break;
 
-	case PW_TYPE_IPV6ADDR:
+	case PW_TYPE_IPV6_ADDR:
 		memcpy(&vp->vp_ipv6addr, data, 16);
 		break;
 
-	case PW_TYPE_IPV6PREFIX:
+	case PW_TYPE_IPV6_PREFIX:
 		/*
 		 *	FIXME: double-check that
 		 *	(vp->vp_octets[1] >> 3) matches vp->length + 2
@@ -3838,7 +3837,7 @@ ssize_t data2vp(RADIUS_PACKET *packet,
 		}
 		break;
 
-	case PW_TYPE_IPV4PREFIX:
+	case PW_TYPE_IPV4_PREFIX:
 		/* FIXME: do the same double-check as for IPv6Prefix */
 		memcpy(&vp->vp_ipv4prefix, data, vp->length);
 
@@ -3993,18 +3992,24 @@ ssize_t rad_vp2data(uint8_t const **out, VALUE_PAIR const *vp)
 	 *	All of these values are at the same location.
 	 */
 	case PW_TYPE_IFID:
-	case PW_TYPE_IPADDR:
-	case PW_TYPE_IPV6ADDR:
-	case PW_TYPE_IPV6PREFIX:
-	case PW_TYPE_IPV4PREFIX:
+	case PW_TYPE_IPV4_ADDR:
+	case PW_TYPE_IPV6_ADDR:
+	case PW_TYPE_IPV6_PREFIX:
+	case PW_TYPE_IPV4_PREFIX:
 	case PW_TYPE_ABINARY:
 	case PW_TYPE_ETHERNET:
-	case PW_TYPE_COMBO_IP:
+	case PW_TYPE_IP_ADDR:
+	case PW_TYPE_IP_PREFIX:
 	{
 		void const *p = &vp->data;
 		memcpy(out, &p, sizeof(*out));
 		break;
 	}
+
+	case PW_TYPE_BOOLEAN:
+		buffer[0] = vp->vp_integer & 0x01;
+		*out = buffer;
+		break;
 
 	case PW_TYPE_BYTE:
 		buffer[0] = vp->vp_integer & 0xff;
@@ -4048,6 +4053,7 @@ ssize_t rad_vp2data(uint8_t const **out, VALUE_PAIR const *vp)
 	case PW_TYPE_LONG_EXTENDED:
 	case PW_TYPE_EVS:
 	case PW_TYPE_VSA:
+	case PW_TYPE_TIMEVAL:
 	case PW_TYPE_MAX:
 		fr_strerror_printf("Cannot get data for VALUE_PAIR type %i", vp->da->type);
 		return -1;
@@ -4066,7 +4072,7 @@ int rad_decode(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 	       char const *secret)
 {
 	int			packet_length;
-	int			num_attributes;
+	uint32_t		num_attributes;
 	uint8_t			*ptr;
 	radius_packet_t		*hdr;
 	VALUE_PAIR *head, **tail, *vp;

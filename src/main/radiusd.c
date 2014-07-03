@@ -94,6 +94,7 @@ int main(int argc, char *argv[])
 	int argval;
 	bool spawn_flag = true;
 	bool write_pid = false;
+	bool display_version = false;
 	int flag = 0;
 	int from_child[2] = {-1, -1};
 
@@ -142,7 +143,7 @@ int main(int argc, char *argv[])
 	 */
 	memset(&main_config, 0, sizeof(main_config));
 	main_config.myip.af = AF_UNSPEC;
-	main_config.port = -1;
+	main_config.port = 0;
 	main_config.name = "radiusd";
 	main_config.daemonize = true;
 
@@ -196,7 +197,7 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'i':
-				if (ip_hton(optarg, AF_UNSPEC, &main_config.myip) < 0) {
+				if (ip_hton(&main_config.myip, AF_UNSPEC, optarg, false) < 0) {
 					fprintf(stderr, "radiusd: Invalid IP Address or hostname \"%s\"\n", optarg);
 					exit(EXIT_FAILURE);
 				}
@@ -217,13 +218,18 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'p':
-				main_config.port = atoi(optarg);
-				if ((main_config.port <= 0) ||
-				    (main_config.port >= 65536)) {
-					fprintf(stderr, "radiusd: Invalid port number %s\n", optarg);
+			{
+				unsigned long port;
+
+				port = strtoul(optarg, 0, 10);
+				if ((port == 0) || (port > UINT16_MAX)) {
+					fprintf(stderr, "radiusd: Invalid port number \"%s\"\n", optarg);
 					exit(EXIT_FAILURE);
 				}
+
+				main_config.port = (uint16_t) port;
 				flag |= 2;
+			}
 				break;
 
 			case 'P':
@@ -241,14 +247,9 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'v':
-				/* Don't print timestamps */
-				debug_flag += 2;
-				fr_log_fp = stdout;
-				default_log.dst = L_DST_STDOUT;
-				default_log.fd = STDOUT_FILENO;
+				display_version = true;
+				break;
 
-				version();
-				exit(EXIT_SUCCESS);
 			case 'X':
 				spawn_flag = false;
 				main_config.daemonize = false;
@@ -299,9 +300,32 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
+	/*
+	 *	Better here, so it doesn't matter whether we get passed
+	 *	-xv or -vx.
+	 */
+	if (display_version) {
+		/* Don't print timestamps */
+		debug_flag += 2;
+		fr_log_fp = stdout;
+		default_log.dst = L_DST_STDOUT;
+		default_log.fd = STDOUT_FILENO;
+
+		version();
+		exit(EXIT_SUCCESS);
+	}
+
 	if (debug_flag) {
 		version();
 	}
+
+	/*
+	 *  Initialising OpenSSL once, here, is safer than having individual
+	 *  modules do it.
+	 */
+#ifdef HAVE_OPENSSL_CRYPTO_H
+	tls_global_init();
+#endif
 
 	/*
 	 *  Initialize any event loops just enough so module instantiations
@@ -316,12 +340,9 @@ int main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	/*
-	 *  Initialising OpenSSL once, here, is safer than having individual
-	 *  modules do it.
-	 */
+	/*  Check for vulnerabilities in the version of libssl were linked against */
 #ifdef HAVE_OPENSSL_CRYPTO_H
-	if (tls_global_init(main_config.allow_vulnerable_openssl) < 0) {
+	if (tls_global_version_check(main_config.allow_vulnerable_openssl) < 0) {
 		exit(EXIT_FAILURE);
 	}
 #endif
@@ -475,7 +496,7 @@ int main(int argc, char *argv[])
 	 *	Everything seems to have loaded OK, exit gracefully.
 	 */
 	if (check_config) {
-		DEBUG("Configuration appears to be OK.");
+		DEBUG("Configuration appears to be OK");
 
 		/* for -C -m|-M */
 		if (main_config.debug_memory) {
@@ -551,7 +572,7 @@ int main(int argc, char *argv[])
 		ERROR("Exiting due to internal error: %s", fr_strerror());
 		rcode = EXIT_FAILURE;
 	} else {
-		INFO("Exiting normally.");
+		INFO("Exiting normally");
 	}
 
 	exec_trigger(NULL, NULL, "server.stop", false);
@@ -598,6 +619,10 @@ cleanup:
 
 #ifdef WIN32
 	WSACleanup();
+#endif
+
+#ifdef HAVE_OPENSSL_CRYPTO_H
+	tls_global_cleanup();
 #endif
 
 	/*

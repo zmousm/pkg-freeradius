@@ -28,21 +28,16 @@ RCSID("$Id$")
 #include <sys/un.h>
 
 typedef struct rlm_smsotp_t {
-	char		*socket;
-	char		*challenge;
-	char		*authtype;
+	char const	*socket;
+	char const	*challenge;
+	char const	*authtype;
 	fr_connection_pool_t *pool;
 } rlm_smsotp_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "socket", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_smsotp_t, socket),
-	  NULL, "/var/run/smsotp_socket" },
-	{ "challenge_message", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_smsotp_t, challenge), NULL, "Enter Mobile PIN" },
-	{ "challenge_type", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_smsotp_t, authtype),
-	  NULL, "smsotp-reply" },
+	{ "socket", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, socket), "/var/run/smsotp_socket" },
+	{ "challenge_message", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, challenge), "Enter Mobile PIN" },
+	{ "challenge_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, authtype), "smsotp-reply" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -289,7 +284,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	 *  The server will take care of sending it to the user.
 	 */
 	request->reply->code = PW_CODE_ACCESS_CHALLENGE;
-	DEBUG("rlm_smsotp: Sending Access-Challenge.");
+	DEBUG("rlm_smsotp: Sending Access-Challenge");
 
 	rcode = RLM_MODULE_HANDLED;
 

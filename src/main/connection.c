@@ -55,16 +55,16 @@ struct fr_connection {
 	time_t		last_used;	//!< Last time the connection was
 					//!< reserved.
 
-	uint64_t	num_uses;	//!< Number of times the connection
+	uint32_t	num_uses;	//!< Number of times the connection
 					//!< has been reserved.
-	int		in_use;		//!< Whether the connection is currently
-					//!< reserved.
 	uint64_t	number;		//!< Unique ID assigned when the
 					//!< connection is created, these will
 					//!< monotonically increase over the
 					//!< lifetime of the connection pool.
 	void		*connection;	//!< Pointer to whatever the module
 					//!< uses for a connection handle.
+	bool		in_use;		//!< Whether the connection is currently
+					//!< reserved.
 #ifdef PTHREAD_DEBUG
 	pthread_t	pthread_id;	//!< When 'in_use == true'
 #endif
@@ -80,15 +80,15 @@ struct fr_connection {
  * @see fr_connection
  */
 struct fr_connection_pool_t {
-	int		start;		//!< Number of initial connections
-	int		min;		//!< Minimum number of concurrent
+	uint32_t       	start;		//!< Number of initial connections
+	uint32_t       	min;		//!< Minimum number of concurrent
 					//!< connections to keep open.
-	int		max;		//!< Maximum number of concurrent
+	uint32_t       	max;		//!< Maximum number of concurrent
 					//!< connections to allow.
-	int		spare;		//!< Number of spare connections to try
-	int		retry_delay;	//!< seconds to delay re-open
+	uint32_t       	spare;		//!< Number of spare connections to try
+	uint32_t       	retry_delay;	//!< seconds to delay re-open
 					//!< after a failed open.
-	int		cleanup_interval; //!< Initial timer for how
+	uint32_t       	cleanup_interval; //!< Initial timer for how
 					  //!< often we sweep the pool
 					  //!< for free connections.
 					  //!< (0 is infinite).
@@ -103,10 +103,10 @@ struct fr_connection_pool_t {
 	uint64_t	max_uses;	//!< Maximum number of times a
 					//!< connection can be used before being
 					//!< closed.
-	int		lifetime;	//!< How long a connection can be open
+	uint32_t	lifetime;	//!< How long a connection can be open
 					//!< before being closed (irrespective
 					//!< of whether it's idle or not).
-	int		idle_timeout;	//!< How long a connection can be idle
+	uint32_t       	idle_timeout;	//!< How long a connection can be idle
 					//!< before being closed.
 
 	bool		trigger;	//!< If true execute connection triggers
@@ -132,7 +132,7 @@ struct fr_connection_pool_t {
 
 	uint64_t	count;		//!< Number of connections spawned over
 					//!< the lifetime of the pool.
-	int		num;		//!< Number of connections in the pool.
+	uint32_t       	num;		//!< Number of connections in the pool.
 	int		active;	 	//!< Number of currently reserved
 					//!< connections.
 
@@ -173,28 +173,17 @@ struct fr_connection_pool_t {
 #endif
 
 static const CONF_PARSER connection_config[] = {
-	{ "start",    PW_TYPE_INTEGER, offsetof(fr_connection_pool_t, start),
-	  0, "5" },
-	{ "min",      PW_TYPE_INTEGER, offsetof(fr_connection_pool_t, min),
-	  0, "5" },
-	{ "max",      PW_TYPE_INTEGER, offsetof(fr_connection_pool_t, max),
-	  0, "10" },
-	{ "spare",    PW_TYPE_INTEGER, offsetof(fr_connection_pool_t, spare),
-	  0, "3" },
-	{ "uses",     PW_TYPE_INTEGER, offsetof(fr_connection_pool_t, max_uses),
-	  0, "0" },
-	{ "lifetime", PW_TYPE_INTEGER, offsetof(fr_connection_pool_t, lifetime),
-	  0, "0" },
-	{ "cleanup_delay", PW_TYPE_INTEGER, offsetof(fr_connection_pool_t, cleanup_interval),
-	  0, NULL},
-	{ "cleanup_interval", PW_TYPE_INTEGER, offsetof(fr_connection_pool_t, cleanup_interval),
-	  0, "30" },
-	{ "idle_timeout",  PW_TYPE_INTEGER, offsetof(fr_connection_pool_t, idle_timeout),
-	  0, "60" },
-	{ "retry_delay",  PW_TYPE_INTEGER, offsetof(fr_connection_pool_t, retry_delay),
-	  0, "1" },
-	{ "spread", PW_TYPE_BOOLEAN, offsetof(fr_connection_pool_t, spread),
-	  0, "no" },
+	{ "start", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_connection_pool_t, start), "5" },
+	{ "min", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_connection_pool_t, min), "5" },
+	{ "max", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_connection_pool_t, max), "10" },
+	{ "spare", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_connection_pool_t, spare), "3" },
+	{ "uses", FR_CONF_OFFSET(PW_TYPE_INTEGER64, fr_connection_pool_t, max_uses), "0" },
+	{ "lifetime", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_connection_pool_t, lifetime), "0" },
+	{ "cleanup_delay", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_connection_pool_t, cleanup_interval), NULL},
+	{ "cleanup_interval", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_connection_pool_t, cleanup_interval), "30" },
+	{ "idle_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_connection_pool_t, idle_timeout), "60" },
+	{ "retry_delay", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_connection_pool_t, retry_delay), "1" },
+	{ "spread", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_connection_pool_t, spread), "no" },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -585,7 +574,7 @@ fr_connection_pool_t *fr_connection_pool_init(CONF_SECTION *parent,
 					      fr_connection_delete_t d,
 					      char const *prefix)
 {
-	int i;
+	uint32_t i;
 	fr_connection_pool_t *pool;
 	fr_connection_t *this;
 	CONF_SECTION *modules;
@@ -676,10 +665,6 @@ fr_connection_pool_t *fr_connection_pool_init(CONF_SECTION *parent,
 	}
 	if ((pool->lifetime > 0) && (pool->idle_timeout > pool->lifetime)) {
 		pool->idle_timeout = 0;
-	}
-
-	if (pool->cleanup_interval < 0) {
-		pool->cleanup_interval = 30;
 	}
 
 	if ((pool->idle_timeout > 0) && (pool->cleanup_interval > pool->idle_timeout)) {
@@ -785,7 +770,7 @@ static int fr_connection_manage(fr_connection_pool_t *pool,
  */
 static int fr_connection_pool_check(fr_connection_pool_t *pool)
 {
-	int spawn, idle, extra;
+	uint32_t spawn, idle, extra;
 	time_t now = time(NULL);
 	fr_connection_t *this, *next;
 
@@ -1003,6 +988,15 @@ void *fr_connection_get(fr_connection_pool_t *pool)
 	return fr_connection_get_internal(pool, true);
 }
 
+/** Get the number of connections currently in the pool
+ *
+ * @param pool to count connections for.
+ * @return the number of connections in the pool
+ */
+int fr_connection_get_num(fr_connection_pool_t *pool)
+{
+	return pool->num;
+}
 
 /** Release a connection
  *

@@ -33,17 +33,11 @@ RCSID("$Id$")
  *	Open a socket TO the given IP and port.
  */
 int fr_tcp_client_socket(fr_ipaddr_t *src_ipaddr,
-			 fr_ipaddr_t *dst_ipaddr, int dst_port)
+			 fr_ipaddr_t *dst_ipaddr, uint16_t dst_port)
 {
 	int sockfd;
 	struct sockaddr_storage salocal;
 	socklen_t	salen;
-
-	if ((dst_port < 0) || (dst_port > 65535)) {
-		fr_strerror_printf("Port %d is out of allowed bounds",
-				   dst_port);
-		return -1;
-	}
 
 	if (!dst_ipaddr) return -1;
 
@@ -81,15 +75,6 @@ int fr_tcp_client_socket(fr_ipaddr_t *src_ipaddr,
 	 */
 	if (connect(sockfd, (struct sockaddr *) &salocal, salen) < 0) {
 		fr_strerror_printf("Failed in connect(): %s", fr_syserror(errno));
-		close(sockfd);
-		return -1;
-	}
-
-	/*
-	 *	Set non-block *AFTER* connecting to the remote server
-	 *	so it doesn't return immediately.
-	 */
-	if (fr_nonblock(sockfd) < 0) {
 		close(sockfd);
 		return -1;
 	}
@@ -163,7 +148,7 @@ int fr_tcp_read_packet(RADIUS_PACKET *packet, int flags)
 		packet_len = (packet->vector[2] << 8) | packet->vector[3];
 
 		if (packet_len < AUTH_HDR_LEN) {
-			fr_strerror_printf("Discarding packet: Smaller than RFC minimum of 20 bytes.");
+			fr_strerror_printf("Discarding packet: Smaller than RFC minimum of 20 bytes");
 			return -1;
 		}
 
@@ -171,7 +156,7 @@ int fr_tcp_read_packet(RADIUS_PACKET *packet, int flags)
 		 *	If the packet is too big, then the socket is bad.
 		 */
 		if (packet_len > MAX_PACKET_LEN) {
-			fr_strerror_printf("Discarding packet: Larger than RFC limitation of 4096 bytes.");
+			fr_strerror_printf("Discarding packet: Larger than RFC limitation of 4096 bytes");
 			return -1;
 		}
 

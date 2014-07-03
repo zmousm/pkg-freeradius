@@ -29,22 +29,18 @@ RCSID("$Id$")
 #define  REALM_FORMAT_SUFFIX   1
 
 typedef struct realm_config_t {
-	int	format;
-	char	*formatstring;
-	char	*delim;
-	bool	ignore_default;
-	bool	ignore_null;
+	int		format;
+	char const	*format_string;
+	char const	*delim;
+	bool		ignore_default;
+	bool		ignore_null;
 } realm_config_t;
 
 static CONF_PARSER module_config[] = {
-  { "format", PW_TYPE_STRING_PTR,
-    offsetof(realm_config_t,formatstring), NULL, "suffix" },
-  { "delimiter", PW_TYPE_STRING_PTR,
-    offsetof(realm_config_t,delim), NULL, "@" },
-  { "ignore_default", PW_TYPE_BOOLEAN,
-    offsetof(realm_config_t,ignore_default), NULL, "no" },
-  { "ignore_null", PW_TYPE_BOOLEAN,
-    offsetof(realm_config_t,ignore_null), NULL, "no" },
+  { "format", FR_CONF_OFFSET(PW_TYPE_STRING, realm_config_t, format_string), "suffix" },
+  { "delimiter", FR_CONF_OFFSET(PW_TYPE_STRING, realm_config_t, delim), "@" },
+  { "ignore_default", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, realm_config_t, ignore_default), "no" },
+  { "ignore_null", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, realm_config_t, ignore_null), "no" },
   { NULL, -1, 0, NULL, NULL }    /* end the list */
 };
 
@@ -84,7 +80,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 #endif
 	    ) {
 
-		RDEBUG2("Proxy reply, or no User-Name.  Ignoring.");
+		RDEBUG2("Proxy reply, or no User-Name.  Ignoring");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -94,7 +90,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	 */
 
 	if (pairfind(request->packet->vps, PW_REALM, 0, TAG_ANY) != NULL ) {
-		RDEBUG2("Request already has destination realm set.  Ignoring.");
+		RDEBUG2("Request already has destination realm set.  Ignoring");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -165,7 +161,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	}
 	if( inst->ignore_default &&
 	    (strcmp(realm->name, "DEFAULT")) == 0) {
-		RDEBUG2("Found DEFAULT, but skipping due to config.");
+		RDEBUG2("Found DEFAULT, but skipping due to config");
 		talloc_free(namebuf);
 		return RLM_MODULE_NOOP;
 	}
@@ -223,7 +219,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 		 */
 	case PW_CODE_ACCOUNTING_REQUEST:
 		if (!realm->acct_pool) {
-			RDEBUG2("Accounting realm is LOCAL.");
+			RDEBUG2("Accounting realm is LOCAL");
 			return RLM_MODULE_OK;
 		}
 		break;
@@ -233,7 +229,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 		 */
 	case PW_CODE_AUTHENTICATION_REQUEST:
 		if (!realm->auth_pool) {
-			RDEBUG2("Authentication realm is LOCAL.");
+			RDEBUG2("Authentication realm is LOCAL");
 			return RLM_MODULE_OK;
 		}
 		break;
@@ -333,15 +329,15 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	struct realm_config_t *inst = instance;
 
-	if (strcasecmp(inst->formatstring, "suffix") == 0) {
+	if (strcasecmp(inst->format_string, "suffix") == 0) {
 	     inst->format = REALM_FORMAT_SUFFIX;
 
-	} else if (strcasecmp(inst->formatstring, "prefix") == 0) {
+	} else if (strcasecmp(inst->format_string, "prefix") == 0) {
 	     inst->format = REALM_FORMAT_PREFIX;
 
 	} else {
 		cf_log_err_cs(conf, "Invalid value \"%s\" for format",
-			      inst->formatstring);
+			      inst->format_string);
 	     return -1;
 	}
 
@@ -429,7 +425,7 @@ static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 	REALM *realm;
 
 	if (pairfind(request->packet->vps, PW_REALM, 0, TAG_ANY) != NULL) {
-		RDEBUG2("Request already has destination realm set.  Ignoring.");
+		RDEBUG2("Request already has destination realm set.  Ignoring");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -455,7 +451,7 @@ static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 	if (!realm) return RLM_MODULE_NOTFOUND;
 
 	if (!realm->coa_pool) {
-		RDEBUG2("CoA realm is LOCAL.");
+		RDEBUG2("CoA realm is LOCAL");
 		return RLM_MODULE_OK;
 	}
 

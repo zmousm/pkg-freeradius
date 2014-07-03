@@ -216,7 +216,7 @@ static int dhcprelay_process_server_reply(REQUEST *request)
 		} else {
 			vp = pairfind(request->packet->vps, 264, DHCP_MAGIC_VENDOR, TAG_ANY); /* DHCP-Your-IP-Address */
 			if (!vp) {
-				DEBUG("DHCP: Failed to find IP Address for request.");
+				DEBUG("DHCP: Failed to find IP Address for request");
 				return -1;
 			}
 
@@ -523,7 +523,7 @@ static int dhcp_process(REQUEST *request)
 	vp = pairfind(request->reply->vps, 264, DHCP_MAGIC_VENDOR, TAG_ANY); /* DHCP-Your-IP-Address */
 	if (!vp) {
 		RDEBUG("DHCP: Failed to find DHCP-Client-IP-Address or DHCP-Your-IP-Address for request; "
-		       "not responding.");
+		       "not responding");
 		/*
 		 *	There is nowhere to send the response to, so don't bother.
 		 */
@@ -600,7 +600,7 @@ static int dhcp_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	sock = this->data;
 
 	if (!sock->lsock.interface) {
-		WARN("No \"interface\" setting is defined.  Only unicast DHCP will work.");
+		WARN("No \"interface\" setting is defined.  Only unicast DHCP will work");
 	}
 
 	/*
@@ -635,14 +635,12 @@ static int dhcp_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	sock->suppress_responses = false;
 	cp = cf_pair_find(cs, "suppress_responses");
 	if (cp) {
-		cf_item_parse(cs, "suppress_responses", PW_TYPE_BOOLEAN,
-			      &sock->suppress_responses, NULL);
+		cf_item_parse(cs, "suppress_responses", FR_ITEM_POINTER(PW_TYPE_BOOLEAN, &sock->suppress_responses), NULL);
 	}
 
 	cp = cf_pair_find(cs, "src_interface");
 	if (cp) {
-		cf_item_parse(cs, "src_interface", PW_TYPE_STRING_PTR,
-			      &sock->src_interface, NULL);
+		cf_item_parse(cs, "src_interface", FR_ITEM_POINTER(PW_TYPE_STRING, &sock->src_interface), NULL);
 	} else {
 		sock->src_interface = sock->lsock.interface;
 	}
@@ -655,8 +653,7 @@ static int dhcp_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	if (cp) {
 		memset(&sock->src_ipaddr, 0, sizeof(sock->src_ipaddr));
 		sock->src_ipaddr.ipaddr.ip4addr.s_addr = htonl(INADDR_NONE);
-		rcode = cf_item_parse(cs, "src_ipaddr", PW_TYPE_IPADDR,
-				      &sock->src_ipaddr.ipaddr.ip4addr, NULL);
+		rcode = cf_item_parse(cs, "src_ipaddr", FR_ITEM_POINTER(PW_TYPE_IPV4_ADDR, &sock->src_ipaddr), NULL);
 		if (rcode < 0) return -1;
 
 		sock->src_ipaddr.af = AF_INET;
@@ -671,7 +668,7 @@ static int dhcp_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	memset(client, 0, sizeof(*client));
 	client->ipaddr.af = AF_INET;
 	client->ipaddr.ipaddr.ip4addr.s_addr = ntohl(INADDR_NONE);
-	client->prefix = 0;
+	client->ipaddr.prefix = 0;
 	client->longname = client->shortname = "dhcp";
 	client->secret = client->shortname;
 	client->nas_type = talloc_typed_strdup(sock, "none");

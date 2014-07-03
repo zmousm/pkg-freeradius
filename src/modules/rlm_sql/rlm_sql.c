@@ -37,77 +37,46 @@ RCSID("$Id$")
 #include "rlm_sql.h"
 
 static const CONF_PARSER acct_section_config[] = {
-	{"reference", PW_TYPE_STRING_PTR,
-	  offsetof(sql_acct_section_t, reference), NULL, ".query"},
-	{"logfile", PW_TYPE_STRING_PTR,
-	 offsetof(sql_acct_section_t, logfile), NULL, NULL},
+	{ "reference", FR_CONF_OFFSET(PW_TYPE_STRING, sql_acct_section_t, reference), ".query" },
+	{ "logfile", FR_CONF_OFFSET(PW_TYPE_STRING, sql_acct_section_t, logfile), NULL },
 
 	{NULL, -1, 0, NULL, NULL}
 };
 
 static const CONF_PARSER module_config[] = {
-	{"driver", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,sql_driver_name), NULL, "rlm_sql_null"},
-	{"server", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,sql_server), NULL, "localhost"},
-	{"port", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,sql_port), NULL, ""},
-	{"login", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,sql_login), NULL, ""},
-	{"password", PW_TYPE_STRING_PTR | PW_TYPE_SECRET,
-	 offsetof(rlm_sql_config_t,sql_password), NULL, ""},
-	{"radius_db", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,sql_db), NULL, "radius"},
-	{"read_groups", PW_TYPE_BOOLEAN,
-	 offsetof(rlm_sql_config_t,read_groups), NULL, "yes"},
-	{"readclients", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED,
-	 offsetof(rlm_sql_config_t,do_clients), NULL, NULL},
-	{"read_clients", PW_TYPE_BOOLEAN,
-	 offsetof(rlm_sql_config_t,do_clients), NULL, "no"},
-	{"deletestalesessions", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED,
-	 offsetof(rlm_sql_config_t,deletestalesessions), NULL, NULL},
-	{"delete_stale_sessions", PW_TYPE_BOOLEAN,
-	 offsetof(rlm_sql_config_t,deletestalesessions), NULL, "yes"},
-	{"sql_user_name", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,query_user), NULL, ""},
-	{"logfile", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,logfile), NULL, NULL},
-	{"default_user_profile", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,default_profile), NULL, ""},
-	{"nas_query", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	 offsetof(rlm_sql_config_t,client_query), NULL, NULL},
-	{"client_query", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,client_query), NULL,
-	 "SELECT id,nasname,shortname,type,secret FROM nas"},
-	{"authorize_check_query", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,authorize_check_query), NULL, ""},
-	{"open_query", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,open_query), NULL, NULL},
-	{"authorize_reply_query", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,authorize_reply_query), NULL, NULL},
-	{"authorize_group_check_query", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,authorize_group_check_query), NULL, ""},
-	{"authorize_group_reply_query", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,authorize_group_reply_query), NULL, ""},
-	{"group_membership_query", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,groupmemb_query), NULL, NULL},
+	{ "driver", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_driver_name), "rlm_sql_null" },
+	{ "server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_server), "localhost" },
+	{ "port", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_port), "" },
+	{ "login", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_login), "" },
+	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, rlm_sql_config_t, sql_password), "" },
+	{ "radius_db", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_db), "radius" },
+	{ "read_groups", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sql_config_t, read_groups), "yes" },
+	{ "readclients", FR_CONF_OFFSET(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, rlm_sql_config_t, do_clients), NULL },
+	{ "read_clients", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sql_config_t, do_clients), "no" },
+	{ "deletestalesessions", FR_CONF_OFFSET(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, rlm_sql_config_t, deletestalesessions), NULL },
+	{ "delete_stale_sessions", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sql_config_t, deletestalesessions), "yes" },
+	{ "sql_user_name", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, query_user), "" },
+	{ "logfile", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, logfile), NULL },
+	{ "default_user_profile", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, default_profile), "" },
+	{ "nas_query", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sql_config_t, client_query), NULL },
+	{ "client_query", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, client_query), "SELECT id,nasname,shortname,type,secret FROM nas" },
+	{ "authorize_check_query", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, authorize_check_query), "" },
+	{ "open_query", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, open_query), NULL },
+	{ "authorize_reply_query", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, authorize_reply_query), NULL },
+	{ "authorize_group_check_query", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, authorize_group_check_query), "" },
+	{ "authorize_group_reply_query", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, authorize_group_reply_query), "" },
+	{ "group_membership_query", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, groupmemb_query), NULL },
 #ifdef WITH_SESSION_MGMT
-	{"simul_count_query", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,simul_count_query), NULL, ""},
-	{"simul_verify_query", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,simul_verify_query), NULL, ""},
+	{ "simul_count_query", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, simul_count_query), "" },
+	{ "simul_verify_query", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, simul_verify_query), "" },
 #endif
-	{"safe-characters", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	 offsetof(rlm_sql_config_t,allowed_chars), NULL, NULL},
-	{"safe_characters", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_sql_config_t,allowed_chars), NULL,
-	"@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_: /"},
+	{ "safe-characters", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sql_config_t, allowed_chars), NULL },
+	{ "safe_characters", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, allowed_chars), "@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_: /" },
 
 	/*
 	 *	This only works for a few drivers.
 	 */
-	{"query_timeout", PW_TYPE_INTEGER,
-	 offsetof(rlm_sql_config_t,query_timeout), NULL, NULL},
+	{ "query_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sql_config_t, query_timeout), NULL },
 
 	{NULL, -1, 0, NULL, NULL}
 };
@@ -168,7 +137,7 @@ static ssize_t sql_xlat(void *instance, REQUEST *request, char const *query, cha
 		int numaffected;
 		char buffer[21]; /* 64bit max is 20 decimal chars + null byte */
 
-		if (rlm_sql_query(&handle, inst, query)) {
+		if (rlm_sql_query(&handle, inst, query) != RLM_SQL_OK) {
 			char const *error = (inst->module->sql_error)(handle, inst->config);
 			REDEBUG("SQL query failed: %s", error);
 
@@ -211,7 +180,7 @@ static ssize_t sql_xlat(void *instance, REQUEST *request, char const *query, cha
 		goto finish;
 	} /* else it's a SELECT statement */
 
-	if (rlm_sql_select_query(&handle, inst, query)){
+	if (rlm_sql_select_query(&handle, inst, query) != RLM_SQL_OK){
 		char const *error = (inst->module->sql_error)(handle, inst->config);
 		REDEBUG("SQL query failed: %s", error);
 		ret = -1;
@@ -259,7 +228,7 @@ static ssize_t sql_xlat(void *instance, REQUEST *request, char const *query, cha
 
 	(inst->module->sql_finish_select_query)(handle, inst->config);
 
-	finish:
+finish:
 	sql_release_socket(inst, handle);
 
 	return ret;
@@ -283,11 +252,11 @@ static int generate_sql_clients(rlm_sql_t *inst)
 		return -1;
 	}
 
-	if (rlm_sql_select_query(&handle, inst, inst->config->client_query)){
+	if (rlm_sql_select_query(&handle, inst, inst->config->client_query) != RLM_SQL_OK){
 		return -1;
 	}
 
-	while((rlm_sql_fetch_row(&handle, inst) == 0) && (row = handle->row)) {
+	while ((rlm_sql_fetch_row(&handle, inst) == 0) && (row = handle->row)) {
 		char *server = NULL;
 		i++;
 
@@ -452,7 +421,7 @@ int sql_set_user(rlm_sql_t *inst, REQUEST *request, char const *username)
 }
 
 
-static int sql_get_grouplist(rlm_sql_t *inst, rlm_sql_handle_t *handle, REQUEST *request,
+static int sql_get_grouplist(rlm_sql_t *inst, rlm_sql_handle_t **handle, REQUEST *request,
 			     rlm_sql_grouplist_t **phead)
 {
 	char    *expanded = NULL;
@@ -473,25 +442,26 @@ static int sql_get_grouplist(rlm_sql_t *inst, rlm_sql_handle_t *handle, REQUEST 
 		return -1;
 	}
 
-	ret = rlm_sql_select_query(&handle, inst, expanded);
+	ret = rlm_sql_select_query(handle, inst, expanded);
 	talloc_free(expanded);
-	if (ret < 0) {
+	if (ret != RLM_SQL_OK) {
 		return -1;
 	}
 
-	while (rlm_sql_fetch_row(&handle, inst) == 0) {
-		row = handle->row;
+	while (rlm_sql_fetch_row(handle, inst) == 0) {
+		row = (*handle)->row;
 		if (!row)
 			break;
+
 		if (!row[0]){
 			RDEBUG("row[0] returned NULL");
-			(inst->module->sql_finish_select_query)(handle, inst->config);
+			(inst->module->sql_finish_select_query)(*handle, inst->config);
 			talloc_free(entry);
 			return -1;
 		}
 
 		if (!*phead) {
-			*phead = talloc_zero(handle, rlm_sql_grouplist_t);
+			*phead = talloc_zero(*handle, rlm_sql_grouplist_t);
 			entry = *phead;
 		} else {
 			entry->next = talloc_zero(*phead, rlm_sql_grouplist_t);
@@ -503,7 +473,7 @@ static int sql_get_grouplist(rlm_sql_t *inst, rlm_sql_handle_t *handle, REQUEST 
 		num_groups++;
 	}
 
-	(inst->module->sql_finish_select_query)(handle, inst->config);
+	(inst->module->sql_finish_select_query)(*handle, inst->config);
 
 	return num_groups;
 }
@@ -548,7 +518,7 @@ static int CC_HINT(nonnull (1 ,2, 4)) sql_groupcmp(void *instance, REQUEST *requ
 	/*
 	 *	Get the list of groups this user is a member of
 	 */
-	if (sql_get_grouplist(inst, handle, request, &head) < 0) {
+	if (sql_get_grouplist(inst, &handle, request, &head) < 0) {
 		REDEBUG("Error getting group membership");
 		sql_release_socket(inst, handle);
 		return 1;
@@ -566,15 +536,14 @@ static int CC_HINT(nonnull (1 ,2, 4)) sql_groupcmp(void *instance, REQUEST *requ
 
 	/* Free the grouplist */
 	talloc_free(head);
-	sql_release_socket(inst,handle);
+	sql_release_socket(inst, handle);
 
-	RDEBUG("sql_groupcmp finished: User is NOT a member of group %s",
-	       check->vp_strvalue);
+	RDEBUG("sql_groupcmp finished: User is NOT a member of group %s", check->vp_strvalue);
 
 	return 1;
 }
 
-static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm_sql_handle_t *handle,
+static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm_sql_handle_t **handle,
 					  bool *dofallthrough)
 {
 	rlm_rcode_t		rcode = RLM_MODULE_NOOP;
@@ -626,7 +595,7 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm
 				goto finish;
 			}
 
-			rows = sql_getvpdata(inst, &handle, request, &check_tmp, expanded);
+			rows = sql_getvpdata(inst, handle, request, &check_tmp, expanded);
 			TALLOC_FREE(expanded);
 			if (rows < 0) {
 				REDEBUG("Error retrieving check pairs for group %s", entry->name);
@@ -663,7 +632,7 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm
 				goto finish;
 			}
 
-			rows = sql_getvpdata(inst, &handle, request->reply, &reply_tmp, expanded);
+			rows = sql_getvpdata(inst, handle, request->reply, &reply_tmp, expanded);
 			TALLOC_FREE(expanded);
 			if (rows < 0) {
 				REDEBUG("Error retrieving reply pairs for group %s", entry->name);
@@ -846,7 +815,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		       inst->config->sql_driver_name,
 		       dlerror());
 		ERROR("Make sure it (and all its dependent libraries!)"
-		       "are in the search path of your system's ld.");
+		       "are in the search path of your system's ld");
 		return -1;
 	}
 
@@ -912,7 +881,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	if (inst->config->do_clients) {
 		if (generate_sql_clients(inst) == -1){
-			ERROR("Failed to load clients from SQL.");
+			ERROR("Failed to load clients from SQL");
 			return -1;
 		}
 	}
@@ -1041,7 +1010,7 @@ skipreply:
 		rlm_rcode_t ret;
 
 		RDEBUG3("... falling-through to group processing");
-		ret = rlm_sql_process_groups(inst, request, handle, &dofallthrough);
+		ret = rlm_sql_process_groups(inst, request, &handle, &dofallthrough);
 		switch (ret) {
 			/*
 			 *	Nothing bad happened, continue...
@@ -1095,7 +1064,7 @@ skipreply:
 			goto error;
 		}
 
-		ret = rlm_sql_process_groups(inst, request, handle, &dofallthrough);
+		ret = rlm_sql_process_groups(inst, request, &handle, &dofallthrough);
 		switch (ret) {
 			/*
 			 *	Nothing bad happened, continue...
@@ -1246,7 +1215,6 @@ static int acct_redundant(rlm_sql_t *inst, REQUEST *request, sql_acct_section_t 
 		 */
 		sql_ret = rlm_sql_query(&handle, inst, expanded);
 		TALLOC_FREE(expanded);
-
 		if (sql_ret == RLM_SQL_RECONNECT) {
 			rcode = RLM_MODULE_FAIL;
 			goto finish;
@@ -1334,7 +1302,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST * req
 	VALUE_PAIR		*vp;
 	int			ret;
 	uint32_t		nas_addr = 0;
-	int			nas_port = 0;
+	uint32_t		nas_port = 0;
 
 	char 			*expanded = NULL;
 
@@ -1365,7 +1333,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST * req
 		return RLM_MODULE_FAIL;
 	}
 
-	if (rlm_sql_select_query(&handle, inst, expanded)) {
+	if (rlm_sql_select_query(&handle, inst, expanded) != RLM_SQL_OK) {
 		rcode = RLM_MODULE_FAIL;
 		goto finish;
 	}
@@ -1387,7 +1355,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST * req
 	(inst->module->sql_finish_select_query)(handle, inst->config);
 	TALLOC_FREE(expanded);
 
-	if(request->simul_count < request->simul_max) {
+	if (request->simul_count < request->simul_max) {
 		rcode = RLM_MODULE_OK;
 		goto finish;
 	}
@@ -1408,7 +1376,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST * req
 		goto finish;
 	}
 
-	if(rlm_sql_select_query(&handle, inst, expanded)) {
+	if (rlm_sql_select_query(&handle, inst, expanded) != RLM_SQL_OK) {
 		goto finish;
 	}
 

@@ -39,14 +39,10 @@ typedef enum {
 
 
 static const CONF_PARSER module_config[] = {
-	{ "timer_expire", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, timer_limit), NULL, "600"},
-	{ "max_sessions", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, max_sessions), NULL, "2048"},
-	{ "max_trips_per_session", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, max_trips_per_session), NULL, NULL},
-	{ "max_round_trips", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, max_trips_per_session), NULL, "6"},
+	{ "timer_expire", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, timer_limit), "600" },
+	{ "max_sessions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_sessions), "2048" },
+	{ "max_trips_per_session", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_trips_per_session), NULL },
+	{ "max_round_trips", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_trips_per_session), "6" },
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
@@ -442,7 +438,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 	 */
 	inst->session_tree = rbtree_create(securid_session_cmp, NULL, 0);
 	if (!inst->session_tree) {
-		ERROR("rlm_securid: Cannot initialize session tree.");
+		ERROR("rlm_securid: Cannot initialize session tree");
 		return -1;
 	}
 
@@ -467,12 +463,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	 *	a User-Name attribute.
 	 */
 	if (!request->username) {
-		AUTH("rlm_securid: Attribute \"User-Name\" is required for authentication.");
+		AUTH("rlm_securid: Attribute \"User-Name\" is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 
 	if (!request->password) {
-		RAUTH("Attribute \"Password\" is required for authentication.");
+		RAUTH("Attribute \"Password\" is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 
@@ -524,7 +520,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 
 		/* Mark the packet as a Acceess-Challenge Packet */
 		request->reply->code = PW_CODE_ACCESS_CHALLENGE;
-		RDEBUG("Sending Access-Challenge.");
+		RDEBUG("Sending Access-Challenge");
 		rcode = RLM_MODULE_HANDLED;
 		break;
 

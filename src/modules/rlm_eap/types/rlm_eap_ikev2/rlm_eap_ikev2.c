@@ -146,38 +146,22 @@ static int ikev2_attach(CONF_SECTION *conf, void **instance)
     char *server_idtype=NULL;
 
     CONF_PARSER module_config[] = {
-	{  "ca_file", PW_TYPE_STRING_PTR,
-	    offsetof(ikev2_ctx,trusted),NULL,NULL },
-	{  "private_key_file",PW_TYPE_STRING_PTR,
-	    offsetof(ikev2_ctx,pkfile),NULL,NULL },
-	{  "private_key_password",PW_TYPE_STRING_PTR,
-	    offsetof(ikev2_ctx,pkfile_pwd),NULL,NULL },
-	{  "certificate_file", PW_TYPE_STRING_PTR,
-	    offsetof(ikev2_ctx,certificate_file),NULL,NULL },
-	{  "crl_file", PW_TYPE_STRING_PTR,
-	    offsetof(ikev2_ctx,crl_file),NULL,NULL },
-	{   "id", PW_TYPE_STRING_PTR,
-	    offsetof(ikev2_ctx,id),NULL,NULL },
-	{  "fragment_size",PW_TYPE_INTEGER,
-	    offsetof(ikev2_ctx,max_fragment_size),NULL,IKEv2_DEFAULT_MAX_FRAGMENT_SIZE_STR},
-	{  "dh_counter_max", PW_TYPE_INTEGER,
-	    offsetof(ikev2_ctx,DHCounterMax),NULL,IKEv2_DEFAULT_dh_counter_max_STR},
-	{  "default_authtype",PW_TYPE_STRING_PTR,
-	    0,&default_authtype,"both" },
-	{  "usersfile",PW_TYPE_FILE_INPUT,
-	    0,&usersfilename,"${confdir}/users" },
-	{  "server_authtype",PW_TYPE_STRING_PTR,
-	    0,&server_authtype,"secret" },
-	{  "idtype",PW_TYPE_STRING_PTR,
-	    0,&server_idtype,IKEv2_DEFAULT_IDTYPE_STR},
-	{  "certreq",PW_TYPE_BOOLEAN,
-	    offsetof(ikev2_ctx,sendCertReq),NULL,"no"},
-	{  "fast_dh_exchange",PW_TYPE_BOOLEAN,
-	    offsetof(ikev2_ctx,enableFastDHEx),NULL,"no"},
-	{  "fast_timer_expire",PW_TYPE_INTEGER,
-	    offsetof(ikev2_ctx,fastExpire),NULL,"900"},
-	{   "enable_fast_reauth",PW_TYPE_BOOLEAN,
-	    offsetof(ikev2_ctx,enableFastReconnect),NULL,"yes"},
+	{ "ca_file", FR_CONF_OFFSET(PW_TYPE_STRING, ikev2_ctx, trusted), NULL  },
+	{ "private_key_file", FR_CONF_OFFSET(PW_TYPE_STRING, ikev2_ctx, pkfile), NULL  },
+	{ "private_key_password", FR_CONF_OFFSET(PW_TYPE_STRING, ikev2_ctx, pkfile_pwd), NULL  },
+	{ "certificate_file", FR_CONF_OFFSET(PW_TYPE_STRING, ikev2_ctx, certificate_file), NULL  },
+	{ "crl_file", FR_CONF_OFFSET(PW_TYPE_STRING, ikev2_ctx, crl_file), NULL  },
+	{ "id", FR_CONF_OFFSET(PW_TYPE_STRING, ikev2_ctx, id), NULL  },
+	{ "fragment_size", FR_CONF_OFFSET(PW_TYPE_INTEGER, ikev2_ctx, max_fragment_size), IKEv2_DEFAULT_MAX_FRAGMENT_SIZE_STR },
+	{ "dh_counter_max", FR_CONF_OFFSET(PW_TYPE_INTEGER, ikev2_ctx, DHCounterMax), IKEv2_DEFAULT_dh_counter_max_STR },
+	{ "default_authtype", FR_CONF_POINTER(PW_TYPE_STRING, &default_authtype), "both" },
+	{ "usersfile", FR_CONF_POINTER(PW_TYPE_FILE_INPUT, &usersfilename),"${confdir}/users" },
+	{ "server_authtype", FR_CONF_POINTER(PW_TYPE_STRING, &server_authtype), "secret" },
+	{ "idtype", FR_CONF_POINTER(PW_TYPE_STRING, &server_idtype), IKEv2_DEFAULT_IDTYPE_STR },
+	{ "certreq", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, ikev2_ctx, sendCertReq), "no" },
+	{ "fast_dh_exchange", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, ikev2_ctx, enableFastDHEx), "no" },
+	{ "fast_timer_expire", FR_CONF_OFFSET(PW_TYPE_INTEGER, ikev2_ctx, fastExpire), "900" },
+	{ "enable_fast_reauth", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, ikev2_ctx, enableFastReconnect), "yes" },
 
 
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
@@ -275,8 +259,8 @@ static int ikev2_initiate(void *instance, eap_handler_t *handler)
 {
     INFO(IKEv2_LOG_PREFIX "Initiate connection!");
 // This is the way for silent discarding behavior
-//    handler->request->options|=RAD_REQUEST_OPTION_FAKE_REQUEST;
-//    handler->request->options|=RAD_REQUEST_OPTION_DONT_CACHE;
+//    handler->request->log.lvl|=RAD_REQUEST_OPTION_FAKE_REQUEST;
+//    handler->request->log.lvl|=RAD_REQUEST_OPTION_DONT_CACHE;
 //    handler->request->reply->code=0;
 //    return 0;
 
@@ -292,7 +276,7 @@ static int ikev2_initiate(void *instance, eap_handler_t *handler)
     session = FindSessionByFastid(i2, (char const *)eap_username);
     if(!session) {
 	if(IKEv2BeginSession( i2, &session, IKEv2_STY_INITIATOR ) != IKEv2_RET_OK) {
-	    ERROR(IKEv2_LOG_PREFIX "Can't initialize IKEv2 session.");
+	    ERROR(IKEv2_LOG_PREFIX "Can't initialize IKEv2 session");
 	    return 1;
 	}
     } else {

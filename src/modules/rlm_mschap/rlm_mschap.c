@@ -143,15 +143,15 @@ typedef struct rlm_mschap_t {
 	bool		require_strong;
 	bool		with_ntdomain_hack;	/* this should be in another module */
 	char const	*xlat_name;
-	char		*ntlm_auth;
-	int		ntlm_auth_timeout;
-	char		*ntlm_cpw;
-	char		*ntlm_cpw_username;
-	char		*ntlm_cpw_domain;
-	char		*local_cpw;
+	char const	*ntlm_auth;
+	uint32_t	ntlm_auth_timeout;
+	char const	*ntlm_cpw;
+	char const	*ntlm_cpw_username;
+	char const	*ntlm_cpw_domain;
+	char const	*local_cpw;
 	char const	*auth_type;
 	bool		allow_retry;
-	char		*retry_msg;
+	char const	*retry_msg;
 #ifdef WITH_OPEN_DIRECTORY
 	bool		open_directory;
 #endif
@@ -192,8 +192,7 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 		 *	for MS-CHAPv1
 		 */
 		if (chap_challenge->length == 8) {
-			RDEBUG2(" mschap1: %02x",
-			       chap_challenge->vp_octets[0]);
+			RDEBUG2("mschap1: %02x", chap_challenge->vp_octets[0]);
 			data = chap_challenge->vp_octets;
 			data_len = 8;
 
@@ -531,40 +530,27 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 
 
 static const CONF_PARSER passchange_config[] = {
-	{ "ntlm_auth",   PW_TYPE_STRING_PTR,
-	  offsetof(rlm_mschap_t, ntlm_cpw), NULL,  NULL },
-	{ "ntlm_auth_username",   PW_TYPE_STRING_PTR,
-	  offsetof(rlm_mschap_t, ntlm_cpw_username), NULL,  NULL },
-	{ "ntlm_auth_domain",   PW_TYPE_STRING_PTR,
-	  offsetof(rlm_mschap_t, ntlm_cpw_domain), NULL,  NULL },
-	{ "local_cpw",   PW_TYPE_STRING_PTR,
-	  offsetof(rlm_mschap_t, local_cpw), NULL,  NULL },
+	{ "ntlm_auth", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_mschap_t, ntlm_cpw), NULL },
+	{ "ntlm_auth_username", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_mschap_t, ntlm_cpw_username), NULL },
+	{ "ntlm_auth_domain", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_mschap_t, ntlm_cpw_domain), NULL },
+	{ "local_cpw", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_mschap_t, local_cpw), NULL },
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 static const CONF_PARSER module_config[] = {
 	/*
 	 *	Cache the password by default.
 	 */
-	{ "use_mppe",    PW_TYPE_BOOLEAN,
-	  offsetof(rlm_mschap_t,use_mppe), NULL, "yes" },
-	{ "require_encryption",    PW_TYPE_BOOLEAN,
-	  offsetof(rlm_mschap_t,require_encryption), NULL, "no" },
-	{ "require_strong",    PW_TYPE_BOOLEAN,
-	  offsetof(rlm_mschap_t,require_strong), NULL, "no" },
-	{ "with_ntdomain_hack",     PW_TYPE_BOOLEAN,
-	  offsetof(rlm_mschap_t,with_ntdomain_hack), NULL, "yes" },
-	{ "ntlm_auth",   PW_TYPE_STRING_PTR,
-	  offsetof(rlm_mschap_t, ntlm_auth), NULL,  NULL },
-	{ "ntlm_auth_timeout",   PW_TYPE_INTEGER,
-	  offsetof(rlm_mschap_t, ntlm_auth_timeout), NULL,  NULL },
-	{ "passchange", PW_TYPE_SUBSECTION, 0, NULL, (void const *) passchange_config },
-	{ "allow_retry",   PW_TYPE_BOOLEAN,
-	  offsetof(rlm_mschap_t, allow_retry), NULL,  "yes" },
-	{ "retry_msg",   PW_TYPE_STRING_PTR,
-	  offsetof(rlm_mschap_t, retry_msg), NULL,  NULL },
+	{ "use_mppe", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_mschap_t, use_mppe), "yes" },
+	{ "require_encryption", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_mschap_t, require_encryption), "no" },
+	{ "require_strong", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_mschap_t, require_strong), "no" },
+	{ "with_ntdomain_hack", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_mschap_t, with_ntdomain_hack), "yes" },
+	{ "ntlm_auth", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_mschap_t, ntlm_auth), NULL },
+	{ "ntlm_auth_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_mschap_t, ntlm_auth_timeout), NULL },
+	{ "passchange", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) passchange_config },
+	{ "allow_retry", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_mschap_t, allow_retry), "yes" },
+	{ "retry_msg", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_mschap_t, retry_msg), NULL },
 #ifdef WITH_OPEN_DIRECTORY
-	{ "use_open_directory",    PW_TYPE_BOOLEAN,
-	  offsetof(rlm_mschap_t,open_directory), NULL, "yes" },
+	{ "use_open_directory", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_mschap_t, open_directory), "yes" },
 #endif
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
@@ -1100,7 +1086,7 @@ static int CC_HINT(nonnull (1, 2, 4, 5 ,6)) do_mschap(rlm_mschap_t *inst, REQUES
 				return -648;
 			}
 
-			RDEBUG2("External script failed.");
+			RDEBUG2("External script failed");
 			p = strchr(buffer, '\n');
 			if (p) *p = '\0';
 
@@ -1372,7 +1358,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void * instance, REQUEST *r
 		 *	Password is not required.
 		 */
 		if ((smb_ctrl->vp_integer & ACB_PWNOTREQ) != 0) {
-			RDEBUG2("SMB-Account-Ctrl says no password is required.");
+			RDEBUG2("SMB-Account-Ctrl says no password is required");
 			return RLM_MODULE_OK;
 		}
 	}
@@ -1707,7 +1693,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void * instance, REQUEST *r
 		 *  Otherwise OD will determine auth success/fail.
 		 */
 		if (!nt_password && inst->open_directory) {
-			RDEBUG2("No NT-Password configured. Trying OpenDirectory Authentication.");
+			RDEBUG2("No NT-Password configured. Trying OpenDirectory Authentication");
 			int odStatus = od_mschap_auth(request, challenge, username);
 			if (odStatus != RLM_MODULE_NOOP) {
 				return odStatus;

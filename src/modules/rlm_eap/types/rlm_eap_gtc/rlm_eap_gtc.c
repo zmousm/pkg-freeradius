@@ -41,11 +41,9 @@ typedef struct rlm_eap_gtc_t {
 } rlm_eap_gtc_t;
 
 static CONF_PARSER module_config[] = {
-	{ "challenge", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_gtc_t, challenge), NULL, "Password: " },
+	{ "challenge", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_gtc_t, challenge), "Password: " },
 
-	{ "auth_type", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_gtc_t, auth_type_name), NULL, "PAP" },
+	{ "auth_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_gtc_t, auth_type_name), "PAP" },
 
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
@@ -176,7 +174,7 @@ static int CC_HINT(nonnull) mod_authenticate(void *instance, eap_handler_t *hand
 		 */
 		vp = pairfind(request->config_items, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
 		if (!vp) {
-			REDEBUG2("Cleartext-Password is required for authentication.");
+			REDEBUG2("Cleartext-Password is required for authentication");
 			eap_ds->request->code = PW_EAP_FAILURE;
 			return 0;
 		}

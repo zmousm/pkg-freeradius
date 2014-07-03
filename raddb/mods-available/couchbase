@@ -1,14 +1,15 @@
 couchbase {
 	#
-	# List of Couchbase hosts semi-colon separated.  Ports are optional if servers
-	# are listening on the standard port.  Complete pool urls are preferred.
+	# List of Couchbase hosts (hosts may be space, tab, comma or semi-colon separated).
+	# Ports are optional if servers are listening on the standard port.
+	# Complete pool urls are preferred.
 	#
-	server = "http://cb01.blargs.com:8091/pools/;http://cb04.blargs.com:8091/pools/"
+	server = "http://cb01.blargs.com:8091/pools/ http://cb04.blargs.com:8091/pools/"
 
 	# Couchbase bucket name
 	bucket = "radius"
 
-	# Couchbase bucket password
+	# Couchbase bucket password (optional)
 	#password = "password"
 
 	# Couchbase accounting document key (unlang supported)
@@ -67,10 +68,10 @@ couchbase {
 	#
 	pool {
 		# Number of connections to start
-		start = 5
+		start = ${thread[pool].start_servers}
 
 		# Minimum number of connections to keep open
-		min = 5
+		min = ${thread[pool].min_spare_servers}
 
 		# Maximum number of connections
 		#
@@ -78,13 +79,13 @@ couchbase {
 		# is requested, the request will NOT get a connection.
 		#
 		# NOTE: This should be greater than or equal to "min" above.
-		max = 20
+		max = ${thread[pool].max_servers}
 
 		# Spare connections to be left idle
 		#
 		# NOTE: Idle connections WILL be closed if "idle_timeout"
 		# is set.  This should be less than or equal to "max" above.
-		spare = 15
+		spare = ${thread[pool].max_spare_servers}
 
 		# Number of uses before the connection is closed
 		#

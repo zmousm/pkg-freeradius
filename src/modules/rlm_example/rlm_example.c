@@ -35,21 +35,21 @@ RCSID("$Id$")
  */
 typedef struct rlm_example_t {
 	bool		boolean;
-	int		value;
-	char		*string;
-	uint32_t	ipaddr;
+	uint32_t	value;
+	char const	*string;
+	fr_ipaddr_t	ipaddr;
 } rlm_example_t;
 
 /*
  *	A mapping of configuration file names to internal variables.
  */
 static const CONF_PARSER module_config[] = {
-  { "integer", PW_TYPE_INTEGER,    offsetof(rlm_example_t,value), NULL,   "1" },
-  { "boolean", PW_TYPE_BOOLEAN,    offsetof(rlm_example_t,boolean), NULL, "no"},
-  { "string",  PW_TYPE_STRING_PTR, offsetof(rlm_example_t,string), NULL,  NULL},
-  { "ipaddr",  PW_TYPE_IPADDR,     offsetof(rlm_example_t,ipaddr), NULL,  "*" },
+	{ "integer", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_example_t, value), "1" },
+	{ "boolean", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_example_t, boolean), "no" },
+	{ "string", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_example_t, string), NULL },
+	{ "ipaddr", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR, rlm_example_t, ipaddr), "*" },
 
-  { NULL, -1, 0, NULL, NULL }		/* end the list */
+	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
 
@@ -109,7 +109,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED 
 	 *  The server will take care of sending it to the user.
 	 */
 	request->reply->code = PW_CODE_ACCESS_CHALLENGE;
-	RDEBUG("Sending Access-Challenge.");
+	RDEBUG("Sending Access-Challenge");
 
 	return RLM_MODULE_HANDLED;
 }

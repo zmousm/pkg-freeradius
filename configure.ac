@@ -938,7 +938,8 @@ AC_CHECK_HEADERS( \
   fnmatch.h \
   sia.h \
   siad.h \
-  features.h
+  features.h \
+  limits.h
 )
 
 dnl #
@@ -1309,6 +1310,7 @@ AC_CHECK_FUNCS( \
   inet_aton \
   inet_pton \
   inet_ntop \
+  mallopt \
   setlinebuf \
   setvbuf \
   getusershell \
@@ -1432,7 +1434,12 @@ if test -d $srcdir/.git -a "x$GIT" = "xyes"; then
   AC_DEFINE_UNQUOTED([RADIUSD_VERSION_COMMIT],[${RADIUSD_VERSION_COMMIT}],[Commit HEAD at time of configuring])
 fi
 
+dnl #
+dnl #  check for some compiler features
+dnl #
 FR_TLS
+FR_HAVE_BUILTIN_CHOOSE_EXPR
+FR_HAVE_BUILTIN_TYPES_COMPATIBLE_P
 
 dnl #############################################################
 dnl #

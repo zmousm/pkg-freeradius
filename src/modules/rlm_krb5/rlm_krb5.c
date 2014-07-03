@@ -32,8 +32,8 @@ RCSID("$Id$")
 #include "krb5.h"
 
 static const CONF_PARSER module_config[] = {
-	{ "keytab", PW_TYPE_STRING_PTR, offsetof(rlm_krb5_t, keytabname), NULL, NULL },
-	{ "service_principal", PW_TYPE_STRING_PTR, offsetof(rlm_krb5_t,service_princ), NULL, NULL },
+	{ "keytab", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_krb5_t, keytabname), NULL },
+	{ "service_principal", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_krb5_t, service_princ), NULL },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -345,7 +345,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 
 #ifdef KRB5_IS_THREAD_SAFE
 	conn = fr_connection_get(inst->pool);
-	if (!conn) REDEBUG("All krb5 contexts are in use");
+	if (!conn) return RLM_MODULE_FAIL;
 #else
 	conn = inst->conn;
 #endif

@@ -32,8 +32,6 @@ RCSID("$Id$")
 #include	<freeradius-devel/base64.h>
 
 #include	<ctype.h>
-#include	<limits.h>
-
 typedef struct xlat_t {
 	char			name[MAX_STRING_LEN];	//!< Name of the xlat expansion.
 	int			length;			//!< Length of name.
@@ -55,9 +53,6 @@ typedef enum {
 	XLAT_ALTERNATE		//!< xlat conditional syntax :-
 } xlat_state_t;
 
-#define XLAT_ATTR_NUMBER 65536	//!< The number of times this attribute appears in a list.
-#define XLAT_ATTR_CONCAT 65537	//!< All instance of this attribute should be concatenated into a string.
-
 struct xlat_exp {
 	char const *fmt;	//!< The format string.
 	size_t len;		//!< Length of the format string.
@@ -65,7 +60,7 @@ struct xlat_exp {
 	DICT_ATTR const *da;	//!< the name of the dictionary attribute
 
 	int num;		//!< attribute number
-	int tag;		//!< attribute tag
+	int8_t tag;		//!< attribute tag
 	pair_lists_t list;	//!< list of which attribute
 	request_refs_t ref;	//!< outer / this / ...
 
@@ -174,10 +169,10 @@ static ssize_t xlat_integer(UNUSED void *instance, REQUEST *request,
 	 *	IP addresses are treated specially, as parsing functions assume the value
 	 *	is bigendian and will convert it for us.
 	 */
-	case PW_TYPE_IPADDR:
+	case PW_TYPE_IPV4_ADDR:
 		return snprintf(out, outlen, "%u", htonl(vp->vp_ipaddr));
 
-	case PW_TYPE_IPV4PREFIX:
+	case PW_TYPE_IPV4_PREFIX:
 		return snprintf(out, outlen, "%u", htonl((*(uint32_t *)(vp->vp_ipv4prefix + 2))));
 
 	case PW_TYPE_INTEGER:
@@ -197,10 +192,10 @@ static ssize_t xlat_integer(UNUSED void *instance, REQUEST *request,
 	case PW_TYPE_SIGNED:
 		return snprintf(out, outlen, "%i", vp->vp_signed);
 
-	case PW_TYPE_IPV6ADDR:
+	case PW_TYPE_IPV6_ADDR:
 		return fr_prints_uint128(out, outlen, ntohlll(*(uint128_t const *) &vp->vp_ipv6addr));
 
-	case PW_TYPE_IPV6PREFIX:
+	case PW_TYPE_IPV6_PREFIX:
 		return fr_prints_uint128(out, outlen, ntohlll(*(uint128_t const *) &(vp->vp_ipv6prefix[2])));
 
 	default:
@@ -252,6 +247,29 @@ static ssize_t xlat_hex(UNUSED void *instance, REQUEST *request,
 	}
 
 	return len * 2;
+}
+
+/** Return the tag of an attribute reference
+ *
+ */
+static ssize_t xlat_tag(UNUSED void *instance, REQUEST *request,
+		        char const *fmt, char *out, size_t outlen)
+{
+	VALUE_PAIR *vp;
+
+	while (isspace((int) *fmt)) fmt++;
+
+	if ((radius_get_vp(&vp, request, fmt) < 0) || !vp) {
+		*out = '\0';
+		return 0;
+	}
+
+	if (!vp->da->flags.has_tag || !TAG_VALID(vp->tag)) {
+		*out = '\0';
+		return 0;
+	}
+
+	return snprintf(out, outlen, "%u", vp->tag);
 }
 
 /** Print out attribute info
@@ -473,7 +491,7 @@ static ssize_t xlat_debug(UNUSED void *instance, REQUEST *request,
 	/*
 	 *  Expand to previous (or current) level
 	 */
-	snprintf(out, outlen, "%d", request->options & RAD_REQUEST_OPTION_DEBUG4);
+	snprintf(out, outlen, "%d", request->log.lvl & RAD_REQUEST_OPTION_DEBUG4);
 
 	/*
 	 *  Assume we just want to get the current value and NOT set it to 0
@@ -483,13 +501,13 @@ static ssize_t xlat_debug(UNUSED void *instance, REQUEST *request,
 
 	level = atoi(fmt);
 	if (level == 0) {
-		request->options = RAD_REQUEST_OPTION_NONE;
-		request->radlog = NULL;
+		request->log.lvl = RAD_REQUEST_OPTION_NONE;
+		request->log.func = NULL;
 	} else {
 		if (level > 4) level = 4;
 
-		request->options = level;
-		request->radlog = vradlog_request;
+		request->log.lvl = level;
+		request->log.func = vradlog_request;
 	}
 
 	done:
@@ -558,7 +576,7 @@ int xlat_register(char const *name, RAD_XLAT_FUNC func, RADIUS_ESCAPE_STRING esc
 
 		xlat_root = rbtree_create(xlat_cmp, free, 0);
 		if (!xlat_root) {
-			DEBUG("xlat_register: Failed to create tree.");
+			DEBUG("xlat_register: Failed to create tree");
 			return -1;
 		}
 
@@ -581,6 +599,7 @@ int xlat_register(char const *name, RAD_XLAT_FUNC func, RADIUS_ESCAPE_STRING esc
 		XLAT_REGISTER(strlen);
 		XLAT_REGISTER(length);
 		XLAT_REGISTER(hex);
+		XLAT_REGISTER(tag);
 		XLAT_REGISTER(string);
 		XLAT_REGISTER(xlat);
 		XLAT_REGISTER(module);
@@ -1032,18 +1051,18 @@ static ssize_t xlat_tokenize_expansion(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **
 
 		p = q;
 		if (*p== '#') {
-			node->num = XLAT_ATTR_NUMBER;
+			node->num = NUM_COUNT;
 			p++;
 
 		} else if (*p == '*') {
-			node->num = XLAT_ATTR_CONCAT;
+			node->num = NUM_JOIN;
 			p++;
 
 		} else if (isdigit((int) *p)) {
 			num = strtoul(p, &end, 10);
-			if ((num == ULONG_MAX) || (num >= XLAT_ATTR_NUMBER)) {
+			if (num > 1000) {
 				talloc_free(node);
-				*error = "Invalid number";
+				*error = "Invalid array reference";
 				return - (p - fmt);
 			}
 			p = end;
@@ -1068,6 +1087,8 @@ static ssize_t xlat_tokenize_expansion(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **
 			*error = "Unexpected text after array reference";
 			return - (p - fmt);
 		}
+	} else {
+		node->num = NUM_ANY;
 	}
 
 	rad_assert(!p || (p == brace));
@@ -1293,17 +1314,19 @@ static void xlat_tokenize_debug(xlat_exp_t const *node, int lvl)
 			rad_assert(node->da != NULL);
 			DEBUG("%.*sattribute --> %s", lvl, xlat_tabs, node->da->name);
 			rad_assert(node->child == NULL);
-			if ((node->tag != 0) || (node->num != 0)) {
+			if ((node->tag != TAG_ANY) || (node->num != NUM_ANY)) {
 				DEBUG("%.*s{", lvl, xlat_tabs);
 
 				DEBUG("%.*sref  %d", lvl + 1, xlat_tabs, node->ref);
 				DEBUG("%.*slist %d", lvl + 1, xlat_tabs, node->list);
 
-				if (node->tag) DEBUG("%.*stag %d", lvl + 1, xlat_tabs, node->tag);
-				if (node->num) {
-					if (node->num == XLAT_ATTR_NUMBER) {
+				if (node->tag != TAG_ANY) {
+					DEBUG("%.*stag %d", lvl + 1, xlat_tabs, node->tag);
+				}
+				if (node->num != NUM_ANY) {
+					if (node->num == NUM_COUNT) {
 						DEBUG("%.*s[#]", lvl + 1, xlat_tabs);
-					} else if (node->num == XLAT_ATTR_CONCAT) {
+					} else if (node->num == NUM_JOIN) {
 						DEBUG("%.*s[*]", lvl + 1, xlat_tabs);
 					} else {
 						DEBUG("%.*s[%d]", lvl + 1, xlat_tabs, node->num);
@@ -1400,14 +1423,14 @@ size_t xlat_sprint(char *buffer, size_t bufsize, xlat_exp_t const *node)
 				p += strlen(p);
 			}
 
-			if (node->num != 0) {
+			if (node->num != NUM_ANY) {
 				*(p++) = '[';
 				switch (node->num) {
-				case XLAT_ATTR_NUMBER:
+				case NUM_COUNT:
 					*(p++) = '#';
 					break;
 
-				case XLAT_ATTR_CONCAT:
+				case NUM_JOIN:
 					*(p++) = '*';
 					break;
 
@@ -1542,8 +1565,8 @@ static ssize_t xlat_tokenize_request(REQUEST *request, char const *fmt, xlat_exp
 }
 
 
-static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, pair_lists_t list, DICT_ATTR const *da, int8_t tag,
-			int num, bool return_null)
+static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, pair_lists_t list, DICT_ATTR const *da,
+			int8_t tag, int num, bool return_null)
 {
 	VALUE_PAIR *vp, *vps = NULL, *myvp = NULL;
 	RADIUS_PACKET *packet = NULL;
@@ -1601,17 +1624,15 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, pair_lists_t list, DI
 	}
 
 	/*
-	 *	Now that we have the list, etc. handled,
-	 *	find the VP and print it.
+	 *	Now we have the list, check to see if we have an attribute in
+	 *	the request, if we do, it takes precedence over the virtual
+	 *	attributes.
+	 *
+	 *	This allows users to manipulate virtual attributes as if they
+	 *	were real ones.
 	 */
-	if ((da->vendor != 0) || (da->attr < 256) || (list == PAIR_LIST_CONTROL)) {
-	print_vp:
-		vp = pairfind(vps, da->attr, da->vendor, tag);
-		if (!vp) {
-			return NULL;
-		}
-		goto do_print;
-	}
+	vp = pairfind(vps, da->attr, da->vendor, tag);
+	if (vp) goto do_print;
 
 	/*
 	 *	Some non-packet expansions
@@ -1621,22 +1642,26 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, pair_lists_t list, DI
 		break;		/* ignore them */
 
 	case PW_CLIENT_SHORTNAME:
+		if (num == NUM_COUNT) goto count;
 		if (request->client && request->client->shortname) {
 			return talloc_typed_strdup(ctx, request->client->shortname);
 		}
 		return talloc_typed_strdup(ctx, "<UNKNOWN-CLIENT>");
 
 	case PW_REQUEST_PROCESSING_STAGE:
+		if (num == NUM_COUNT) goto count;
 		if (request->component) {
 			return talloc_typed_strdup(ctx, request->component);
 		}
 		return talloc_typed_strdup(ctx, "server_core");
 
 	case PW_VIRTUAL_SERVER:
+		if (num == NUM_COUNT) goto count;
 		if (!request->server) return NULL;
 		return talloc_typed_strdup(ctx, request->server);
 
 	case PW_MODULE_RETURN_CODE:
+		if (num == NUM_COUNT) goto count;
 		if (!request->rcode) return NULL;
 		return talloc_typed_strdup(ctx, fr_int2str(modreturn_table, request->rcode, ""));
 	}
@@ -1654,7 +1679,7 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, pair_lists_t list, DI
 	vp = NULL;
 	switch (da->attr) {
 	default:
-		goto print_vp;
+		break;
 
 	case PW_PACKET_TYPE:
 		dv = dict_valbyattr(PW_PACKET_TYPE, 0, packet->code);
@@ -1739,43 +1764,44 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, pair_lists_t list, DI
 		break;
 	}
 
-do_print:
 	/*
 	 *	Fake various operations for virtual attributes.
 	 */
-	if (num && myvp) {
-		char *p;
-
+	if (myvp) {
+		if (num != NUM_ANY) switch (num) {
+		/*
+		 *	[n] is NULL (we only have [0])
+		 */
+		default:
+			goto finish;
 		/*
 		 *	[*] means only one.
 		 */
-		if (num == XLAT_ATTR_CONCAT) num = 0;
+		case NUM_JOIN:
+			break;
 
 		/*
-		 *	[n] means NULL, as there's only one.
+		 *	[#] means 1 (as there's only one)
 		 */
-		if ((num > 0) && (num < XLAT_ATTR_NUMBER)) goto finish;
-
-		p = vp_aprint_value(ctx, vp);
-		rad_assert(p != NULL);
-
-		/*
-		 *	Get the length of it.
-		 */
-		if (num == XLAT_ATTR_NUMBER) {
-			ret = talloc_typed_asprintf(ctx, "%d", (int) strlen(p));
-			talloc_free(p);
+		case NUM_COUNT:
+		count:
+			ret = talloc_strdup(ctx, "1");
 			goto finish;
-		}
 
-		ret = p;
-		goto finish;
+		/*
+		 *	[0] is fine (get the first instance)
+		 */
+		case 0:
+			break;
+		}
+		goto print;
 	}
 
+do_print:
 	/*
 	 *	We want the N'th VP.
 	 */
-	if (num) {
+	if (num != NUM_ANY) {
 		int count = 0;
 		vp_cursor_t cursor;
 
@@ -1783,18 +1809,17 @@ do_print:
 		/*
 		 *	Return a count of the VPs.
 		 */
-		case XLAT_ATTR_NUMBER:
+		case NUM_COUNT:
 			fr_cursor_init(&cursor, &vp);
 			while (fr_cursor_next_by_da(&cursor, da, tag) != NULL) {
 				count++;
 			}
-
 			return talloc_typed_asprintf(ctx, "%d", count);
 
 		/*
 		 *	Ugly, but working.
 		 */
-		case XLAT_ATTR_CONCAT:
+		case NUM_JOIN:
 		{
 			char *p, *q;
 
@@ -1828,6 +1853,7 @@ do_print:
 		return vp_aprint_type(ctx, da->type);
 	}
 
+print:
 	ret = vp_aprint_value(ctx, vp);
 
 finish:
@@ -2211,7 +2237,7 @@ static ssize_t CC_HINT(nonnull (1, 3, 4)) xlat_expand(char **out, size_t outlen,
 }
 
 /*
- *	Try to convert an xlat to a tmpl
+ *	Try to convert an xlat to a tmpl for efficiency
  */
 value_pair_tmpl_t *radius_xlat2tmpl(TALLOC_CTX *ctx, xlat_exp_t *xlat)
 {
@@ -2220,10 +2246,10 @@ value_pair_tmpl_t *radius_xlat2tmpl(TALLOC_CTX *ctx, xlat_exp_t *xlat)
 	if (xlat->next || (xlat->type != XLAT_ATTRIBUTE)) return NULL;
 
 	/*
-	 *	Can't convert Nth reference, or tags to templates.
-	 *	They have no such fields.
+	 * @todo it should be possible to emulate the concat and count operations in the
+	 * map code.
 	 */
-	if ((xlat->num != 0) || (xlat->tag != TAG_ANY)) return NULL;
+	if ((xlat->num == NUM_COUNT) || (xlat->num == NUM_JOIN)) return NULL;
 
 	vpt = talloc(ctx, value_pair_tmpl_t);
 	if (!vpt) return NULL;
@@ -2233,6 +2259,8 @@ value_pair_tmpl_t *radius_xlat2tmpl(TALLOC_CTX *ctx, xlat_exp_t *xlat)
 	vpt->vpt_request = xlat->ref;
 	vpt->vpt_list = xlat->list;
 	vpt->vpt_da = xlat->da;
+	vpt->vpt_num = xlat->num;
+	vpt->vpt_tag = xlat->tag;
 
 	return vpt;
 }

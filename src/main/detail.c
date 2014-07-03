@@ -164,7 +164,9 @@ int detail_send(rad_listen_t *listener, REQUEST *request)
 	}
 
 #ifdef WITH_DETAIL_THREAD
-	(void) write(data->child_pipe[1], &c, 1);
+	if (write(data->child_pipe[1], &c, 1) < 0) {
+		ERROR("Failed writing ack to reader thread: %s", fr_syserror(errno));
+	}
 #else
 	radius_signal_self(RADIUS_SIGNAL_SELF_DETAIL);
 #endif
@@ -339,7 +341,9 @@ int detail_recv(rad_listen_t *listener)
 		char c = 0;
 		rad_free(&packet);
 		data->state = STATE_NO_REPLY;	/* try again later */
-		(void) write(data->child_pipe[1], &c, 1);
+		if (write(data->child_pipe[1], &c, 1) < 0) {
+			ERROR("Failed writing ack to reader thread: %s", fr_syserror(errno));
+		}
 	}
 
 	/*
@@ -488,7 +492,7 @@ static RADIUS_PACKET *detail_poll(rad_listen_t *listener)
 			 *	retry it.
 			 */
 		case STATE_RUNNING:
-			if (time(NULL) < (data->running + data->retry_interval)) {
+			if (time(NULL) < (data->running + (int)data->retry_interval)) {
 				return NULL;
 			}
 
@@ -587,7 +591,7 @@ static RADIUS_PACKET *detail_poll(rad_listen_t *listener)
 		 */
 		if (!strcasecmp(key, "Client-IP-Address")) {
 			data->client_ip.af = AF_INET;
-			if (ip_hton(value, AF_INET, &data->client_ip) < 0) {
+			if (ip_hton(&data->client_ip, AF_INET, value, false) < 0) {
 				ERROR("Failed parsing Client-IP-Address");
 
 				pairfree(&data->vps);
@@ -793,6 +797,7 @@ void detail_free(rad_listen_t *this)
 
 #ifdef WITH_DETAIL_THREAD
 	if (!check_config) {
+		ssize_t ret;
 		void *arg = NULL;
 
 		/*
@@ -810,12 +815,18 @@ void detail_free(rad_listen_t *this)
 		/*
 		 *	Wait for it to acknowledge that it's stopped.
 		 */
-		(void) read(data->master_pipe[0], &arg, sizeof(arg));
+		ret = read(data->master_pipe[0], &arg, sizeof(arg));
+		if (ret < 0) {
+			ERROR("Reader thread exited without informing the master: %s", fr_syserror(errno));
+		} else if (ret != sizeof(arg)) {
+			ERROR("Invalid thread pointer received from reader thread during exit");
+			ERROR("Expected %zu bytes, got %zi bytes", sizeof(arg), ret);
+		}
 
 		close(data->master_pipe[0]);
 		close(data->master_pipe[1]);
 
-		pthread_join(data->pthread_id, &arg);
+		if (arg) pthread_join(data->pthread_id, &arg);
 	}
 #endif
 
@@ -906,7 +917,6 @@ int detail_decode(UNUSED rad_listen_t *this, UNUSED REQUEST *request)
 static void *detail_handler_thread(void *arg)
 {
 	char c;
-	ssize_t rcode;
 	rad_listen_t *this = arg;
 	listen_detail_t *data = this->data;
 
@@ -922,7 +932,9 @@ static void *detail_handler_thread(void *arg)
 			 */
 			if (data->child_pipe[0] < 0) {
 				packet = NULL;
-				(void) write(data->master_pipe[1], &packet, sizeof(packet));
+				if (write(data->master_pipe[1], &packet, sizeof(packet)) < 0) {
+					ERROR("Failed writing exit status to master: %s", fr_syserror(errno));
+				}
 				return NULL;
 			}
 		}
@@ -933,10 +945,14 @@ static void *detail_handler_thread(void *arg)
 		 *	FIXME: cap the retries.
 		 */
 		do {
-			(void) write(data->master_pipe[1], &packet, sizeof(packet));
+			if (write(data->master_pipe[1], &packet, sizeof(packet)) < 0) {
+				ERROR("Failed passing detail packet pointer to master: %s", fr_syserror(errno));
+			}
 
-			rcode = read(data->child_pipe[0], &c, 1);
-			if (rcode < 0) break; /* fatal? */
+			if (read(data->child_pipe[0], &c, 1) < 0) {
+				ERROR("Failed getting detail packet ack from master: %s", fr_syserror(errno));
+				break;
+			}
 
 			if (data->delay_time > 0) usleep(data->delay_time);
 		} while (data->state != STATE_REPLIED);
@@ -948,20 +964,13 @@ static void *detail_handler_thread(void *arg)
 
 
 static const CONF_PARSER detail_config[] = {
-	{ "detail",   PW_TYPE_FILE_OUTPUT | PW_TYPE_DEPRECATED,
-	  offsetof(listen_detail_t, filename), NULL,  NULL },
-	{ "filename",   PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED,
-	  offsetof(listen_detail_t, filename), NULL,  NULL },
-	{ "load_factor",   PW_TYPE_INTEGER,
-	  offsetof(listen_detail_t, load_factor), NULL, STRINGIFY(10)},
-	{ "poll_interval",   PW_TYPE_INTEGER,
-	  offsetof(listen_detail_t, poll_interval), NULL, STRINGIFY(1)},
-	{ "retry_interval",   PW_TYPE_INTEGER,
-	  offsetof(listen_detail_t, retry_interval), NULL, STRINGIFY(30)},
-	{ "one_shot",   PW_TYPE_BOOLEAN,
-	  offsetof(listen_detail_t, one_shot), NULL, NULL},
-	{ "max_outstanding",   PW_TYPE_INTEGER,
-	  offsetof(listen_detail_t, load_factor), NULL, NULL},
+	{ "detail", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_DEPRECATED, listen_detail_t, filename), NULL },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, listen_detail_t, filename), NULL },
+	{ "load_factor", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_detail_t, load_factor), STRINGIFY(10) },
+	{ "poll_interval", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_detail_t, poll_interval), STRINGIFY(1) },
+	{ "retry_interval", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_detail_t, retry_interval), STRINGIFY(30) },
+	{ "one_shot", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, listen_detail_t, one_shot), NULL },
+	{ "max_outstanding", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_detail_t, load_factor), NULL },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -1051,7 +1060,7 @@ int detail_parse(CONF_SECTION *cs, rad_listen_t *this)
 	memset(client, 0, sizeof(*client));
 	client->ipaddr.af = AF_INET;
 	client->ipaddr.ipaddr.ip4addr.s_addr = INADDR_NONE;
-	client->prefix = 0;
+	client->ipaddr.prefix = 0;
 	client->longname = client->shortname = data->filename;
 	client->secret = client->shortname;
 	client->nas_type = talloc_strdup(data, "none");	/* Part of 'data' not dynamically allocated */
