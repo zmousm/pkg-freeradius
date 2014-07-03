@@ -1,3 +1,10 @@
+freeradius (3.0.3-1+grnet) unstable; urgency=low
+
+  [ Fajar A. Nugraha ]
+  * debian: update radiusd-to-freeradius.diff
+
+ -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Thu, 03 Jul 2014 10:09:03 +0300
+
 freeradius (3.0.3-1) unstable; urgency=low
 
   * New upstream version.
