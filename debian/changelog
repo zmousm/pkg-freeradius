@@ -1,3 +1,18 @@
+freeradius (3.0.4~rc1-1+grnet) unstable; urgency=low
+
+  [ Fajar A. Nugraha ]
+  * debian: update radiusd-to-freeradius.diff
+  * debian: changed required debhelper to (>= 7.4)
+  * debian: debian/compat 9 -> 7
+
+  [ Herwin Weststrate ]
+  * Added debian/freeradius-rest to gitignore
+
+  [ Zenon Mousmoulas ]
+  * New upstream version (release candidate).
+
+ -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Thu, 03 Jul 2014 10:56:47 +0300
+
 freeradius (3.0.3-1+grnet) unstable; urgency=low
 
   [ Fajar A. Nugraha ]
