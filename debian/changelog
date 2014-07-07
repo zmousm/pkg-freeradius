@@ -1,3 +1,19 @@
+freeradius (3.0.4~rc1-2+grnet) unstable; urgency=low
+
+  [ Zenon Mousmoulas ]
+  * Fix lintian debhelper-but-no-misc-depends
+  * Fix lintian binaries-have-file-conflict on libfreeradius-dev
+  * Fix lintian duplicate-changelog-files
+  * Override lintian binary-or-shlib-defines-rpath on freeradius (due to
+    rlm_python), freeradius-postgresql, freeradius-iodbc
+  * Override lintian breaks-without-version, package-relation-with-self,
+    python-script-but-no-python-dep on freeradius-config
+
+  [ Arran Cudbard-Bell ]
+  * Add rest to list of debian modules
+
+ -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Mon, 07 Jul 2014 11:36:56 +0300
+
 freeradius (3.0.4~rc1-1+grnet) unstable; urgency=low
 
   [ Fajar A. Nugraha ]
