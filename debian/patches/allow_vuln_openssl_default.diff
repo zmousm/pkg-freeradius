@@ -1,0 +1,13 @@
+diff --git a/raddb/radiusd.conf.in b/raddb/radiusd.conf.in
+index 307ae10..8ed271b 100644
+--- a/raddb/radiusd.conf.in
++++ b/raddb/radiusd.conf.in
+@@ -483,7 +483,7 @@ security {
+ 	#  and may not reflect patches applied to libssl by
+ 	#  distribution maintainers.
+ 	#
+-	allow_vulnerable_openssl = no
++	allow_vulnerable_openssl = yes
+ }
+ 
+ # PROXY CONFIGURATION
