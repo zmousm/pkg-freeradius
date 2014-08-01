@@ -1,3 +1,9 @@
+freeradius (3.0.4~rc1-4+grnet) unstable; urgency=low
+
+  * Update rlm_cache from v3.0.x
+
+ -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Fri, 01 Aug 2014 17:34:45 +0300
+
 freeradius (3.0.4~rc1-3+grnet) unstable; urgency=low
 
   * Change the default for security.allow_vulnerable_openssl
