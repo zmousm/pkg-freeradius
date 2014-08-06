@@ -1,3 +1,11 @@
+freeradius (3.0.4~rc1.gbp524c0b-1+grnet) unstable; urgency=low
+
+  ** SNAPSHOT build @524c0bea77fb75bc4a51659c38b50eccf3a826e5 **
+
+  * Update upstream to e322a2008160b24715010fbd3d54072d4fde5d26 (v3.0.x)
+
+ -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Wed, 06 Aug 2014 18:25:41 +0300
+
 freeradius (3.0.4~rc1.gbpdfd61e-1+grnet) unstable; urgency=low
 
   ** SNAPSHOT build @dfd61ec9913c4ac574bf7bb84119fd741b9d580c **
