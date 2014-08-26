@@ -61,9 +61,9 @@ static char const *radsniff_version = "radsniff version " RADIUSD_VERSION_STRING
 ", built on " __DATE__ " at " __TIME__;
 
 static int rs_useful_codes[] = {
-	PW_CODE_AUTHENTICATION_REQUEST,		//!< RFC2865 - Authentication request
-	PW_CODE_AUTHENTICATION_ACK,		//!< RFC2865 - Access-Accept
-	PW_CODE_AUTHENTICATION_REJECT,		//!< RFC2865 - Access-Reject
+	PW_CODE_ACCESS_REQUEST,		//!< RFC2865 - Authentication request
+	PW_CODE_ACCESS_ACCEPT,		//!< RFC2865 - Access-Accept
+	PW_CODE_ACCESS_REJECT,		//!< RFC2865 - Access-Reject
 	PW_CODE_ACCOUNTING_REQUEST,		//!< RFC2866 - Accounting-Request
 	PW_CODE_ACCOUNTING_RESPONSE,		//!< RFC2866 - Accounting-Response
 	PW_CODE_ACCESS_CHALLENGE,		//!< RFC2865 - Access-Challenge
@@ -897,6 +897,89 @@ static int rs_packet_cmp(rs_request_t const *a, rs_request_t const *b)
 	return fr_packet_cmp(a->expect, b->expect);
 }
 
+static inline int rs_response_to_pcap(rs_event_t *event, rs_request_t *request, struct pcap_pkthdr const *header,
+				      uint8_t const *data)
+{
+	if (!event->out) return 0;
+
+	/*
+	 *	If we're filtering by response then the requests then the capture buffer
+	 *	associated with the request should contain buffered request packets.
+	 */
+	if (conf->filter_response) {
+		rs_capture_t *start;
+
+		/*
+		 *	Record the current position in the header
+		 */
+		start = request->capture_p;
+
+		/*
+		 *	Buffer hasn't looped set capture_p to the start of the buffer
+		 */
+		if (!start->header) request->capture_p = request->capture;
+
+		/*
+		 *	If where capture_p points to, has a header set, write out the
+		 *	packet to the PCAP file, looping over the buffer until we
+		 *	hit our start point.
+		 */
+		if (request->capture_p->header) do {
+			pcap_dump((void *)event->out->dumper, request->capture_p->header,
+				  request->capture_p->data);
+			TALLOC_FREE(request->capture_p->header);
+			TALLOC_FREE(request->capture_p->data);
+
+			/* Reset the pointer to the start of the circular buffer */
+			if (request->capture_p++ >= (request->capture + sizeof(request->capture))) {
+				request->capture_p = request->capture;
+			}
+		} while (request->capture_p != start);
+	}
+
+	/*
+	 *	Now log the response
+	 */
+	pcap_dump((void *)event->out->dumper, header, data);
+
+	return 0;
+}
+
+static inline int rs_request_to_pcap(rs_event_t *event, rs_request_t *request, struct pcap_pkthdr const *header,
+				     uint8_t const *data)
+{
+	if (!event->out) return 0;
+
+	/*
+	 *	If we're filtering by response, then we need to wait to write out the requests
+	 */
+	if (conf->filter_response) {
+		/* Free the old capture */
+		if (request->capture_p->header) {
+			talloc_free(request->capture_p->header);
+			TALLOC_FREE(request->capture_p->data);
+		}
+
+		if (!(request->capture_p->header = talloc(request, struct pcap_pkthdr))) return -1;
+		if (!(request->capture_p->data = talloc_array(request, uint8_t, header->caplen))) {
+			TALLOC_FREE(request->capture_p->header);
+			return -1;
+		}
+		memcpy(request->capture_p->header, header, sizeof(struct pcap_pkthdr));
+		memcpy(request->capture_p->data, data, header->caplen);
+
+		/* Reset the pointer to the start of the circular buffer */
+		if (++request->capture_p >= (request->capture + sizeof(request->capture))) {
+			request->capture_p = request->capture;
+		}
+		return 0;
+	}
+
+	pcap_dump((void *)event->out->dumper, header, data);
+
+	return 0;
+}
+
 /* This is the same as immediately scheduling the cleanup event */
 #define RS_CLEANUP_NOW(_x, _s)\
 	{\
@@ -943,7 +1026,7 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 		rs_time_print(timestr, sizeof(timestr), &header->ts);
 	}
 
-	len = fr_pcap_link_layer_offset(data, header->caplen, event->in->link_type);
+	len = fr_link_layer_offset(data, header->caplen, event->in->link_type);
 	if (len < 0) {
 		REDEBUG("Failed determining link layer header offset");
 		return;
@@ -1020,7 +1103,7 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 	 *	recover once some requests timeout, so make an effort to deal
 	 *	with allocation failures gracefully.
 	 */
-	current = rad_alloc(conf, 0);
+	current = rad_alloc(conf, false);
 	if (!current) {
 		REDEBUG("Failed allocating memory to hold decoded packet");
 		rs_tv_add_ms(&header->ts, conf->stats.timeout, &stats->quiet);
@@ -1065,8 +1148,8 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 
 	switch (current->code) {
 	case PW_CODE_ACCOUNTING_RESPONSE:
-	case PW_CODE_AUTHENTICATION_REJECT:
-	case PW_CODE_AUTHENTICATION_ACK:
+	case PW_CODE_ACCESS_REJECT:
+	case PW_CODE_ACCESS_ACCEPT:
 	case PW_CODE_ACCESS_CHALLENGE:
 	case PW_CODE_COA_NAK:
 	case PW_CODE_COA_ACK:
@@ -1177,12 +1260,13 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 			stats->exchange[current->code].interval.unlinked_total++;
 		}
 
+		rs_response_to_pcap(event, original, header, data);
 		response = true;
 		break;
 	}
 
 	case PW_CODE_ACCOUNTING_REQUEST:
-	case PW_CODE_AUTHENTICATION_REQUEST:
+	case PW_CODE_ACCESS_REQUEST:
 	case PW_CODE_COA_REQUEST:
 	case PW_CODE_DISCONNECT_REQUEST:
 	case PW_CODE_STATUS_SERVER:
@@ -1265,8 +1349,8 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 		 */
 		} else {
 			original = rbtree_finddata(request_tree, &search);
-			if (original && memcmp(original->expect->vector, current->vector,
-			    sizeof(original->expect->vector)) != 0) {
+			if (original && (memcmp(original->expect->vector, current->vector,
+			    sizeof(original->expect->vector)) != 0)) {
 				/*
 				 *	ID reused before the request timed out (which may be an issue)...
 				 */
@@ -1329,6 +1413,9 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 			original->in = event->in;
 			original->stats_req = &stats->exchange[current->code];
 
+			/* Set the packet pointer to the start of the buffer*/
+			original->capture_p = original->capture;
+
 			original->packet = talloc_steal(original, current);
 			original->expect = talloc_steal(original, search.expect);
 
@@ -1369,6 +1456,7 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 			talloc_free(original);
 			return;
 		}
+		rs_request_to_pcap(event, original, header, data);
 		response = false;
 		break;
 	}
@@ -1378,10 +1466,6 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 		rad_free(&current);
 
 		return;
-	}
-
-	if (event->out) {
-		pcap_dump((void *) (event->out->dumper), header, data);
 	}
 
 	rs_tv_sub(&header->ts, &start_pcap, &elapsed);
@@ -1619,6 +1703,7 @@ static int rs_build_filter(VALUE_PAIR **out, char const *filter)
 		if (vp->type == VT_XLAT) {
 			vp->type = VT_DATA;
 			vp->vp_strvalue = vp->value.xlat;
+			vp->length = talloc_array_length(vp->vp_strvalue) - 1;
 		}
 	}
 
@@ -2175,7 +2260,7 @@ int main(int argc, char *argv[])
 			usage(64);
 		}
 
-		link_tree = rbtree_create((rbcmp) rs_rtx_cmp, _unmark_link, 0);
+		link_tree = rbtree_create(conf, (rbcmp) rs_rtx_cmp, _unmark_link, 0);
 		if (!link_tree) {
 			ERROR("Failed creating RTX tree");
 			goto finish;
@@ -2239,7 +2324,7 @@ int main(int argc, char *argv[])
 	/*
 	 *	Setup the request tree
 	 */
-	request_tree = rbtree_create((rbcmp) rs_packet_cmp, _unmark_request, 0);
+	request_tree = rbtree_create(conf, (rbcmp) rs_packet_cmp, _unmark_request, 0);
 	if (!request_tree) {
 		ERROR("Failed creating request tree");
 		goto finish;
@@ -2405,7 +2490,7 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		assert(out->link_type > 0);
+		assert(out->link_type >= 0);
 
 		if (fr_pcap_open(out) < 0) {
 			ERROR("Failed opening pcap output (%s): %s", out->name, fr_strerror());

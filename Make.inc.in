@@ -52,7 +52,7 @@ INCLUDE		= -I${top_srcdir} -I${top_srcdir}/src \
 		  -include ${top_srcdir}/src/freeradius-devel/build.h \
 		  -include ${top_srcdir}/src/freeradius-devel/features.h \
 		  -include ${top_srcdir}/src/freeradius-devel/radpaths.h
-CFLAGS		= $(INCLUDE) -std=c99 -fno-strict-aliasing @CFLAGS@
+CFLAGS		= $(INCLUDE) -fno-strict-aliasing @CFLAGS@
 CPPFLAGS	= @CPPFLAGS@
 LIBPREFIX	= @LIBPREFIX@
 EXEEXT		= @EXEEXT@
@@ -123,6 +123,9 @@ HOSTINFO	= @HOSTINFO@
 #
 #  If the system has OpenSSL, use it's version of MD4/MD5/SHA1, instead of
 #  using ours.
+#
+#  We don't use OpenSSL SHA1 by default because src/modules/rlm_eap/libeap/fips186prf.c
+#  needs access to the SHA internals.
 #
 ifeq "$(WITH_OPENSSL)" "yes"
 CFLAGS		+=  -DWITH_OPENSSL_MD4 -DWITH_OPENSSL_MD5

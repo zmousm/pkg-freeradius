@@ -230,7 +230,6 @@ static int eapmessage_verify(REQUEST *request,
 		RDEBUG2("Identity - %*s",
 		       data_len - 1, data + 1);
 		return 1;
-		break;
 
 		/*
 		 *	If the first byte of the packet is
@@ -416,10 +415,10 @@ static int eappeap_check_tlv(REQUEST *request, uint8_t const *data,
 /*
  *	Use a reply packet to determine what to do.
  */
-static int CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_session_t *tls_session,
+static rlm_rcode_t CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_session_t *tls_session,
 					  REQUEST *request, RADIUS_PACKET *reply)
 {
-	int rcode = RLM_MODULE_REJECT;
+	rlm_rcode_t rcode = RLM_MODULE_REJECT;
 	VALUE_PAIR *vp;
 	peap_tunnel_t *t = tls_session->opaque;
 
@@ -431,7 +430,7 @@ static int CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_session_t 
 	}
 
 	switch (reply->code) {
-	case PW_CODE_AUTHENTICATION_ACK:
+	case PW_CODE_ACCESS_ACCEPT:
 		RDEBUG2("Tunneled authentication was successful");
 		t->status = PEAP_STATUS_SENT_TLV_SUCCESS;
 		eappeap_success(handler, tls_session);
@@ -463,13 +462,13 @@ static int CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_session_t 
 			pairdelete(&reply->vps, 16, VENDORPEC_MICROSOFT, TAG_ANY);
 			pairdelete(&reply->vps, 17, VENDORPEC_MICROSOFT, TAG_ANY);
 
-			rad_assert(!t->accept_vps);
+			pairfree(&t->accept_vps); /* for proxying MS-CHAP2 */
 			pairfilter(t, &t->accept_vps, &reply->vps, 0, 0, TAG_ANY);
 			rad_assert(!reply->vps);
 		}
 		break;
 
-	case PW_CODE_AUTHENTICATION_REJECT:
+	case PW_CODE_ACCESS_REJECT:
 		RDEBUG2("Tunneled authentication was rejected");
 		t->status = PEAP_STATUS_SENT_TLV_FAILURE;
 		eappeap_failure(handler, tls_session);
@@ -485,7 +484,7 @@ static int CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_session_t 
 		 *	Get rid of the old State, too.
 		 */
 		pairfree(&t->state);
-		pairfilter(t, &t->state, &(reply->vps), PW_STATE, 0, TAG_ANY);
+		pairfilter(t, &t->state, &reply->vps, PW_STATE, 0, TAG_ANY);
 
 		/*
 		 *	PEAP takes only EAP-Message attributes inside
@@ -493,11 +492,11 @@ static int CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_session_t 
 		 *	Access-Challenge is ignored.
 		 */
 		vp = NULL;
-		pairfilter(t, &vp, &(reply->vps), PW_EAP_MESSAGE, 0, TAG_ANY);
+		pairfilter(t, &vp, &reply->vps, PW_EAP_MESSAGE, 0, TAG_ANY);
 
 		/*
 		 *	Handle EAP-MSCHAP-V2, where Access-Accept's
-		 *	from the home server may contain MS-CHAP-Success,
+		 *	from the home server may contain MS-CHAP2-Success,
 		 *	which the module turns into challenges, so that
 		 *	the client may respond to the challenge with
 		 *	an "ack" packet.
@@ -512,8 +511,7 @@ static int CC_HINT(nonnull) process_reply(eap_handler_t *handler, tls_session_t 
 			pairdelete(&reply->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY);
 
 			rad_assert(!t->accept_vps);
-			pairfilter(t, &t->accept_vps, &reply->vps,
-				  0, 0, TAG_ANY);
+			pairfilter(t, &t->accept_vps, &reply->vps, 0, 0, TAG_ANY);
 			rad_assert(!reply->vps);
 		}
 
@@ -561,7 +559,7 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 	/*
 	 *	Do the callback, if it exists, and if it was a success.
 	 */
-	if (fake && (handler->request->proxy_reply->code == PW_CODE_AUTHENTICATION_ACK)) {
+	if (fake && (handler->request->proxy_reply->code == PW_CODE_ACCESS_ACCEPT)) {
 		peap_tunnel_t *t = tls_session->opaque;
 
 		t->home_access_accept = true;
@@ -570,12 +568,12 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 		 *	Terrible hacks.
 		 */
 		rad_assert(!fake->packet);
-		fake->packet = request->proxy;
+		fake->packet = talloc_steal(fake, request->proxy);
 		fake->packet->src_ipaddr = request->packet->src_ipaddr;
 		request->proxy = NULL;
 
 		rad_assert(!fake->reply);
-		fake->reply = request->proxy_reply;
+		fake->reply = talloc_steal(fake, request->proxy_reply);
 		request->proxy_reply = NULL;
 
 		if ((debug_flag > 0) && fr_log_fp) {
@@ -608,9 +606,9 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 		/*
 		 *	Terrible hacks.
 		 */
-		request->proxy = fake->packet;
+		request->proxy = talloc_steal(request, fake->packet);
 		fake->packet = NULL;
-		request->proxy_reply = fake->reply;
+		request->proxy_reply = talloc_steal(request, fake->reply);
 		fake->reply = NULL;
 
 		/*
@@ -619,7 +617,7 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 
 		switch (rcode) {
 		case RLM_MODULE_FAIL:
-			request_free(&fake);
+			talloc_free(fake);
 			eaptls_fail(handler, 0);
 			return 0;
 
@@ -628,7 +626,7 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 			break;
 		}
 	}
-	request_free(&fake);	/* robust if !fake */
+	talloc_free(fake);	/* robust if !fake */
 
 	/*
 	 *	If there was no EAP-Message in the reply packet, then
@@ -659,6 +657,7 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 	case RLM_MODULE_HANDLED:
 		RDEBUG2("Reply was handled");
 		eaptls_request(handler->eap_ds, tls_session);
+		request->proxy_reply->code = PW_CODE_ACCESS_CHALLENGE;
 		return 1;
 
 	case RLM_MODULE_OK:
@@ -683,22 +682,29 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 static char const *peap_state(peap_tunnel_t *t)
 {
 	switch (t->status) {
-		case PEAP_STATUS_TUNNEL_ESTABLISHED:
-			return "TUNNEL ESTABLISHED";
-		case PEAP_STATUS_WAIT_FOR_SOH_RESPONSE:
-			return "WAITING FOR SOH RESPONSE";
-		case PEAP_STATUS_INNER_IDENTITY_REQ_SENT:
-			return "WAITING FOR INNER IDENTITY";
-		case PEAP_STATUS_SENT_TLV_SUCCESS:
-			return "send tlv success";
-		case PEAP_STATUS_SENT_TLV_FAILURE:
-			return "send tlv failure";
-		case PEAP_STATUS_PHASE2_INIT:
-			return "phase2_init";
-		case PEAP_STATUS_PHASE2:
-			return "phase2";
-		default:
-			break;
+	case PEAP_STATUS_TUNNEL_ESTABLISHED:
+		return "TUNNEL ESTABLISHED";
+
+	case PEAP_STATUS_WAIT_FOR_SOH_RESPONSE:
+		return "WAITING FOR SOH RESPONSE";
+
+	case PEAP_STATUS_INNER_IDENTITY_REQ_SENT:
+		return "WAITING FOR INNER IDENTITY";
+
+	case PEAP_STATUS_SENT_TLV_SUCCESS:
+		return "send tlv success";
+
+	case PEAP_STATUS_SENT_TLV_FAILURE:
+		return "send tlv failure";
+
+	case PEAP_STATUS_PHASE2_INIT:
+		return "phase2_init";
+
+	case PEAP_STATUS_PHASE2:
+		return "phase2";
+
+	default:
+		break;
 	}
 	return "?";
 }
@@ -815,16 +821,11 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 			fake->server = t->soh_virtual_server;
 		}
 		RDEBUG("Sending SoH request to server %s", fake->server ? fake->server : "NULL");
-		debug_pair_list(fake->packet->vps);
-		RDEBUG("server %s {", fake->server);
 		rad_virtual_server(fake);
-		RDEBUG("} # server %s", fake->server);
-		RDEBUG("Got SoH reply");
-		debug_pair_list(fake->reply->vps);
 
-		if (fake->reply->code != PW_CODE_AUTHENTICATION_ACK) {
+		if (fake->reply->code != PW_CODE_ACCESS_ACCEPT) {
 			RDEBUG2("SoH was rejected");
-			request_free(&fake);
+			talloc_free(fake);
 			t->status = PEAP_STATUS_SENT_TLV_FAILURE;
 			eappeap_failure(handler, tls_session);
 			return RLM_MODULE_HANDLED;
@@ -834,7 +835,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 		rad_assert(!t->soh_reply_vps);
 		pairfilter(t, &t->soh_reply_vps, &fake->reply->vps, 0, 0, TAG_ANY);
 		rad_assert(!fake->reply->vps);
-		request_free(&fake);
+		talloc_free(fake);
 
 		if (t->session_resumption_state == PEAP_RESUMPTION_YES) {
 			/* we're good, send success TLV */
@@ -949,7 +950,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 		fake->packet->vps = eap2vp(request, fake->packet,
 					   eap_ds, data, data_len);
 		if (!fake->packet->vps) {
-			request_free(&fake);
+			talloc_free(fake);
 			RDEBUG2("Unable to convert tunneled EAP packet to internal server data structures");
 			return RLM_MODULE_REJECT;
 		}
@@ -1082,7 +1083,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 					/*
 					 *	Authentication succeeded! Rah!
 					 */
-					fake->reply->code = PW_CODE_AUTHENTICATION_ACK;
+					fake->reply->code = PW_CODE_ACCESS_ACCEPT;
 					goto do_process;
 				}
 
@@ -1116,8 +1117,8 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 			 *	Tell the original request that it's going
 			 *	to be proxied.
 			 */
-			pairfilter(request, &(request->config_items),
-				   &(fake->config_items),
+			pairfilter(request, &request->config_items,
+				   &fake->config_items,
 				   PW_PROXY_TO_REALM, 0, TAG_ANY);
 
 			/*
@@ -1166,7 +1167,6 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 				 *	So we associate the fake request with
 				 *	this request.
 				 */
-				talloc_set_destructor(fake, request_opaque_free);
 				rcode = request_data_add(request, request->proxy,
 							 REQUEST_DATA_EAP_MSCHAP_TUNNEL_CALLBACK,
 							 fake, true);
@@ -1204,7 +1204,7 @@ rlm_rcode_t eappeap_process(eap_handler_t *handler, tls_session_t *tls_session)
 #ifdef WITH_PROXY
  done:
 #endif
-	request_free(&fake);
+	talloc_free(fake);
 
 	return rcode;
 }
@@ -1304,7 +1304,7 @@ static int CC_HINT(nonnull) setup_fake_request(REQUEST *request, REQUEST *fake, 
 			 *	Don't copy from the head, we've already
 			 *	checked it.
 			 */
-			copy = paircopy2(fake->packet, vp, vp->da->attr, vp->da->vendor, TAG_ANY);
+			copy = paircopy_by_num(fake->packet, vp, vp->da->attr, vp->da->vendor, TAG_ANY);
 			pairadd(&fake->packet->vps, copy);
 		}
 	}

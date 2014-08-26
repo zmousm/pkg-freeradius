@@ -35,7 +35,6 @@ RCSID("$Id$")
 	} while (0)
 
 #ifdef HAVE_PTHREAD_H
-static pthread_mutex_t autofree_context = PTHREAD_MUTEX_INITIALIZER;
 #  define PTHREAD_MUTEX_LOCK pthread_mutex_lock
 #  define PTHREAD_MUTEX_UNLOCK pthread_mutex_unlock
 #else
@@ -52,6 +51,11 @@ static char const *months[] = {
 	"jul", "aug", "sep", "oct", "nov", "dec" };
 
 fr_thread_local_setup(char *, fr_inet_ntop_buffer);	/* macro */
+
+typedef struct fr_talloc_link {
+	bool armed;
+	TALLOC_CTX *child;
+} fr_talloc_link_t;
 
 /** Sets a signal handler using sigaction if available, else signal
  *
@@ -81,25 +85,50 @@ int fr_set_signal(int sig, sig_t func)
 	return 0;
 }
 
-/** Allocates a new talloc context from the root autofree context
- *
- * This function is threadsafe, whereas using the NULL context is not.
- *
- * @note The returned context must be freed by the caller.
- * @returns a new talloc context parented by the root autofree context.
- */
-TALLOC_CTX *fr_autofree_ctx(void)
+static int _fr_trigger_talloc_ctx_free(fr_talloc_link_t *trigger)
 {
-	static TALLOC_CTX *ctx = NULL, *child;
-	PTHREAD_MUTEX_LOCK(&autofree_context);
-	if (!ctx) {
-		ctx = talloc_autofree_context();
+	if (trigger->armed) talloc_free(trigger->child);
+
+	return 0;
+}
+
+static int _fr_disarm_talloc_ctx_free(bool **armed)
+{
+	**armed = false;
+	return 0;
+}
+
+/** Link a parent and a child context, so the child is freed before the parent
+ *
+ * @note This is not thread safe. Do not free parent before threads are joined, do not call from a child thread.
+ * @note It's OK to free the child before threads are joined, but this will leak memory until the parent is freed.
+ *
+ * @param parent who's fate the child should share.
+ * @param child bound to parent's lifecycle.
+ * @return 0 on success -1 on failure.
+ */
+int fr_link_talloc_ctx_free(TALLOC_CTX *parent, TALLOC_CTX *child)
+{
+	fr_talloc_link_t *trigger;
+	bool **disarm;
+
+	trigger = talloc(parent, fr_talloc_link_t);
+	if (!trigger) return -1;
+
+	disarm = talloc(child, bool *);
+	if (!disarm) {
+		talloc_free(trigger);
+		return -1;
 	}
 
-	child = talloc_new(ctx);
-	PTHREAD_MUTEX_UNLOCK(&autofree_context);
+	trigger->child = child;
+	trigger->armed = true;
+	*disarm = &trigger->armed;
 
-	return child;
+	talloc_set_destructor(trigger, _fr_trigger_talloc_ctx_free);
+	talloc_set_destructor(disarm, _fr_disarm_talloc_ctx_free);
+
+	return 0;
 }
 
 /*
@@ -220,7 +249,7 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
 		 *	We assume the number is the bigendian representation of the
 		 *	IP address.
 		 */
-		} else if (is_integer(value)) {
+		} else if (is_integer(value) || ((value[0] == '0') && (value[1] == 'x'))) {
 			out->ipaddr.ip4addr.s_addr = htonl(strtoul(value, NULL, 0));
 		} else if (!resolve) {
 			if (inet_pton(AF_INET, value, &(out->ipaddr.ip4addr.s_addr)) <= 0) {
@@ -932,7 +961,9 @@ struct in_addr fr_inaddr_mask(struct in_addr const *ipaddr, uint8_t prefix)
 		return *ipaddr;
 	}
 
-	ret = htonl(~((0x00000001UL << (32 - prefix)) - 1)) & ipaddr->s_addr;
+	if (prefix == 0)
+		ret = 0;
+	else ret = htonl(~((0x00000001UL << (32 - prefix)) - 1)) & ipaddr->s_addr;
 	return (*(struct in_addr *)&ret);
 }
 
@@ -991,30 +1022,38 @@ void fr_ipaddr_mask(fr_ipaddr_t *addr, uint8_t prefix)
 	addr->prefix = prefix;
 }
 
-static char const *hextab = "0123456789abcdef";
+static char const hextab[] = "0123456789abcdef";
 
 /** Convert hex strings to binary data
  *
  * @param bin Buffer to write output to.
- * @param hex input string.
  * @param outlen length of output buffer (or length of input string / 2).
+ * @param hex input string.
+ * @param inlen length of the input string
  * @return length of data written to buffer.
  */
-size_t fr_hex2bin(uint8_t *bin, char const *hex, size_t outlen)
+size_t fr_hex2bin(uint8_t *bin, size_t outlen, char const *hex, size_t inlen)
 {
 	size_t i;
+	size_t len;
 	char *c1, *c2;
 
-	for (i = 0; i < outlen; i++) {
-		if(!(c1 = memchr(hextab, tolower((int) hex[i << 1]), 16)) ||
-		   !(c2 = memchr(hextab, tolower((int) hex[(i << 1) + 1]), 16)))
+	/*
+	 *	Smartly truncate output, caller should check number of bytes
+	 *	written.
+	 */
+	len = inlen >> 1;
+	if (len > outlen) len = outlen;
+
+	for (i = 0; i < len; i++) {
+		if(!(c1 = memchr(hextab, tolower((int) hex[i << 1]), sizeof(hextab))) ||
+		   !(c2 = memchr(hextab, tolower((int) hex[(i << 1) + 1]), sizeof(hextab))))
 			break;
-		 bin[i] = ((c1-hextab)<<4) + (c2-hextab);
+		bin[i] = ((c1-hextab)<<4) + (c2-hextab);
 	}
 
 	return i;
 }
-
 
 /** Convert binary data to a hex string
  *
@@ -1042,7 +1081,26 @@ size_t fr_bin2hex(char *hex, uint8_t const *bin, size_t inlen)
 	return inlen * 2;
 }
 
+/** Convert binary data to a hex string
+ *
+ * Ascii encoded hex string will not be prefixed with '0x'
+ *
+ * @param[in] ctx to alloc buffer in.
+ * @param[in] bin input.
+ * @param[in] inlen of bin input.
+ * @return length of data written to buffer.
+ */
+char *fr_abin2hex(TALLOC_CTX *ctx, uint8_t const *bin, size_t inlen)
+{
+	char *buff;
 
+	buff = talloc_array(ctx, char, (inlen << 2));
+	if (!buff) return NULL;
+
+	fr_bin2hex(buff, bin, inlen);
+
+	return buff;
+}
 
 /** Consume the integer (or hex) portion of a value string
  *

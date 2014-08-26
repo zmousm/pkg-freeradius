@@ -115,31 +115,13 @@ static int eappeap_attach(CONF_SECTION *cs, void **instance)
 }
 
 /*
- *	Free the PEAP per-session data
- */
-static void peap_free(void *p)
-{
-	peap_tunnel_t *t = (peap_tunnel_t *) p;
-
-	if (!t) return;
-
-	pairfree(&t->username);
-	pairfree(&t->state);
-	pairfree(&t->accept_vps);
-	pairfree(&t->soh_reply_vps);
-
-	talloc_free(t);
-}
-
-
-/*
  *	Allocate the PEAP per-session data
  */
-static peap_tunnel_t *peap_alloc(rlm_eap_peap_t *inst, eap_handler_t *handler)
+static peap_tunnel_t *peap_alloc(TALLOC_CTX *ctx, rlm_eap_peap_t *inst)
 {
 	peap_tunnel_t *t;
 
-	t = talloc_zero(handler, peap_tunnel_t);
+	t = talloc_zero(ctx, peap_tunnel_t);
 
 	t->default_method = inst->default_method;
 	t->copy_request_to_tunnel = inst->copy_request_to_tunnel;
@@ -182,18 +164,17 @@ static int eappeap_initiate(void *type_arg, eap_handler_t *handler)
 	 */
 	vp = pairfind(handler->request->config_items, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
 	if (vp) {
-		client_cert = vp->vp_integer;
+		client_cert = vp->vp_integer ? true : false;
 	} else {
 		client_cert = inst->req_client_cert;
 	}
 
-	ssn = eaptls_session(inst->tls_conf, handler, client_cert);
+	ssn = eaptls_session(handler, inst->tls_conf, client_cert);
 	if (!ssn) {
 		return 0;
 	}
 
 	handler->opaque = ((void *)ssn);
-	handler->free_opaque = session_free;
 
 	/*
 	 *	Set up type-specific information.
@@ -253,8 +234,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	 *	allocate it if it doesn't already exist.
 	 */
 	if (!tls_session->opaque) {
-		peap = tls_session->opaque = peap_alloc(inst, handler);
-		tls_session->free_opaque = peap_free;
+		peap = tls_session->opaque = peap_alloc(tls_session, inst);
 	}
 
 	status = eaptls_process(handler);
@@ -313,8 +293,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	 *	allocate it here, if it wasn't already alloacted.
 	 */
 	if (!tls_session->opaque) {
-		tls_session->opaque = peap_alloc(inst, handler);
-		tls_session->free_opaque = peap_free;
+		tls_session->opaque = peap_alloc(tls_session, inst);
 	}
 
 	/*

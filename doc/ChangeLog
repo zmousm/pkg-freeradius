@@ -16,24 +16,53 @@ FreeRADIUS 3.0.4 Mon 12 May 2014 15:30:00 EDT urgency=medium
 	* "ipaddr" will now use v6 if no v4 address is present.  You should
 	  use "ipv4addr" or "ipv6addr" to force v4/v6 addresses.
 	* The above applies to "listen", "home_server", and "client" sections.
-	* "client" sections will allow prefixes as "192.192.0/24".  The old
+	* "client" sections will allow "ipaddr = 192.192.0/24".  The old
 	  "netmask" is still accepted, but the new format is preferred.
+	* Allow custom HTTP headers to be set for rlm_rest requests using
+	  control:REST-HTTP-Header (attributes consumed after use).
+	* Extend format of %{rest:} expansion to allow HTTP method and POST
+	  data to be specified
+	  e.g. %{rest:POST http://example.org/api foo=bar&baz=boink}.
+	* Add %{hmacsha1:&data &key} and %{hmacmd5:&data &key} expansions
+	  for signing data in requests.
+	* rlm_cache now consumes its control attributes to make runtime
+	  configuration easier.
+	* Add control:Cache-Read-Only which when set to 'yes' will make the
+	  cache module merge existing cache data, but not create new entries.
+	* Add %{unescape:} and %{urlunquote:} expansions to reverse escaping
+	  and urlquoting.
+	* Add support for aliases in rlm_ldap.
+	* Add support for connection pool sharing to all modules that use
+	  the connection pool (pool = <instance>).
+	* "tls" sections now have a "psk_query" configuration item, for dynamic
+	  queries to discover a key from a PSK identity.
+	* Preliminary support for EAP channel bindings.
+	* Foundational work for dynamic home servers.  They do not yet work,
+	  but this is now only a matter of updating the "realm" module in
+	  a future release.
+	* Support &attr[*] syntax to copy all instances of an attribute when
+	  used with the += operator in an update section. May be qualified with
+	  a tag.
+	* The logintime and expiration modules can now be listed in the
+	  post-auth section.  This makes some configurations simpler.
 
 	Bug fixes
-	* make case-insensitive regular expressions work again.
-	* Added tests for the above
+	* make case-insensitive regular expressions work again, and add tests
+	  for them.
 	* A few more talloc parenting issues
 	* Fix delayed proxy reply handling.  Closes #637
 	* Fix OpenSSL initialization order when using
 	  RADIUS/TLS.  Fixes #646
 	* Don't double-quote strings in debugging messages
 	* Fix foreach / break.  Fixes #639
-	* Chargeable-User-Identifier should be "octets"
+	* Chargeable-User-Identifier, ADSL-Agent-Circuit-Id and
+	  ADSL-Agent-Remote-Id should be "octets" types in the default
+	  dictionary.
 	* Fix typo in mainconfig.  Fixes #634
 	* More rlm_perl fixes.  Fixes #635
 	* Free OpenSSL memory on clean exit.
 	* Fix <attr>[0] !* ANY - Was removing all instances of <attr>
-	* Fix case where multiple attributes were returned from LHS of
+	* Fix case where multiple attributes were returned from RHS of
 	  mapping, as with rlm_ldap. Fixes #652
 	* Fix corner case in cursor where using fr_cursor_next_by_da
 	  after calling fr_cursor_remove may of resulted in a read of
@@ -49,7 +78,40 @@ FreeRADIUS 3.0.4 Mon 12 May 2014 15:30:00 EDT urgency=medium
 	* Fix issue where specifying a dynamic client IP addresss using
 	  FreeRADIUS-Client-IPv6-Prefix or FreeRADIUS-Client-IP-Prefix
 	  may have caused a validation error.
-	* Don't print two "&" for messages about attribute references
+	* Don't print two "&" for messages about attribute or list
+	  references in debug output.
+	* Fix urlquote and escape to encode Unicode characters correctly.
+	* Fix redundant-load-balance blocks to try other modules in
+	  the group if one fails.
+	* Fix issue with rlm_pap password normalisation where
+	  'known good' password strings stored in octets type attributes,
+	  would be sometimes misnormalised as base64.
+	* Don't stop processing DHCP options if we find a 0x00 padding
+	  option.
+	* Fix issue where modifying the value of an attribute created
+	  from a template with a literal value, may have resulted in the
+	  template literal being freed.
+	* Fix parenting issues in tls code which may have resulted in
+	  memory corruption and crashes.
+	* Fix issue in radsniff where writing to PCAP files and using
+	  -R response filters, where the requests would still be written
+	  to the PCAP for non matching responses.
+	* Define __APPLE_USE_RFC_2292 so that the server builds with IPv6
+	  support on OSX.
+	* Fix LDAP group lookups for named rlm_ldap instances.
+	  Note that attribute references should be used when
+	  checking LDAP-Group attributes. e.g. if (&LDAP-Group == 'foo').
+	* Delayed attribute references can now be used in unlang
+	  existence checks.  i.e. if (&Attribute-Name) { ... }
+	* Fix issues in EAP-PWD.  CVE-2014-4731, CVE-2014-4732, and
+	  CVE-2014-4733.  There is no external authentication bypass.
+	* Fix a number of uses of the talloc parent/child reference.
+	* Release connection used for reading bulk clients in rlm_ldap.
+	* rlm_rest is now fail-safe if it's used without any configuration
+	* Pull in build fixes for FreeBSD from ports.
+	* Fix error in sqlite postauth query
+	* Evaluate argument to "switch" statements once, instead of for each
+	  "case" statement.
 
 FreeRADIUS 3.0.3 Mon 12 May 2014 15:30:00 EDT urgency=medium
 	Feature improvements

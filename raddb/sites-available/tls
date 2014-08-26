@@ -200,18 +200,6 @@ listen {
 		cipher_list = "DEFAULT"
 
 		#
-
-		#  This configuration entry should be deleted
-		#  once the server is running in a normal
-		#  configuration.  It is here ONLY to make
-		#  initial deployments easier.
-		#
-		#
-		#  This is enabled in eap.conf, so we don't need it here.
-		#
-#		make_cert_command = "${certdir}/bootstrap"
-
-		#
 		#  Session resumption / fast reauthentication
 		#  cache.
 		#
@@ -383,7 +371,7 @@ home_server tls {
 	ipaddr = 127.0.0.1
 	port = 2083
 	type = auth
-	secret = testing123
+	secret = radsec
 	proto = tcp
 	status_check = none
 
@@ -419,6 +407,20 @@ home_server tls {
 		#  to permit EAP-TLS authentication, then delete
 		#  this configuration item.
 		ca_file = ${cadir}/ca.pem
+
+		#
+		#  For TLS-PSK, the key should be specified
+		#  dynamically, instead of using a hard-coded
+		#  psk_identity and psk_hexphrase.
+		#
+		#  The input to the dynamic expansion will be the PSK
+		#  identity supplied by the client, in the
+		#  TLS-PSK-Identity attribute.  The output of the
+		#  expansion should be a hex string, of no more than
+		#  512 characters.  The string should not be prefixed
+		#  with "0x".  e.g. "abcdef" is OK.  "0xabcdef" is not.
+		#
+	#	psk_query = "%{psksql:select hex(key) from psk_keys where keyid = '%{TLS-PSK-Identity}'}"
 
 		#
 		#  For DH cipher suites to work, you have to

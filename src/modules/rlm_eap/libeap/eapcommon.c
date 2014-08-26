@@ -60,6 +60,7 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/libradius.h>
+#include <freeradius-devel/rad_assert.h>
 #include "eap_types.h"
 
 const FR_NAME_NUMBER eap_rcode_table[] = {
@@ -225,11 +226,11 @@ int eap_basic_compose(RADIUS_PACKET *packet, eap_packet_t *reply)
 	if (!packet->code) switch(reply->code) {
 	case PW_EAP_RESPONSE:
 	case PW_EAP_SUCCESS:
-		packet->code = PW_CODE_AUTHENTICATION_ACK;
+		packet->code = PW_CODE_ACCESS_ACCEPT;
 		rcode = RLM_MODULE_HANDLED;
 		break;
 	case PW_EAP_FAILURE:
-		packet->code = PW_CODE_AUTHENTICATION_REJECT;
+		packet->code = PW_CODE_ACCESS_REJECT;
 		rcode = RLM_MODULE_REJECT;
 		break;
 	case PW_EAP_REQUEST:
@@ -239,7 +240,7 @@ int eap_basic_compose(RADIUS_PACKET *packet, eap_packet_t *reply)
 	default:
 		/* Should never enter here */
 		ERROR("rlm_eap: reply code %d is unknown, Rejecting the request.", reply->code);
-		packet->code = PW_CODE_AUTHENTICATION_REJECT;
+		packet->code = PW_CODE_ACCESS_REJECT;
 		break;
 	}
 

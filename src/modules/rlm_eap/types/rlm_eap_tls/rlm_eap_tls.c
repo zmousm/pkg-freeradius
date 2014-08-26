@@ -95,13 +95,12 @@ static int eaptls_initiate(void *type_arg, eap_handler_t *handler)
 	/*
 	 *	EAP-TLS always requires a client certificate.
 	 */
-	ssn = eaptls_session(inst->tls_conf, handler, true);
+	ssn = eaptls_session(handler, inst->tls_conf, true);
 	if (!ssn) {
 		return 0;
 	}
 
 	handler->opaque = ((void *)ssn);
-	handler->free_opaque = session_free;
 
 	/*
 	 *	Set up type-specific information.
@@ -169,27 +168,21 @@ static int CC_HINT(nonnull) mod_authenticate(void *type_arg, eap_handler_t *hand
 			}
 
 			RDEBUG("Processing EAP-TLS Certificate check:");
-			debug_pair_list(fake->packet->vps);
-
-			RDEBUG("server %s {", fake->server);
-
 			rad_virtual_server(fake);
-
-			RDEBUG("} # server %s", fake->server);
 
 			/* copy the reply vps back to our reply */
 			pairfilter(request->reply, &request->reply->vps,
 				  &fake->reply->vps, 0, 0, TAG_ANY);
 
 			/* reject if virtual server didn't return accept */
-			if (fake->reply->code != PW_CODE_AUTHENTICATION_ACK) {
+			if (fake->reply->code != PW_CODE_ACCESS_ACCEPT) {
 				RDEBUG2("Certificates were rejected by the virtual server");
-				request_free(&fake);
+				talloc_free(fake);
 				eaptls_fail(handler, 0);
 				return 0;
 			}
 
-			request_free(&fake);
+			talloc_free(fake);
 			/* success */
 		}
 		break;

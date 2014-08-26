@@ -145,7 +145,7 @@ dnl #
 dnl #  Set Default CFLAGS for GCC compatible compilers
 dnl #
 if test "x$GCC" = "xyes"; then
-  CFLAGS="$CFLAGS -Wall -D_GNU_SOURCE"
+  CFLAGS="$CFLAGS -Wall -std=c99 -D_GNU_SOURCE"
 fi
 
 dnl #
@@ -890,6 +890,7 @@ case "$host" in
   *-darwin*)
     CFLAGS="$CFLAGS -DDARWIN"
     LIBS="-framework DirectoryService $LIBS"
+    AC_DEFINE([__APPLE_USE_RFC_3542], 1, [Force OSX >= 10.7 Lion to use RFC2292 IPv6 socket options])
     ;;
 esac
 
@@ -914,6 +915,7 @@ AC_CHECK_HEADERS( \
   syslog.h \
   inttypes.h \
   stdint.h \
+  stdbool.h \
   stdio.h \
   netdb.h \
   semaphore.h \
@@ -929,6 +931,7 @@ AC_CHECK_HEADERS( \
   fcntl.h \
   sys/fcntl.h \
   sys/prctl.h \
+  sys/ptrace.h \
   sys/un.h \
   glob.h \
   prot.h \
@@ -1215,15 +1218,6 @@ FR_CHECK_TYPE_INCLUDE(
   uint64_t, unsigned long long, [uint64_t is required for larger counters]
 )
 
-FR_CHECK_TYPE_INCLUDE(
-  [
-    #ifdef HAVE_SIGNAL_H
-    #  include <signal.h>
-    #endif
-  ],
-  sig_t, void(*sig_t)(int), [signal action callback function]
-)
-
 dnl #
 dnl #  Check for __uint128_t (compiler builtin)
 dnl #
@@ -1283,6 +1277,33 @@ AC_CHECK_TYPE(struct addrinfo, AC_DEFINE(HAVE_STRUCT_ADDRINFO, 1, [Generic DNS l
     #ifdef HAVE_NETDB_H
     #  include <netdb.h>
     #endif
+  ]
+)
+
+dnl #
+dnl #  Check for sig_t
+dnl #
+dnl #  FR_CHECK_TYPE_INCLUDE doesn't work for callbacks as it doesn't produce typedefs
+dnl #
+AC_MSG_CHECKING([if sig_t is defined])
+AC_LINK_IFELSE(
+  [AC_LANG_PROGRAM(
+    [[
+      #ifdef HAVE_SIGNAL_H
+      #  include <signal.h>
+      #endif
+    ]],
+    [[
+      sig_t func;
+      return 0;
+    ]]
+  )],
+  [
+      AC_MSG_RESULT(yes)
+      AC_DEFINE(HAVE_SIG_T, 1, [Define if the type sig_t is defined by signal.h])
+  ],
+  [
+      AC_MSG_RESULT(no)
   ]
 )
 
@@ -1356,6 +1377,49 @@ FR_CHECK_STRUCT_HAS_MEMBER([#include <netinet/in.h>], [struct in6_pktinfo], ipi6
 if test "x$ac_cv_type_struct_in6_pktinfo_has_ipi6_addr" = "xyes"; then
   AC_DEFINE(HAVE_IN6_PKTINFO, [], [define if you have IN6_PKTINFO (Linux)])
 fi
+
+dnl #
+dnl #  Check for htonll and htonlll
+dnl #
+AC_MSG_CHECKING([if htonll is defined])
+AC_LINK_IFELSE(
+  [AC_LANG_PROGRAM(
+    [[
+      #include <sys/types.h>
+      #include <netinet/in.h>
+    ]],
+    [[
+      return htonll(0);
+    ]]
+  )],
+  [
+      AC_MSG_RESULT(yes)
+      AC_DEFINE(HAVE_HTONLL, 1, [Define if the function (or macro) htonll exists.])
+  ],
+  [
+      AC_MSG_RESULT(no)
+  ]
+)
+
+AC_MSG_CHECKING([if htonlll is defined])
+AC_LINK_IFELSE(
+  [AC_LANG_PROGRAM(
+    [[
+      #include <sys/types.h>
+      #include <netinet/in.h>
+    ]],
+    [[
+      return htonlll(0);
+    ]]
+  )],
+  [
+      AC_MSG_RESULT(yes)
+      AC_DEFINE(HAVE_HTONLLL, 1, [Define if the function (or macro) htonlll exists.])
+  ],
+  [
+      AC_MSG_RESULT(no)
+  ]
+)
 
 dnl #############################################################
 dnl #
@@ -1440,6 +1504,7 @@ dnl #
 FR_TLS
 FR_HAVE_BUILTIN_CHOOSE_EXPR
 FR_HAVE_BUILTIN_TYPES_COMPATIBLE_P
+FR_HAVE_BUILTIN_BSWAP_64
 
 dnl #############################################################
 dnl #

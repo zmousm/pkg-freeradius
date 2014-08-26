@@ -28,14 +28,27 @@ RCSID("$Id$");
 #include <freeradius-devel/radiusd.h>
 
 #include <libcouchbase/couchbase.h>
-#include <json/json.h>
+#include <json.h>
 
 #include "mod.h"
 #include "couchbase.h"
 #include "jsonc_missing.h"
 
+/* free couchbase instance handle and any additional context memory */
+static int _mod_conn_free(rlm_couchbase_handle_t *chandle)
+{
+	lcb_t cb_inst = chandle->handle;                /* couchbase instance */
+
+	/* destroy/free couchbase instance */
+	lcb_destroy(cb_inst);
+
+	/* return */
+	return 0;
+}
+
 /* create new connection pool handle */
-void *mod_conn_create(void *instance) {
+void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
+{
 	rlm_couchbase_t *inst = instance;           /* module instance pointer */
 	rlm_couchbase_handle_t *chandle = NULL;     /* connection handle pointer */
 	cookie_t *cookie = NULL;                    /* couchbase cookie */
@@ -55,7 +68,9 @@ void *mod_conn_create(void *instance) {
 	}
 
 	/* allocate memory for couchbase connection instance abstraction */
-	chandle = talloc_zero(inst, rlm_couchbase_handle_t);
+	chandle = talloc_zero(ctx, rlm_couchbase_handle_t);
+	talloc_set_destructor(chandle, _mod_conn_free);
+
 	cookie = talloc_zero(chandle, cookie_t);
 
 	/* initialize cookie error holder */
@@ -70,7 +85,8 @@ void *mod_conn_create(void *instance) {
 }
 
 /* verify valid couchbase connection handle */
-int mod_conn_alive(UNUSED void *instance, void *handle) {
+int mod_conn_alive(UNUSED void *instance, void *handle)
+{
 	rlm_couchbase_handle_t *chandle = handle;   /* connection handle pointer */
 	lcb_t cb_inst = chandle->handle;            /* couchbase instance */
 	lcb_error_t cb_error = LCB_SUCCESS;         /* couchbase error status */
@@ -88,23 +104,9 @@ int mod_conn_alive(UNUSED void *instance, void *handle) {
 	return true;
 }
 
-/* free couchbase instance handle and any additional context memory */
-int mod_conn_delete(UNUSED void *instance, void *handle) {
-	rlm_couchbase_handle_t *chandle = handle;       /* connection instance handle */
-	lcb_t cb_inst = chandle->handle;                /* couchbase instance */
-
-	/* destroy/free couchbase instance */
-	lcb_destroy(cb_inst);
-
-	/* free handle */
-	talloc_free(chandle);
-
-	/* return */
-	return true;
-}
-
 /* build json object for mapping radius attributes to json elements */
-int mod_build_attribute_element_map(CONF_SECTION *conf, void *instance) {
+int mod_build_attribute_element_map(CONF_SECTION *conf, void *instance)
+{
 	rlm_couchbase_t *inst = instance;   /* our module instance */
 	CONF_SECTION *cs;                   /* module config section */
 	CONF_ITEM *ci;                      /* config item */
@@ -161,7 +163,8 @@ int mod_build_attribute_element_map(CONF_SECTION *conf, void *instance) {
 }
 
 /* map free radius attribute to user defined json element name */
-int mod_attribute_to_element(const char *name, json_object *map, void *buf) {
+int mod_attribute_to_element(const char *name, json_object *map, void *buf)
+{
 	json_object *jval;  /* json object values */
 
 	/* clear buffer */
@@ -196,7 +199,8 @@ int mod_attribute_to_element(const char *name, json_object *map, void *buf) {
 /* inject value pairs into given request
  * that are defined in the passed json object
  */
-void *mod_json_object_to_value_pairs(json_object *json, const char *section, REQUEST *request) {
+void *mod_json_object_to_value_pairs(json_object *json, const char *section, REQUEST *request)
+{
 	json_object *jobj, *jval, *jop;     /* json object pointers */
 	TALLOC_CTX *ctx;                    /* talloc context for pairmake */
 	VALUE_PAIR *vp, **ptr;              /* value pair and value pair pointer for pairmake */
@@ -240,29 +244,31 @@ void *mod_json_object_to_value_pairs(json_object *json, const char *section, REQ
 				json_object_object_get_ex(json_vp, "op", &jop)) {
 				/* make correct pairs based on json object type */
 				switch (json_object_get_type(jval)) {
-					case json_type_double:
-					case json_type_int:
-					case json_type_string:
-						/* debugging */
-						RDEBUG("adding '%s' attribute to '%s' section", attribute, section);
-						/* add pair */
-						vp = pairmake(ctx, ptr, attribute, json_object_get_string(jval),
-							fr_str2int(fr_tokens, json_object_get_string(jop), 0));
-						/* check pair */
-						if (!vp) {
-							RERROR("could not build value pair for '%s' attribute (%s)", attribute, fr_strerror());
-							/* return */
-							return NULL;
-						}
+				case json_type_double:
+				case json_type_int:
+				case json_type_string:
+					/* debugging */
+					RDEBUG("adding '%s' attribute to '%s' section", attribute, section);
+					/* add pair */
+					vp = pairmake(ctx, ptr, attribute, json_object_get_string(jval),
+						fr_str2int(fr_tokens, json_object_get_string(jop), 0));
+					/* check pair */
+					if (!vp) {
+						RERROR("could not build value pair for '%s' attribute (%s)", attribute, fr_strerror());
+						/* return */
+						return NULL;
+					}
 					break;
-					case json_type_object:
-					case json_type_array:
-						/* log error - we want to handle these eventually */
-						RERROR("skipping unhandled nested json object or array value pair object");
+
+				case json_type_object:
+				case json_type_array:
+					/* log error - we want to handle these eventually */
+					RERROR("skipping unhandled nested json object or array value pair object");
 					break;
-					default:
-						/* log error - this shouldn't ever happen */
-						RERROR("skipping unhandled json type in value pair object");
+
+				default:
+					/* log error - this shouldn't ever happen */
+					RERROR("skipping unhandled json type in value pair object");
 					break;
 				}
 			} else {
@@ -284,78 +290,80 @@ void *mod_json_object_to_value_pairs(json_object *json, const char *section, REQ
 /* convert freeradius value/pair to json object
  * basic structure taken from freeradius function
  * vp_prints_value_json in src/lib/print.c */
-json_object *mod_value_pair_to_json_object(REQUEST *request, VALUE_PAIR *vp) {
+json_object *mod_value_pair_to_json_object(REQUEST *request, VALUE_PAIR *vp)
+{
 	char value[255];    /* radius attribute value */
 
 	/* add this attribute/value pair to our json output */
 	if (!vp->da->flags.has_tag) {
 		switch (vp->da->type) {
-			case PW_TYPE_INTEGER:
-			case PW_TYPE_BYTE:
-			case PW_TYPE_SHORT:
-				/* skip if we have flags */
-				if (vp->da->flags.has_value) break;
+		case PW_TYPE_INTEGER:
+		case PW_TYPE_BYTE:
+		case PW_TYPE_SHORT:
+			/* skip if we have flags */
+			if (vp->da->flags.has_value) break;
 #ifdef HAVE_JSON_OBJECT_NEW_INT64
-				/* debug */
-				RDEBUG3("creating new int64 for unsigned 32 bit int/byte/short '%s'", vp->da->name);
-				/* return as 64 bit int - JSON spec does not support unsigned ints */
-				return json_object_new_int64(vp->vp_integer);
+			/* debug */
+			RDEBUG3("creating new int64 for unsigned 32 bit int/byte/short '%s'", vp->da->name);
+			/* return as 64 bit int - JSON spec does not support unsigned ints */
+			return json_object_new_int64(vp->vp_integer);
 #else
-				/* debug */
-				RDEBUG3("creating new int for unsigned 32 bit int/byte/short '%s'", vp->da->name);
-				/* return as 64 bit int - JSON spec does not support unsigned ints */
-				return json_object_new_int(vp->vp_integer);
+			/* debug */
+			RDEBUG3("creating new int for unsigned 32 bit int/byte/short '%s'", vp->da->name);
+			/* return as 64 bit int - JSON spec does not support unsigned ints */
+			return json_object_new_int(vp->vp_integer);
 #endif
-			break;
-			case PW_TYPE_SIGNED:
+		break;
+		case PW_TYPE_SIGNED:
 #ifdef HAVE_JSON_OBJECT_NEW_INT64
-				/* debug */
-				RDEBUG3("creating new int64 for signed 32 bit integer '%s'", vp->da->name);
-				/* return as 64 bit int - json-c represents all ints as 64 bits internally */
-				return json_object_new_int64(vp->vp_signed);
+			/* debug */
+			RDEBUG3("creating new int64 for signed 32 bit integer '%s'", vp->da->name);
+			/* return as 64 bit int - json-c represents all ints as 64 bits internally */
+			return json_object_new_int64(vp->vp_signed);
 #else
-				RDEBUG3("creating new int for signed 32 bit integer '%s'", vp->da->name);
-				/* return as signed int */
-				return json_object_new_int(vp->vp_signed);
+			RDEBUG3("creating new int for signed 32 bit integer '%s'", vp->da->name);
+			/* return as signed int */
+			return json_object_new_int(vp->vp_signed);
 #endif
-			break;
-			case PW_TYPE_INTEGER64:
+		break;
+		case PW_TYPE_INTEGER64:
 #ifdef HAVE_JSON_OBJECT_NEW_INT64
-				/* debug */
-				RDEBUG3("creating new int64 for 64 bit integer '%s'", vp->da->name);
-				/* return as 64 bit int - because it is a 64 bit int */
-				return json_object_new_int64(vp->vp_integer64);
+			/* debug */
+			RDEBUG3("creating new int64 for 64 bit integer '%s'", vp->da->name);
+			/* return as 64 bit int - because it is a 64 bit int */
+			return json_object_new_int64(vp->vp_integer64);
 #else
-				/* warning */
-				RWARN("skipping 64 bit integer attribute '%s' - please upgrade json-c to 0.10+", vp->da->name);
+			/* warning */
+			RWARN("skipping 64 bit integer attribute '%s' - please upgrade json-c to 0.10+", vp->da->name);
 #endif
-			break;
-			default:
-				/* silence warnings - do nothing */
-			break;
+		break;
+		default:
+			/* silence warnings - do nothing */
+		break;
 		}
 	}
 
 	/* keep going if not set above */
 	switch (vp->da->type) {
-		case PW_TYPE_STRING:
-			/* debug */
-			RDEBUG3("assigning string '%s' as string", vp->da->name);
-			/* return string value */
-			return json_object_new_string(vp->vp_strvalue);
-		default:
-			/* debug */
-			RDEBUG3("assigning unhandled '%s' as string", vp->da->name);
-			/* get standard value */
-			vp_prints_value(value, sizeof(value), vp, 0);
-			/* return string value from above */
-			return json_object_new_string(value);
-		break;
+	case PW_TYPE_STRING:
+		/* debug */
+		RDEBUG3("assigning string '%s' as string", vp->da->name);
+		/* return string value */
+		return json_object_new_string(vp->vp_strvalue);
+
+	default:
+		/* debug */
+		RDEBUG3("assigning unhandled '%s' as string", vp->da->name);
+		/* get standard value */
+		vp_prints_value(value, sizeof(value), vp, 0);
+		/* return string value from above */
+		return json_object_new_string(value);
 	}
 }
 
 /* check current value of start timestamp in json body and update if needed */
-int mod_ensure_start_timestamp(json_object *json, VALUE_PAIR *vps) {
+int mod_ensure_start_timestamp(json_object *json, VALUE_PAIR *vps)
+{
 	json_object *jval;      /* json object value */
 	struct tm tm;           /* struct to hold event time */
 	time_t ts = 0;          /* values to hold time in seconds */

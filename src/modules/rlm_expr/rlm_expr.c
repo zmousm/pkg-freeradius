@@ -95,6 +95,8 @@ static char randstr_salt[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmo
  */
 static char randstr_otp[] = "469ACGHJKLMNPQRUVWXYabdfhijkprstuvwxyz";
 
+static char const hextab[] = "0123456789abcdef";
+
 static int get_number(REQUEST *request, char const **string, int64_t *answer)
 {
 	int		i, found;
@@ -285,7 +287,7 @@ static ssize_t expr_xlat(UNUSED void *instance, REQUEST *request, char const *fm
 		return -1;
 	}
 
-	snprintf(out, outlen, "%ld", (long int) result);
+	snprintf(out, outlen, "%lld", (long long int)result);
 	return strlen(out);
 }
 
@@ -463,11 +465,13 @@ static ssize_t urlquote_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 		case '~':
 			*out++ = *p++;
 			break;
+
 		default:
 			if (freespace < 3)
 				break;
 
-			snprintf(out, 4, "%%%02x", *p++); /* %xx */
+			/* MUST be upper case hex to be compliant */
+			snprintf(out, 4, "%%%02X", (uint8_t) *p++); /* %XX */
 
 			/* Already decremented */
 			freespace -= 2;
@@ -480,16 +484,53 @@ static ssize_t urlquote_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	return outlen - freespace;
 }
 
+/** URLdecode special characters
+ *
+ * Example: "%{urlunquote:http%%3A%%47%%47example.org%%47}" == "http://example.org/"
+ * Mind the double % in the quoted string, otherwise unlang would start parsing it
+ */
+static ssize_t urlunquote_xlat(UNUSED void *instance, UNUSED REQUEST *request,
+			       char const *fmt, char *out, size_t outlen)
+{
+	char const *p;
+	char *c1, *c2;
+	size_t	freespace = outlen;
+
+	if (outlen <= 1) return 0;
+
+	p = fmt;
+	while (*p && (--freespace > 0)) {
+		if (*p != '%') {
+			*out++ = *p++;
+			continue;
+		}
+		/* Is a % char */
+
+		/* Don't need \0 check, as it won't be in the hextab */
+		if (!(c1 = memchr(hextab, tolower(*++p), 16)) ||
+		    !(c2 = memchr(hextab, tolower(*++p), 16))) {
+		   	REMARKER(fmt, p - fmt, "None hex char in % sequence");
+		   	return -1;
+		}
+		p++;
+		*out++ = ((c1 - hextab) << 4) + (c2 - hextab);
+	}
+
+	*out = '\0';
+
+	return outlen - freespace;
+}
+
 /** Equivalent to the old safe_characters functionality in rlm_sql
  *
  * @verbatim Example: "%{escape:<img>foo.jpg</img>}" == "=60img=62foo.jpg=60/img=62" @endverbatim
  */
-static ssize_t escape_xlat(UNUSED void *instance, UNUSED REQUEST *request,
+static ssize_t escape_xlat(void *instance, UNUSED REQUEST *request,
 			   char const *fmt, char *out, size_t outlen)
 {
 	rlm_expr_t *inst = instance;
-	char const 	*p;
-	size_t	freespace = outlen;
+	char const *p;
+	size_t freespace = outlen;
 
 	if (outlen <= 1) return 0;
 
@@ -507,7 +548,7 @@ static ssize_t escape_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 		if (freespace < 3)
 			break;
 
-		snprintf(out, 4, "=%02X", *p++);
+		snprintf(out, 4, "=%02X", (uint8_t)*p++);
 
 		/* Already decremented */
 		freespace -= 2;
@@ -519,9 +560,53 @@ static ssize_t escape_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	return outlen - freespace;
 }
 
+/** Equivalent to the old safe_characters functionality in rlm_sql
+ *
+ * @verbatim Example: "%{unescape:=60img=62foo.jpg=60/img=62}" == "<img>foo.jpg</img>" @endverbatim
+ */
+static ssize_t unescape_xlat(void *instance, UNUSED REQUEST *request,
+			       char const *fmt, char *out, size_t outlen)
+{
+	rlm_expr_t *inst = instance;
+	char const *p;
+	char *c1, *c2, c3;
+	size_t	freespace = outlen;
+
+	if (outlen <= 1) return 0;
+
+	p = fmt;
+	while (*p && (--freespace > 0)) {
+		if (*p != '=') {
+		next:
+
+			*out++ = *p++;
+			continue;
+		}
+
+		/* Is a = char */
+
+		if (!(c1 = memchr(hextab, tolower(*(p + 1)), 16)) ||
+		    !(c2 = memchr(hextab, tolower(*(p + 2)), 16))) goto next;
+		c3 = ((c1 - hextab) << 4) + (c2 - hextab);
+
+		/*
+		 *	It was just random occurrence which just happens
+		 *	to match the escape sequence for a safe character.
+		 *	Copy it across verbatim.
+		 */
+		if (strchr(inst->allowed_chars, c3)) goto next;
+		*out++ = c3;
+		p += 3;
+	}
+
+	*out = '\0';
+
+	return outlen - freespace;
+}
+
 /** Convert a string to lowercase
  *
- * Example "%{tolower:Bar}" == "bar"
+ * Example: "%{tolower:Bar}" == "bar"
  *
  * Probably only works for ASCII
  */
@@ -594,9 +679,9 @@ static ssize_t md5_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 		return -1;
 	}
 
-	fr_MD5Init(&ctx);
-	fr_MD5Update(&ctx, p, inlen);
-	fr_MD5Final(digest, &ctx);
+	fr_md5_init(&ctx);
+	fr_md5_update(&ctx, p, inlen);
+	fr_md5_final(digest, &ctx);
 
 	/*
 	 *	Each digest octet takes two hex digits, plus one for
@@ -637,9 +722,9 @@ static ssize_t sha1_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 		return -1;
 	}
 
-	fr_SHA1Init(&ctx);
-	fr_SHA1Update(&ctx, p, inlen);
-	fr_SHA1Final(digest, &ctx);
+	fr_sha1_init(&ctx);
+	fr_sha1_update(&ctx, p, inlen);
+	fr_sha1_final(digest, &ctx);
 
 	/*
 	 *      Each digest octet takes two hex digits, plus one for
@@ -711,6 +796,98 @@ static ssize_t _md##_xlat(UNUSED void *instance, UNUSED REQUEST *request, char c
 EVP_MD_XLAT(sha256);
 EVP_MD_XLAT(sha512);
 #endif
+
+/** Generate the HMAC-MD5 of a string or attribute
+ *
+ * Example: "%{hmacmd5:foo bar}" == "Zm9v"
+ */
+static ssize_t hmac_md5_xlat(UNUSED void *instance, UNUSED REQUEST *request,
+			     char const *fmt, char *out, size_t outlen)
+{
+	uint8_t const *data, *key;
+	char const *p;
+	ssize_t data_len, key_len;
+	uint8_t digest[MD5_DIGEST_LENGTH];
+	char data_ref[256];
+
+	if (outlen <= (sizeof(digest) * 2)) {
+		REDEBUG("Insufficient space to write digest, needed %zu bytes, have %zu bytes",
+			(sizeof(digest) * 2) + 1, outlen);
+		return -1;
+	}
+
+	p = strchr(fmt, ' ');
+	if (!p) {
+		REDEBUG("HMAC requires exactly two arguments (&data &key)");
+		return -1;
+	}
+
+	if ((size_t)(p - fmt) >= sizeof(data_ref)) {
+		REDEBUG("Insufficient space to store HMAC input data, needed %zu bytes, have %zu bytes",
+		       (p - fmt) + 1, sizeof(data_ref));
+
+		return -1;
+	}
+	strlcpy(data_ref, fmt, (p - fmt) + 1);
+
+	data_len = xlat_fmt_to_ref(&data, request, data_ref);
+	if (data_len < 0) return -1;
+
+	while (isspace(*p) && p++);
+
+	key_len = xlat_fmt_to_ref(&key, request, p);
+	if (key_len < 0) return -1;
+
+	fr_hmac_md5(digest, data, data_len, key, key_len);
+
+	return fr_bin2hex(out, digest, sizeof(digest));
+}
+
+/** Generate the HMAC-SHA1 of a string or attribute
+ *
+ * Example: "%{hmacsha1:foo bar}" == "Zm9v"
+ */
+static ssize_t hmac_sha1_xlat(UNUSED void *instance, UNUSED REQUEST *request,
+			      char const *fmt, char *out, size_t outlen)
+{
+	uint8_t const *data, *key;
+	char const *p;
+	ssize_t data_len, key_len;
+	uint8_t digest[SHA1_DIGEST_LENGTH];
+	char data_ref[256];
+
+	if (outlen <= (sizeof(digest) * 2)) {
+		REDEBUG("Insufficient space to write digest, needed %zu bytes, have %zu bytes",
+			(sizeof(digest) * 2) + 1, outlen);
+		return -1;
+	}
+
+	p = strchr(fmt, ' ');
+	if (!p) {
+		REDEBUG("HMAC requires exactly two arguments (&data &key)");
+		return -1;
+	}
+
+	if ((size_t)(p - fmt) >= sizeof(data_ref)) {
+		REDEBUG("Insufficient space to store HMAC input data, needed %zu bytes, have %zu bytes",
+		        (p - fmt) + 1, sizeof(data_ref));
+
+		return -1;
+	}
+	strlcpy(data_ref, fmt, (p - fmt) + 1);
+
+	data_len = xlat_fmt_to_ref(&data, request, data_ref);
+	if (data_len < 0) return -1;
+
+	while (isspace(*p) && p++);
+
+	key_len = xlat_fmt_to_ref(&key, request, p);
+	if (key_len < 0) return -1;
+
+	fr_hmac_sha1(digest, data, data_len, key, key_len);
+
+	return fr_bin2hex(out, digest, sizeof(digest));
+}
 
 /** Encode string or attribute as base64
  *
@@ -797,7 +974,9 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	xlat_register("rand", rand_xlat, NULL, inst);
 	xlat_register("randstr", randstr_xlat, NULL, inst);
 	xlat_register("urlquote", urlquote_xlat, NULL, inst);
+	xlat_register("urlunquote", urlunquote_xlat, NULL, inst);
 	xlat_register("escape", escape_xlat, NULL, inst);
+	xlat_register("unescape", unescape_xlat, NULL, inst);
 	xlat_register("tolower", lc_xlat, NULL, inst);
 	xlat_register("toupper", uc_xlat, NULL, inst);
 	xlat_register("md5", md5_xlat, NULL, inst);
@@ -806,6 +985,8 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	xlat_register("sha256", sha256_xlat, NULL, inst);
 	xlat_register("sha512", sha512_xlat, NULL, inst);
 #endif
+	xlat_register("hmacmd5", hmac_md5_xlat, NULL, inst);
+	xlat_register("hmacsha1", hmac_sha1_xlat, NULL, inst);
 	xlat_register("base64", base64_xlat, NULL, inst);
 	xlat_register("base64tohex", base64_to_hex_xlat, NULL, inst);
 

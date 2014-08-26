@@ -157,9 +157,9 @@ void addip(char *sessiondbname, char *indexdbname, char *ipaddress,
 
 		snprintf(md5_input_str, MAX_STRING_LEN, "%s %s", NASname, NASport);
 
-		fr_MD5Init(&md5_context);
-		fr_MD5Update(&md5_context, (uint8_t *) md5_input_str, strlen(md5_input_str));
-		fr_MD5Final(key_str, &md5_context);
+		fr_md5_init(&md5_context);
+		fr_md5_update(&md5_context, (uint8_t *) md5_input_str, strlen(md5_input_str));
+		fr_md5_final(key_str, &md5_context);
 
 		memcpy(key.key, key_str, 16);
 		fr_bin2hex(hex_str, key_str, 16);
@@ -386,9 +386,9 @@ void tonewformat(char *sessiondbname, char *newsessiondbname) {
 
 		snprintf(md5_input_str, MAX_STRING_LEN, "%s %d", old_key.nas, old_key.port);
 
-		fr_MD5Init(&md5_context);
-		fr_MD5Update(&md5_context, (uint8_t *) md5_input_str, strlen(md5_input_str));
-		fr_MD5Final(key_str, &md5_context);
+		fr_md5_init(&md5_context);
+		fr_md5_update(&md5_context, (uint8_t *) md5_input_str, strlen(md5_input_str));
+		fr_md5_final(key_str, &md5_context);
 
 		memcpy(key.key, key_str, 16);
 		fr_bin2hex(hex_str, key_str, 16);
@@ -591,14 +591,36 @@ int main(int argc, char **argv) {
 
 	while ((ch = getopt(argc, argv, "acrvnou"))!= -1)
 	switch (ch) {
-	case 'a': aflag++;break;
-	case 'c': cflag++;break;
-	case 'r': rflag++;break;
-	case 'v': vflag = 1;break;
-	case 'n': nflag = 1;break;
-	case 'o': oflag = 1;break;
-	case 'u': uflag = 1;break;
-	default: usage(argv0);
+	case 'a':
+		aflag++;
+		break;
+
+	case 'c':
+		cflag++;
+		break;
+
+	case 'r':
+		rflag++;
+		break;
+
+	case 'v':
+		vflag = 1;
+		break;
+
+	case 'n':
+		nflag = 1;
+		break;
+
+	case 'o':
+		oflag = 1;
+		break;
+
+	case 'u':
+		uflag = 1;
+		break;
+
+	default:
+		usage(argv0);
 	}
 	argc -= optind;
 	argv += optind;

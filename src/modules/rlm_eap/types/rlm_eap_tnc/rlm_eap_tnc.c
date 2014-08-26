@@ -111,11 +111,6 @@ static int mod_detach(void *instance)
 	return 0;
 }
 
-static void tnc_free(void *conn_id)
-{
-	talloc_free(conn_id);
-}
-
 /*
  * This function is called when the first EAP_IDENTITY_RESPONSE message
  * was received.
@@ -219,7 +214,6 @@ static int tnc_initiate(void *instance, eap_handler_t *handler)
 	 */
 	handler->opaque = talloc(handler, TNC_ConnectionID);
 	memcpy(handler->opaque, &conn_id, sizeof(TNC_ConnectionID));
-	handler->free_opaque = tnc_free;
 
 	/*
 	 *	Bild first EAP TNC request
@@ -307,12 +301,11 @@ static int mod_authenticate(UNUSED void *instance, eap_handler_t *handler)
 	switch (connection_state) {
 	case TNC_CONNECTION_STATE_HANDSHAKE:
 		code = PW_EAP_REQUEST;
-
 		break;
+
 	case TNC_CONNECTION_STATE_ACCESS_NONE:
 		code = PW_EAP_FAILURE;
 		pairmake_config("TNC-Status", "None", T_OP_SET);
-
 		break;
 
 	case TNC_CONNECTION_STATE_ACCESS_ALLOWED:
@@ -323,11 +316,10 @@ static int mod_authenticate(UNUSED void *instance, eap_handler_t *handler)
 	case TNC_CONNECTION_STATE_ACCESS_ISOLATED:
 		code = PW_EAP_SUCCESS;
 		pairmake_config("TNC-Status", "Isolate", T_OP_SET);
-
 		break;
+
 	default:
 		ERROR("rlm_eap_tnc: Invalid connection state");
-
 		return 0;
 	}
 

@@ -278,7 +278,7 @@ RADIUS_PACKET *vqp_recv(int sockfd)
 	/*
 	 *	Allocate the new request data structure
 	 */
-	packet = rad_alloc(NULL, 0);
+	packet = rad_alloc(NULL, false);
 	if (!packet) {
 		fr_strerror_printf("out of memory");
 		return NULL;
@@ -384,7 +384,7 @@ RADIUS_PACKET *vqp_recv(int sockfd)
 	/*
 	 *	This is more than a bit of a hack.
 	 */
-	packet->code = PW_CODE_AUTHENTICATION_REQUEST;
+	packet->code = PW_CODE_ACCESS_REQUEST;
 
 	memcpy(&id, packet->data + 4, 4);
 	packet->id = ntohl(id);

@@ -40,6 +40,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #ifdef HAVE_UTIME_H
 #include <utime.h>
 #endif
+#include <ctype.h>
 
 #ifdef WITH_TLS
 #ifdef HAVE_OPENSSL_RAND_H
@@ -80,28 +81,99 @@ static unsigned int 	record_minus(record_t *buf, void *ptr,
 				     unsigned int size);
 
 #ifdef PSK_MAX_IDENTITY_LEN
-static unsigned int psk_server_callback(SSL *ssl, char const *identity,
+static bool identity_is_safe(const char *identity)
+{
+	char c;
+
+	if (!identity) return true;
+
+	while ((c = *(identity++)) != '\0') {
+		if (isalpha((int) c) || isdigit((int) c) || isspace((int) c) ||
+		    (c == '@') || (c == '-') || (c == '_') || (c == '.')) {
+			continue;
+		}
+
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ *	When a client uses TLS-PSK to talk to a server, this callback
+ *	is used by the server to determine the PSK to use.
+ */
+static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 					unsigned char *psk,
 					unsigned int max_psk_len)
 {
-	unsigned int psk_len;
+	unsigned int psk_len = 0;
 	fr_tls_server_conf_t *conf;
+	REQUEST *request;
 
 	conf = (fr_tls_server_conf_t *)SSL_get_ex_data(ssl,
 						       FR_TLS_EX_INDEX_CONF);
 	if (!conf) return 0;
 
+	request = (REQUEST *)SSL_get_ex_data(ssl,
+					     FR_TLS_EX_INDEX_REQUEST);
+	if (request && conf->psk_query) {
+		size_t hex_len;
+		VALUE_PAIR *vp;
+		char buffer[2 * PSK_MAX_PSK_LEN + 4]; /* allow for too-long keys */
+
+		/*
+		 *	The passed identity is weird.  Deny it.
+		 */
+		if (!identity_is_safe(identity)) {
+			RWDEBUG("Invalid characters in PSK identity %s", identity);
+			return 0;
+		}
+
+		vp = pairmake_packet("TLS-PSK-Identity", identity, T_OP_SET);
+		if (!vp) return 0;
+
+		hex_len = radius_xlat(buffer, sizeof(buffer), request, conf->psk_query,
+				      NULL, NULL);
+		if (!hex_len) {
+			RWDEBUG("PSK expansion returned an empty string.");
+			return 0;
+		}
+
+		/*
+		 *	The returned key is truncated at MORE than
+		 *	OpenSSL can handle.  That way we can detect
+		 *	the truncation, and complain about it.
+		 */
+		if (hex_len > (2 * max_psk_len)) {
+			RWDEBUG("Returned PSK is too long (%u > %u)",
+				(unsigned int) hex_len, 2 * max_psk_len);
+			return 0;
+		}
+
+		/*
+		 *	Leave the TLS-PSK-Identity in the request, and
+		 *	convert the expansion from printable string
+		 *	back to hex.
+		 */
+		return fr_hex2bin(psk, max_psk_len, buffer, hex_len);
+	}
+
 	/*
-	 *	FIXME: Look up the PSK password based on the identity!
+	 *	No REQUEST, or no dynamic query.  Just look for a
+	 *	static identity.
 	 */
 	if (strcmp(identity, conf->psk_identity) != 0) {
+		ERROR("Supplied PSK identity %s does not match configuration.  Rejecting.",
+		      identity);
 		return 0;
 	}
 
 	psk_len = strlen(conf->psk_password);
 	if (psk_len > (2 * max_psk_len)) return 0;
 
-	return fr_hex2bin(psk, conf->psk_password, psk_len);
+	return fr_hex2bin(psk, max_psk_len, conf->psk_password, psk_len);
 }
 
 static unsigned int psk_client_callback(SSL *ssl, UNUSED char const *hint,
@@ -120,7 +192,7 @@ static unsigned int psk_client_callback(SSL *ssl, UNUSED char const *hint,
 
 	strlcpy(identity, conf->psk_identity, max_identity_len);
 
-	return fr_hex2bin(psk, conf->psk_password, psk_len);
+	return fr_hex2bin(psk, max_psk_len, conf->psk_password, psk_len);
 }
 
 #endif
@@ -144,7 +216,7 @@ tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
 		return NULL;
 	}
 
-	request = talloc_zero(ssn, REQUEST);
+	request = request_alloc(ssn);
 	SSL_set_ex_data(ssn->ssl, FR_TLS_EX_INDEX_REQUEST, (void *)request);
 
 	/*
@@ -182,8 +254,22 @@ tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
 	return ssn;
 }
 
-tls_session_t *tls_new_session(fr_tls_server_conf_t *conf, REQUEST *request,
-			       int client_cert)
+static int _tls_session_free(tls_session_t *ssn)
+{
+	/*
+	 *	Free any opaque TTLS or PEAP data.
+	 */
+	if ((ssn->opaque) && (ssn->free_opaque)) {
+		ssn->free_opaque(ssn->opaque);
+		ssn->opaque = NULL;
+	}
+
+	session_close(ssn);
+
+	return 0;
+}
+
+tls_session_t *tls_new_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *conf, REQUEST *request, bool client_cert)
 {
 	tls_session_t *state = NULL;
 	SSL *new_tls = NULL;
@@ -217,8 +303,9 @@ tls_session_t *tls_new_session(fr_tls_server_conf_t *conf, REQUEST *request,
 	/* We use the SSL's "app_data" to indicate a call-back */
 	SSL_set_app_data(new_tls, NULL);
 
-	state = talloc_zero(conf, tls_session_t);
+	state = talloc_zero(ctx, tls_session_t);
 	session_init(state);
+	talloc_set_destructor(state, _tls_session_free);
 
 	state->ctx = conf->ctx;
 	state->ssl = new_tls;
@@ -520,25 +607,6 @@ void session_close(tls_session_t *ssn)
 	session_init(ssn);
 }
 
-void session_free(void *ssn)
-{
-	tls_session_t *sess = (tls_session_t *)ssn;
-
-	if (!ssn) return;
-
-	/*
-	 *	Free any opaque TTLS or PEAP data.
-	 */
-	if ((sess->opaque) && (sess->free_opaque)) {
-		sess->free_opaque(sess->opaque);
-		sess->opaque = NULL;
-	}
-
-	session_close(sess);
-
-	talloc_free(sess);
-}
-
 static void record_init(record_t *rec)
 {
 	rec->used = 0;
@@ -629,15 +697,19 @@ void tls_session_information(tls_session_t *tls_session)
 		case SSL3_RT_CHANGE_CIPHER_SPEC:
 			str_content_type = "ChangeCipherSpec";
 			break;
+
 		case SSL3_RT_ALERT:
 			str_content_type = "Alert";
 			break;
+
 		case SSL3_RT_HANDSHAKE:
 			str_content_type = "Handshake";
 			break;
+
 		case SSL3_RT_APPLICATION_DATA:
 			str_content_type = "ApplicationData";
 			break;
+
 		default:
 			str_content_type = "UnknownContentType";
 			break;
@@ -662,69 +734,91 @@ void tls_session_information(tls_session_t *tls_session)
 				case SSL3_AD_CLOSE_NOTIFY:
 					str_details2 = " close_notify";
 					break;
+
 				case SSL3_AD_UNEXPECTED_MESSAGE:
 					str_details2 = " unexpected_message";
 					break;
+
 				case SSL3_AD_BAD_RECORD_MAC:
 					str_details2 = " bad_record_mac";
 					break;
+
 				case TLS1_AD_DECRYPTION_FAILED:
 					str_details2 = " decryption_failed";
 					break;
+
 				case TLS1_AD_RECORD_OVERFLOW:
 					str_details2 = " record_overflow";
 					break;
+
 				case SSL3_AD_DECOMPRESSION_FAILURE:
 					str_details2 = " decompression_failure";
 					break;
+
 				case SSL3_AD_HANDSHAKE_FAILURE:
 					str_details2 = " handshake_failure";
 					break;
+
 				case SSL3_AD_BAD_CERTIFICATE:
 					str_details2 = " bad_certificate";
 					break;
+
 				case SSL3_AD_UNSUPPORTED_CERTIFICATE:
 					str_details2 = " unsupported_certificate";
 					break;
+
 				case SSL3_AD_CERTIFICATE_REVOKED:
 					str_details2 = " certificate_revoked";
 					break;
+
 				case SSL3_AD_CERTIFICATE_EXPIRED:
 					str_details2 = " certificate_expired";
 					break;
+
 				case SSL3_AD_CERTIFICATE_UNKNOWN:
 					str_details2 = " certificate_unknown";
 					break;
+
 				case SSL3_AD_ILLEGAL_PARAMETER:
 					str_details2 = " illegal_parameter";
 					break;
+
 				case TLS1_AD_UNKNOWN_CA:
 					str_details2 = " unknown_ca";
 					break;
+
 				case TLS1_AD_ACCESS_DENIED:
 					str_details2 = " access_denied";
 					break;
+
 				case TLS1_AD_DECODE_ERROR:
 					str_details2 = " decode_error";
 					break;
+
 				case TLS1_AD_DECRYPT_ERROR:
 					str_details2 = " decrypt_error";
 					break;
+
 				case TLS1_AD_EXPORT_RESTRICTION:
 					str_details2 = " export_restriction";
 					break;
+
 				case TLS1_AD_PROTOCOL_VERSION:
 					str_details2 = " protocol_version";
 					break;
+
 				case TLS1_AD_INSUFFICIENT_SECURITY:
 					str_details2 = " insufficient_security";
 					break;
+
 				case TLS1_AD_INTERNAL_ERROR:
 					str_details2 = " internal_error";
 					break;
+
 				case TLS1_AD_USER_CANCELLED:
 					str_details2 = " user_canceled";
 					break;
+
 				case TLS1_AD_NO_RENEGOTIATION:
 					str_details2 = " no_renegotiation";
 					break;
@@ -735,35 +829,43 @@ void tls_session_information(tls_session_t *tls_session)
 		if (tls_session->info.content_type == SSL3_RT_HANDSHAKE) {
 			str_details1 = "???";
 
-			if (tls_session->info.record_len > 0)
-			switch (tls_session->info.handshake_type) {
+			if (tls_session->info.record_len > 0) switch (tls_session->info.handshake_type) {
 			case SSL3_MT_HELLO_REQUEST:
 				str_details1 = ", HelloRequest";
 				break;
+
 			case SSL3_MT_CLIENT_HELLO:
 				str_details1 = ", ClientHello";
 				break;
+
 			case SSL3_MT_SERVER_HELLO:
 				str_details1 = ", ServerHello";
 				break;
+
 			case SSL3_MT_CERTIFICATE:
 				str_details1 = ", Certificate";
 				break;
+
 			case SSL3_MT_SERVER_KEY_EXCHANGE:
 				str_details1 = ", ServerKeyExchange";
 				break;
+
 			case SSL3_MT_CERTIFICATE_REQUEST:
 				str_details1 = ", CertificateRequest";
 				break;
+
 			case SSL3_MT_SERVER_DONE:
 				str_details1 = ", ServerHelloDone";
 				break;
+
 			case SSL3_MT_CERTIFICATE_VERIFY:
 				str_details1 = ", CertificateVerify";
 				break;
+
 			case SSL3_MT_CLIENT_KEY_EXCHANGE:
 				str_details1 = ", ClientKeyExchange";
 				break;
+
 			case SSL3_MT_FINISHED:
 				str_details1 = ", Finished";
 				break;
@@ -830,6 +932,7 @@ static CONF_PARSER tls_server_config[] = {
 #ifdef PSK_MAX_IDENTITY_LEN
 	{ "psk_identity", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, psk_identity), NULL },
 	{ "psk_hexphrase", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, fr_tls_server_conf_t, psk_password), NULL },
+	{ "psk_query", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, psk_query), NULL },
 #endif
 	{ "dh_file", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, dh_file), NULL },
 	{ "random_file", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, random_file), NULL },
@@ -946,8 +1049,8 @@ static int generate_eph_rsa_key(SSL_CTX *ctx)
 /* index we use to store cached session VPs
  * needs to be dynamic so we can supply a "free" function
  */
-static int FR_TLS_EX_INDEX_VPS = -1;
-int FR_TLS_EX_INDEX_CERTS = -1;
+int fr_tls_ex_index_vps = -1;
+int fr_tls_ex_index_certs = -1;
 
 /*
  *	Print debugging messages, and free data.
@@ -1019,8 +1122,10 @@ static int cbtls_new_session(SSL *ssl, SSL_SESSION *sess)
 			return 0;
 		}
 
+
+		/* Do not convert to TALLOC - Thread safety */
 		/* alloc and convert to ASN.1 */
-		sess_blob = talloc_array(conf, unsigned char, blob_len);
+		sess_blob = malloc(blob_len);
 		if (!sess_blob) {
 			DEBUG2("  SSL: could not allocate buffer len=%d to persist session", blob_len);
 			return 0;
@@ -1059,7 +1164,7 @@ static int cbtls_new_session(SSL *ssl, SSL_SESSION *sess)
 	}
 
 error:
-	if (sess_blob) talloc_free(sess_blob);
+	free(sess_blob);
 
 	return 0;
 }
@@ -1151,7 +1256,7 @@ static SSL_SESSION *cbtls_get_session(SSL *ssl,
 
 		/* cache the VPs into the session */
 		vp = paircopy(talloc_ctx, pairlist->reply);
-		SSL_SESSION_set_ex_data(sess, FR_TLS_EX_INDEX_VPS, vp);
+		SSL_SESSION_set_ex_data(sess, fr_tls_ex_index_vps, vp);
 		DEBUG2("  SSL: Successfully restored session %s", buffer);
 	}
 err:
@@ -1178,7 +1283,7 @@ static int ocsp_parse_cert_url(X509 *cert, char **phost, char **pport,
 	aia = X509_get_ext_d2i(cert, NID_info_access, NULL, NULL);
 
 	for (i = 0; i < sk_ACCESS_DESCRIPTION_num(aia); i++) {
-		ad = sk_ACCESS_DESCRIPTION_value(aia, 0);
+		ad = sk_ACCESS_DESCRIPTION_value(aia, i);
 		if (OBJ_obj2nid(ad->method) == NID_ad_OCSP) {
 			if (ad->location->type == GEN_URI) {
 			  if(OCSP_parse_url((char *) ad->location->d.ia5->data,
@@ -1503,7 +1608,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 
 	request = (REQUEST *)SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_REQUEST);
 	rad_assert(request != NULL);
-	certs = (VALUE_PAIR **)SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_CERTS);
+	certs = (VALUE_PAIR **)SSL_get_ex_data(ssl, fr_tls_ex_index_certs);
 
 	identity = (char **)SSL_get_ex_data(ssl, FR_TLS_EX_INDEX_IDENTITY);
 #ifdef HAVE_OPENSSL_OCSP_H
@@ -1702,10 +1807,10 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	}
 
 	switch (ctx->error) {
-
 	case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
 		ERROR("issuer= %s\n", issuer);
 		break;
+
 	case X509_V_ERR_CERT_NOT_YET_VALID:
 	case X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD:
 		ERROR("notBefore=");
@@ -1713,6 +1818,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 		ASN1_TIME_print(bio_err, X509_get_notBefore(ctx->current_cert));
 #endif
 		break;
+
 	case X509_V_ERR_CERT_HAS_EXPIRED:
 	case X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD:
 		ERROR("notAfter=");
@@ -1999,7 +2105,7 @@ void tls_global_cleanup(void)
  *	- Load the Private key & the certificate
  *	- Set the Context options & Verify options
  */
-static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
+static SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client)
 {
 	SSL_CTX *ctx;
 	X509_STORE *certstore;
@@ -2098,6 +2204,26 @@ static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
 	}
 
 #ifdef PSK_MAX_IDENTITY_LEN
+	if (!client) {
+		/*
+		 *	No dynamic query exists.  There MUST be a
+		 *	statically configured identity and password.
+		 */
+		if (conf->psk_query && !*conf->psk_query) {
+			ERROR("Invalid PSK Configuration: psk_query cannot be empty");
+			return NULL;
+		}
+
+		SSL_CTX_set_psk_server_callback(ctx, psk_server_callback);
+
+	} else if (conf->psk_query) {
+		ERROR("Invalid PSK Configuration: psk_query cannot be used for outgoing connections");
+		return NULL;
+	}
+
+	/*
+	 *	Now check that if PSK is being used, the config is valid.
+	 */
 	if ((conf->psk_identity && !conf->psk_password) ||
 	    (!conf->psk_identity && conf->psk_password) ||
 	    (conf->psk_identity && !*conf->psk_identity) ||
@@ -2108,7 +2234,7 @@ static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
 
 	if (conf->psk_identity) {
 		size_t psk_len, hex_len;
-		char buffer[PSK_MAX_PSK_LEN];
+		uint8_t buffer[PSK_MAX_PSK_LEN];
 
 		if (conf->certificate_file ||
 		    conf->private_key_password || conf->private_key_file ||
@@ -2120,9 +2246,6 @@ static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
 		if (client) {
 			SSL_CTX_set_psk_client_callback(ctx,
 							psk_client_callback);
-		} else {
-			SSL_CTX_set_psk_server_callback(ctx,
-							psk_server_callback);
 		}
 
 		psk_len = strlen(conf->psk_password);
@@ -2132,7 +2255,11 @@ static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
 			return NULL;
 		}
 
-		hex_len = fr_hex2bin((uint8_t *) buffer, conf->psk_password, psk_len);
+		/*
+		 *	Check the password now, so that we don't have
+		 *	errors at run-time.
+		 */
+		hex_len = fr_hex2bin(buffer, sizeof(buffer), conf->psk_password, psk_len);
 		if (psk_len != (2 * hex_len)) {
 			ERROR("psk_hexphrase is not all hex");
 			return NULL;
@@ -2269,10 +2396,10 @@ post_ca:
 		SSL_CTX_sess_set_remove_cb(ctx, cbtls_remove_session);
 
 		SSL_CTX_set_quiet_shutdown(ctx, 1);
-		if (FR_TLS_EX_INDEX_VPS < 0)
-			FR_TLS_EX_INDEX_VPS = SSL_SESSION_get_ex_new_index(0, NULL, NULL, NULL, sess_free_vps);
-		if (FR_TLS_EX_INDEX_CERTS < 0)
-			FR_TLS_EX_INDEX_CERTS = SSL_SESSION_get_ex_new_index(0, NULL, NULL, NULL, sess_free_certs);
+		if (fr_tls_ex_index_vps < 0)
+			fr_tls_ex_index_vps = SSL_SESSION_get_ex_new_index(0, NULL, NULL, NULL, sess_free_vps);
+		if (fr_tls_ex_index_certs < 0)
+			fr_tls_ex_index_certs = SSL_SESSION_get_ex_new_index(0, NULL, NULL, NULL, sess_free_certs);
 	}
 
 	/*
@@ -2280,13 +2407,13 @@ post_ca:
 	 */
 #ifdef X509_V_FLAG_CRL_CHECK
 	if (conf->check_crl) {
-	  certstore = SSL_CTX_get_cert_store(ctx);
-	  if (certstore == NULL) {
-	    ERROR("tls: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
-	    ERROR("tls: Error reading Certificate Store");
-	    return NULL;
-	  }
-	  X509_STORE_set_flags(certstore, X509_V_FLAG_CRL_CHECK);
+		certstore = SSL_CTX_get_cert_store(ctx);
+		if (certstore == NULL) {
+			ERROR("tls: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
+			ERROR("tls: Error reading Certificate Store");
+	    		return NULL;
+		}
+		X509_STORE_set_flags(certstore, X509_V_FLAG_CRL_CHECK);
 	}
 #endif
 
@@ -2374,7 +2501,7 @@ post_ca:
  *	added to automatically free the data when the CONF_SECTION
  *	is freed.
  */
-static int tls_server_conf_free(fr_tls_server_conf_t *conf)
+static int _tls_server_conf_free(fr_tls_server_conf_t *conf)
 {
 	if (conf->ctx) SSL_CTX_free(conf->ctx);
 
@@ -2387,6 +2514,21 @@ static int tls_server_conf_free(fr_tls_server_conf_t *conf)
 	memset(conf, 0, sizeof(*conf));
 #endif
 	return 0;
+}
+
+static fr_tls_server_conf_t *tls_server_conf_alloc(TALLOC_CTX *ctx)
+{
+	fr_tls_server_conf_t *conf;
+
+	conf = talloc_zero(ctx, fr_tls_server_conf_t);
+	if (!conf) {
+		ERROR("Out of memory");
+		return NULL;
+	}
+
+	talloc_set_destructor(conf, _tls_server_conf_free);
+
+	return conf;
 }
 
 
@@ -2404,13 +2546,7 @@ fr_tls_server_conf_t *tls_server_conf_parse(CONF_SECTION *cs)
 		return conf;
 	}
 
-	conf = talloc_zero(cs, fr_tls_server_conf_t);
-	if (!conf) {
-		ERROR("Out of memory");
-		return NULL;
-	}
-
-	talloc_set_destructor(conf, tls_server_conf_free);
+	conf = tls_server_conf_alloc(cs);
 
 	if (cf_section_parse(cs, conf, tls_server_config) < 0) {
 	error:
@@ -2436,7 +2572,7 @@ fr_tls_server_conf_t *tls_server_conf_parse(CONF_SECTION *cs)
 	/*
 	 *	Initialize TLS
 	 */
-	conf->ctx = init_tls_ctx(conf, 0);
+	conf->ctx = tls_init_ctx(conf, 0);
 	if (conf->ctx == NULL) {
 		goto error;
 	}
@@ -2493,13 +2629,7 @@ fr_tls_server_conf_t *tls_client_conf_parse(CONF_SECTION *cs)
 		return conf;
 	}
 
-	conf = talloc_zero(cs, fr_tls_server_conf_t);
-	if (!conf) {
-		ERROR("Out of memory");
-		return NULL;
-	}
-
-	talloc_set_destructor(conf, tls_server_conf_free);
+	conf = tls_server_conf_alloc(cs);
 
 	if (cf_section_parse(cs, conf, tls_client_config) < 0) {
 	error:
@@ -2515,7 +2645,7 @@ fr_tls_server_conf_t *tls_client_conf_parse(CONF_SECTION *cs)
 	/*
 	 *	Initialize TLS
 	 */
-	conf->ctx = init_tls_ctx(conf, 1);
+	conf->ctx = tls_init_ctx(conf, 1);
 	if (conf->ctx == NULL) {
 		goto error;
 	}
@@ -2588,19 +2718,19 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 
 		fr_bin2hex(buffer, ssn->ssl->session->session_id, size);
 
-		vp = paircopy2(talloc_ctx, request->reply->vps, PW_USER_NAME, 0, TAG_ANY);
+		vp = paircopy_by_num(talloc_ctx, request->reply->vps, PW_USER_NAME, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
 
-		vp = paircopy2(talloc_ctx, request->packet->vps, PW_STRIPPED_USER_NAME, 0, TAG_ANY);
+		vp = paircopy_by_num(talloc_ctx, request->packet->vps, PW_STRIPPED_USER_NAME, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
 
-		vp = paircopy2(talloc_ctx, request->reply->vps, PW_CHARGEABLE_USER_IDENTITY, 0, TAG_ANY);
+		vp = paircopy_by_num(talloc_ctx, request->reply->vps, PW_CHARGEABLE_USER_IDENTITY, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
 
-		vp = paircopy2(talloc_ctx, request->reply->vps, PW_CACHED_SESSION_POLICY, 0, TAG_ANY);
+		vp = paircopy_by_num(talloc_ctx, request->reply->vps, PW_CACHED_SESSION_POLICY, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
 
-		certs = (VALUE_PAIR **)SSL_get_ex_data(ssn->ssl, FR_TLS_EX_INDEX_CERTS);
+		certs = (VALUE_PAIR **)SSL_get_ex_data(ssn->ssl, fr_tls_ex_index_certs);
 
 		/*
 		 *	Hmm... the certs should probably be session data.
@@ -2616,7 +2746,7 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 		if (vps) {
 			RDEBUG2("Saving session %s vps %p in the cache", buffer, vps);
 			SSL_SESSION_set_ex_data(ssn->ssl->session,
-						FR_TLS_EX_INDEX_VPS, vps);
+						fr_tls_ex_index_vps, vps);
 			if (conf->session_cache_path) {
 				/* write the VPs to the cache file */
 				char filename[256], buf[1024];
@@ -2662,7 +2792,7 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 		fr_bin2hex(buffer, ssn->ssl->session->session_id, size);
 
 		vps = SSL_SESSION_get_ex_data(ssn->ssl->session,
-					     FR_TLS_EX_INDEX_VPS);
+					     fr_tls_ex_index_vps);
 		if (!vps) {
 			RWDEBUG("No information in cached session %s", buffer);
 			return -1;
@@ -2687,7 +2817,7 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 						paircopyvp(request->packet, vp));
 				} else {
 					pairadd(&request->reply->vps,
-						paircopyvp(request->packet, vp));
+						paircopyvp(request->reply, vp));
 				}
 			}
 

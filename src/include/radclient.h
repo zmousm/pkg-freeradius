@@ -33,19 +33,19 @@ extern "C" {
  *	Logging macros
  */
  #undef DEBUG
-#define DEBUG(fmt, ...)		if (do_output && (fr_debug_flag > 0)) fprintf(fr_log_fp, fmt "\n", ## __VA_ARGS__)
+#define DEBUG(fmt, ...)		if (do_output && (rc_debug_flag > 0)) fprintf(fr_log_fp, fmt "\n", ## __VA_ARGS__)
 #undef DEBUG2
-#define DEBUG2(fmt, ...)	if (do_output && (fr_debug_flag > 1)) fprintf(fr_log_fp, fmt "\n", ## __VA_ARGS__)
+#define DEBUG2(fmt, ...)	if (do_output && (rc_debug_flag > 1)) fprintf(fr_log_fp, fmt "\n", ## __VA_ARGS__)
 
 
 #define ERROR(fmt, ...)		if (do_output) fr_perror("radclient: " fmt, ## __VA_ARGS__)
 
-#define RDEBUG_ENABLED()	(do_output && (fr_debug_flag > 0))
-#define RDEBUG_ENABLED2()	(do_output && (fr_debug_flag > 1))
+#define RDEBUG_ENABLED()	(do_output && (rc_debug_flag > 0))
+#define RDEBUG_ENABLED2()	(do_output && (rc_debug_flag > 1))
 
 #define REDEBUG(fmt, ...)	if (do_output) fr_perror("(%" PRIu64 ") " fmt , request->num, ## __VA_ARGS__)
-#define RDEBUG(fmt, ...)	if (do_output && (fr_debug_flag > 0)) fprintf(fr_log_fp, "(%" PRIu64 ") " fmt "\n", request->num, ## __VA_ARGS__)
-#define RDEBUG2(fmt, ...)	if (do_output && (fr_debug_flag > 1)) fprintf(fr_log_fp, "(%" PRIu64 ") " fmt "\n", request->num, ## __VA_ARGS__)
+#define RDEBUG(fmt, ...)	if (do_output && (rc_debug_flag > 0)) fprintf(fr_log_fp, "(%" PRIu64 ") " fmt "\n", request->num, ## __VA_ARGS__)
+#define RDEBUG2(fmt, ...)	if (do_output && (rc_debug_flag > 1)) fprintf(fr_log_fp, "(%" PRIu64 ") " fmt "\n", request->num, ## __VA_ARGS__)
 
 typedef struct rc_stats {
 	uint64_t accepted;		//!< Requests to which we received a accept
@@ -75,7 +75,6 @@ struct rc_request {
 	time_t		timestamp;
 
 	RADIUS_PACKET	*packet;	//!< The outgoing request.
-	PW_CODE		packet_code;	//!< The code in the outgoing request.
 	RADIUS_PACKET	*reply;		//!< The incoming response.
 	VALUE_PAIR	*filter;	//!< If the reply passes the filter, then the request passes.
 	PW_CODE		filter_code;	//!< Expected code of the response packet.
@@ -83,6 +82,8 @@ struct rc_request {
 	int		resend;
 	int		tries;
 	bool		done;		//!< Whether the request is complete.
+
+	char const	*name;		//!< Test name (as specified in the request).
 };
 
 #ifdef __cplusplus

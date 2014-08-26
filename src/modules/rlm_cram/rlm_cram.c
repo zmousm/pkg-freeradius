@@ -51,10 +51,10 @@ static void calc_apop_digest(uint8_t *buffer, uint8_t const *challenge,
 {
 	FR_MD5_CTX context;
 
-	fr_MD5Init(&context);
-	fr_MD5Update(&context, challenge, challen);
-	fr_MD5Update(&context, (uint8_t const *) password, strlen(password));
-	fr_MD5Final(buffer, &context);
+	fr_md5_init(&context);
+	fr_md5_update(&context, challenge, challen);
+	fr_md5_update(&context, (uint8_t const *) password, strlen(password));
+	fr_md5_final(buffer, &context);
 }
 
 
@@ -68,14 +68,14 @@ static void calc_md5_digest(uint8_t *buffer, uint8_t const *challenge, size_t ch
 	memset(buf, 0x36, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
 	memcpy(buf+64, challenge, challen);
-	fr_MD5Init(&context);
-	fr_MD5Update(&context, buf, 64+challen);
+	fr_md5_init(&context);
+	fr_md5_update(&context, buf, 64+challen);
 	memset(buf, 0x5c, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
-	fr_MD5Final(buf+64,&context);
-	fr_MD5Init(&context);
-	fr_MD5Update(&context,buf,64+16);
-	fr_MD5Final(buffer,&context);
+	fr_md5_final(buf+64,&context);
+	fr_md5_init(&context);
+	fr_md5_update(&context,buf,64+16);
+	fr_md5_final(buffer,&context);
 }
 
 static void calc_md4_digest(uint8_t *buffer, uint8_t const *challenge, size_t challen, char const *password)
@@ -88,14 +88,14 @@ static void calc_md4_digest(uint8_t *buffer, uint8_t const *challenge, size_t ch
 	memset(buf, 0x36, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
 	memcpy(buf+64, challenge, challen);
-	fr_MD4Init(&context);
-	fr_MD4Update(&context,buf,64+challen);
+	fr_md4_init(&context);
+	fr_md4_update(&context,buf,64+challen);
 	memset(buf, 0x5c, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
-	fr_MD4Final(buf+64,&context);
-	fr_MD4Init(&context);
-	fr_MD4Update(&context,buf,64+16);
-	fr_MD4Final(buffer,&context);
+	fr_md4_final(buf+64,&context);
+	fr_md4_init(&context);
+	fr_md4_update(&context,buf,64+16);
+	fr_md4_final(buffer,&context);
 }
 
 static void calc_sha1_digest(uint8_t *buffer, uint8_t const *challenge,
@@ -109,14 +109,14 @@ static void calc_sha1_digest(uint8_t *buffer, uint8_t const *challenge,
 	memset(buf, 0x36, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
 	memcpy(buf+64, challenge, challen);
-	fr_SHA1Init(&context);
-	fr_SHA1Update(&context,buf,64+challen);
+	fr_sha1_init(&context);
+	fr_sha1_update(&context,buf,64+challen);
 	memset(buf, 0x5c, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
-	fr_SHA1Final(buf+64,&context);
-	fr_SHA1Init(&context);
-	fr_SHA1Update(&context,buf,64+20);
-	fr_SHA1Final(buffer,&context);
+	fr_sha1_final(buf+64,&context);
+	fr_sha1_init(&context);
+	fr_sha1_update(&context,buf,64+20);
+	fr_sha1_final(buffer,&context);
 }
 
 

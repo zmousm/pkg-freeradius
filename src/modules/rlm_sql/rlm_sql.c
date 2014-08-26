@@ -51,6 +51,7 @@ static const CONF_PARSER module_config[] = {
 	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, rlm_sql_config_t, sql_password), "" },
 	{ "radius_db", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_db), "radius" },
 	{ "read_groups", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sql_config_t, read_groups), "yes" },
+	{ "read_profiles", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sql_config_t, read_profiles), "yes" },
 	{ "readclients", FR_CONF_OFFSET(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, rlm_sql_config_t, do_clients), NULL },
 	{ "read_clients", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sql_config_t, do_clients), "no" },
 	{ "deletestalesessions", FR_CONF_OFFSET(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, rlm_sql_config_t, deletestalesessions), NULL },
@@ -84,12 +85,12 @@ static const CONF_PARSER module_config[] = {
 /*
  *	Fall-Through checking function from rlm_files.c
  */
-static int fallthrough(VALUE_PAIR *vp)
+static sql_fall_through_t fall_through(VALUE_PAIR *vp)
 {
 	VALUE_PAIR *tmp;
 	tmp = pairfind(vp, PW_FALL_THROUGH, 0, TAG_ANY);
 
-	return tmp ? tmp->vp_integer : 0;
+	return tmp ? tmp->vp_integer : FALL_THROUGH_DEFAULT;
 }
 
 /*
@@ -102,7 +103,7 @@ static size_t sql_escape_func(REQUEST *, char *out, size_t outlen, char const *i
  *			SQL xlat function
  *
  *  For selects the first value of the first column will be returned,
- *  for inserts, updates and deletes the number of rows afftected will be
+ *  for inserts, updates and deletes the number of rows affected will be
  *  returned instead.
  */
 static ssize_t sql_xlat(void *instance, REQUEST *request, char const *query, char *out, size_t freespace)
@@ -420,6 +421,10 @@ int sql_set_user(rlm_sql_t *inst, REQUEST *request, char const *username)
 	return 0;
 }
 
+/*
+ *	Do a set/unset user, so it's a bit clearer what's going on.
+ */
+#define sql_unset_user(_i, _r) pairdelete(&_r->packet->vps, _i->sql_user->attr, _i->sql_user->vendor, TAG_ANY)
 
 static int sql_get_grouplist(rlm_sql_t *inst, rlm_sql_handle_t **handle, REQUEST *request,
 			     rlm_sql_grouplist_t **phead)
@@ -544,7 +549,7 @@ static int CC_HINT(nonnull (1 ,2, 4)) sql_groupcmp(void *instance, REQUEST *requ
 }
 
 static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm_sql_handle_t **handle,
-					  bool *dofallthrough)
+					  sql_fall_through_t *do_fall_through)
 {
 	rlm_rcode_t		rcode = RLM_MODULE_NOOP;
 	VALUE_PAIR		*check_tmp = NULL, *reply_tmp = NULL, *sql_group = NULL;
@@ -569,10 +574,12 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm
 		rcode = RLM_MODULE_NOTFOUND;
 		goto finish;
 	}
+	rad_assert(head);
 
 	RDEBUG2("User found in the group table");
 
-	for (entry = head; entry != NULL && (*dofallthrough != 0); entry = entry->next) {
+	entry = head;
+	do {
 		/*
 		 *	Add the Sql-Group attribute to the request list so we know
 		 *	which group we're retrieving attributes for
@@ -640,7 +647,7 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm
 				goto finish;
 			}
 
-			*dofallthrough = fallthrough(reply_tmp);
+			*do_fall_through = fall_through(reply_tmp);
 
 			RDEBUG2("Group \"%s\" reply items processed", entry->name);
 			rcode = RLM_MODULE_OK;
@@ -650,10 +657,10 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm
 		}
 
 		pairdelete(&request->packet->vps, PW_SQL_GROUP, 0, TAG_ANY);
-	}
+		entry = entry->next;
+	} while (entry != NULL && (*do_fall_through == FALL_THROUGH_YES));
 
-	finish:
-
+finish:
 	talloc_free(head);
 	pairdelete(&request->packet->vps, PW_SQL_GROUP, 0, TAG_ANY);
 
@@ -890,7 +897,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 }
 
 
-static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST * request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *request)
 {
 	rlm_rcode_t rcode = RLM_MODULE_NOOP;
 
@@ -902,7 +909,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST * requ
 	VALUE_PAIR *user_profile = NULL;
 
 	bool	user_found = false;
-	bool	dofallthrough = true;
+
+	sql_fall_through_t do_fall_through = FALL_THROUGH_DEFAULT;
+
 	int	rows;
 
 	char	*expanded = NULL;
@@ -911,7 +920,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST * requ
 	rad_assert(request->reply != NULL);
 
 	/*
-	 *  Set, escape, and check the user attr here
+	 *	Set, escape, and check the user attr here
 	 */
 	if (sql_set_user(inst, request, NULL) < 0) {
 		return RLM_MODULE_FAIL;
@@ -988,9 +997,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST * requ
 
 		if (rows == 0) goto skipreply;
 
-		if (!inst->config->read_groups) {
-			dofallthrough = fallthrough(reply_tmp);
-		}
+		do_fall_through = fall_through(reply_tmp);
 
 		RDEBUG2("User found in radreply table");
 		user_found = true;
@@ -1000,46 +1007,42 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST * requ
 	}
 
 skipreply:
-	/*
-	 *	dofallthrough is set to 1 by default so that if the user information
-	 *	is not found, we will still process groups.  If the user information,
-	 *	however, *is* found, Fall-Through must be set in order to process
-	 *	the groups as well.
-	 */
-	if (dofallthrough) {
+	if ((do_fall_through == FALL_THROUGH_YES) ||
+	    (inst->config->read_groups && (do_fall_through == FALL_THROUGH_DEFAULT))) {
 		rlm_rcode_t ret;
 
 		RDEBUG3("... falling-through to group processing");
-		ret = rlm_sql_process_groups(inst, request, &handle, &dofallthrough);
+		ret = rlm_sql_process_groups(inst, request, &handle, &do_fall_through);
 		switch (ret) {
-			/*
-			 *	Nothing bad happened, continue...
-			 */
-			case RLM_MODULE_UPDATED:
-				rcode = RLM_MODULE_UPDATED;
-				/* FALL-THROUGH */
-			case RLM_MODULE_OK:
-				if (rcode != RLM_MODULE_UPDATED) {
-					rcode = RLM_MODULE_OK;
-				}
-				/* FALL-THROUGH */
-			case RLM_MODULE_NOOP:
-				user_found = true;
-				break;
+		/*
+		 *	Nothing bad happened, continue...
+		 */
+		case RLM_MODULE_UPDATED:
+			rcode = RLM_MODULE_UPDATED;
+			/* FALL-THROUGH */
+		case RLM_MODULE_OK:
+			if (rcode != RLM_MODULE_UPDATED) {
+				rcode = RLM_MODULE_OK;
+			}
+			/* FALL-THROUGH */
+		case RLM_MODULE_NOOP:
+			user_found = true;
+			break;
 
-			case RLM_MODULE_NOTFOUND:
-				break;
+		case RLM_MODULE_NOTFOUND:
+			break;
 
-			default:
-				rcode = ret;
-				goto release;
+		default:
+			rcode = ret;
+			goto release;
 		}
 	}
 
 	/*
 	 *	Repeat the above process with the default profile or User-Profile
 	 */
-	if (dofallthrough) {
+	if ((do_fall_through == FALL_THROUGH_YES) ||
+	    (inst->config->read_profiles && (do_fall_through == FALL_THROUGH_DEFAULT))) {
 		rlm_rcode_t ret;
 
 		/*
@@ -1064,29 +1067,29 @@ skipreply:
 			goto error;
 		}
 
-		ret = rlm_sql_process_groups(inst, request, &handle, &dofallthrough);
+		ret = rlm_sql_process_groups(inst, request, &handle, &do_fall_through);
 		switch (ret) {
-			/*
-			 *	Nothing bad happened, continue...
-			 */
-			case RLM_MODULE_UPDATED:
-				rcode = RLM_MODULE_UPDATED;
-				/* FALL-THROUGH */
-			case RLM_MODULE_OK:
-				if (rcode != RLM_MODULE_UPDATED) {
-					rcode = RLM_MODULE_OK;
-				}
-				/* FALL-THROUGH */
-			case RLM_MODULE_NOOP:
-				user_found = true;
-				break;
+		/*
+		 *	Nothing bad happened, continue...
+		 */
+		case RLM_MODULE_UPDATED:
+			rcode = RLM_MODULE_UPDATED;
+			/* FALL-THROUGH */
+		case RLM_MODULE_OK:
+			if (rcode != RLM_MODULE_UPDATED) {
+				rcode = RLM_MODULE_OK;
+			}
+			/* FALL-THROUGH */
+		case RLM_MODULE_NOOP:
+			user_found = true;
+			break;
 
-			case RLM_MODULE_NOTFOUND:
-				break;
+		case RLM_MODULE_NOTFOUND:
+			break;
 
-			default:
-				rcode = ret;
-				goto release;
+		default:
+			rcode = ret;
+			goto release;
 		}
 	}
 
@@ -1100,12 +1103,14 @@ release:
 	}
 
 	sql_release_socket(inst, handle);
+	sql_unset_user(inst, request);
 
 	return rcode;
 
 error:
 	pairfree(&check_tmp);
 	pairfree(&reply_tmp);
+	sql_unset_user(inst, request);
 
 	sql_release_socket(inst, handle);
 
@@ -1260,6 +1265,7 @@ static int acct_redundant(rlm_sql_t *inst, REQUEST *request, sql_acct_section_t 
 finish:
 	talloc_free(expanded);
 	sql_release_socket(inst, handle);
+	sql_unset_user(inst, request);
 
 	return rcode;
 }
@@ -1323,6 +1329,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST * req
 	}
 
 	if (radius_axlat(&expanded, request, inst->config->simul_count_query, sql_escape_func, inst) < 0) {
+		sql_unset_user(inst, request);
 		return RLM_MODULE_FAIL;
 	}
 
@@ -1330,6 +1337,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST * req
 	handle = sql_get_socket(inst);
 	if (!handle) {
 		talloc_free(expanded);
+		sql_unset_user(inst, request);
 		return RLM_MODULE_FAIL;
 	}
 
@@ -1477,6 +1485,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST * req
 	(inst->module->sql_finish_select_query)(handle, inst->config);
 	sql_release_socket(inst, handle);
 	talloc_free(expanded);
+	sql_unset_user(inst, request);
 
 	/*
 	 *	The Auth module apparently looks at request->simul_count,

@@ -70,9 +70,11 @@ if test x$with_[]modname != xno; then
 	dnl ############################################################
 
 	have_json="yes"
+
+	smart_prefix="json-c json"
 	smart_try_dir="$jsonc_include_dir"
-	FR_SMART_CHECK_INCLUDE([json/json.h])
-	if test "x$ac_cv_header_json_json_h" != "xyes"; then
+	FR_SMART_CHECK_INCLUDE([json.h])
+	if test "x$ac_cv_header_json_h" != "xyes"; then
 		have_json="no"
 		AC_MSG_WARN([json-c headers not found. Use --with-jsonc-include-dir=<path>.])
 	fi
@@ -85,14 +87,13 @@ if test x$with_[]modname != xno; then
 	dnl # Use a json-c specific function which is only
 	dnl # available in newer versions.
 	FR_SMART_CHECK_LIB([json-c], [json_c_version])
-	if test "x$ac_cv_lib_json_c_json_c_version" != "xyes"
-	then
+	if test "x$ac_cv_lib_json_c_json_c_version" != "xyes"; then
 		dnl # Use a function which is included in legacy versions
 		dnl # but which may be available in other json libraries
 		FR_SMART_CHECK_LIB([json], [json_tokener_new])
-		if test "x$ac_cv_lib_json_json_tokener_new" != "xyes"
-		then
+		if test "x$ac_cv_lib_json_json_tokener_new" != "xyes"; then
 			have_json="no"
+			AC_MSG_WARN([json-c libraries not found. Use --with-jsonc-lib-dir=<path>.])
 		fi
 	fi
 
@@ -184,17 +185,12 @@ if test x$with_[]modname != xno; then
 
 	smart_try_dir="$libcouchbase_lib_dir"
 	FR_SMART_CHECK_LIB([couchbase], [lcb_get_version])
-	if test "x$ac_cv_lib_couchbase_lcb_get_version" != "xyes"
-	then
+	if test "x$ac_cv_lib_couchbase_lcb_get_version" != "xyes"; then
 		have_couchbase="no"
 		AC_MSG_WARN([libcouchbase libraries not found. Use --with-libcouchbase-lib-dir=<path>.])
 	fi
 
-	if test "x$have_couchbase" != "xyes"; then
-		fail="$fail json-c"
-	fi
-
-	if test "x$have_couchbase" = "xno"; then
+	if test x"$have_couchbase" != x"yes"; then
 		fail="$fail libcouchbase"
 	fi
 
@@ -220,7 +216,7 @@ if test x"$fail" != x""; then
 fi
 
 mod_ldflags="${SMART_LIBS}"
-mod_cflags="${SMART_CFLAGS}"
+mod_cflags="${SMART_CPPFLAGS}"
 
 AC_SUBST(mod_cflags)
 AC_SUBST(mod_ldflags)

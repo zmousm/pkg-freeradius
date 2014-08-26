@@ -22,18 +22,16 @@
  * @copyright 2013 Network RADIUS SARL <info@networkradius.com>
  * @copyright 2013 The FreeRADIUS Server Project.
  */
-#include	<freeradius-devel/radiusd.h>
-#include	<freeradius-devel/modules.h>
-#include	<freeradius-devel/rad_assert.h>
+#include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/modules.h>
+#include <freeradius-devel/rad_assert.h>
 
-#include	<stdarg.h>
-#include	<ctype.h>
+#include <stdarg.h>
+#include <ctype.h>
 
-#include	<lber.h>
-#include	<ldap.h>
-#include	"ldap.h"
-
-
+#include <lber.h>
+#include <ldap.h>
+#include "ldap.h"
 
 /** Converts "bad" strings into ones which are safe for LDAP
  *
@@ -341,8 +339,7 @@ static ldap_rcode_t rlm_ldap_result(ldap_instance_t const *inst, ldap_handle_t c
 		goto process_error;
 	}
 
-	process_error:
-
+process_error:
 	if ((lib_errno == LDAP_SUCCESS) && (srv_errno != LDAP_SUCCESS)) {
 		lib_errno = srv_errno;
 	} else if ((lib_errno != LDAP_SUCCESS) && (srv_errno == LDAP_SUCCESS)) {
@@ -352,7 +349,6 @@ static ldap_rcode_t rlm_ldap_result(ldap_instance_t const *inst, ldap_handle_t c
 	switch (lib_errno) {
 	case LDAP_SUCCESS:
 		*error = "Success";
-
 		break;
 
 	case LDAP_NO_SUCH_OBJECT:
@@ -612,7 +608,6 @@ ldap_rcode_t rlm_ldap_bind(ldap_instance_t const *inst, REQUEST *request, ldap_h
 	return status; /* caller closes the connection */
 }
 
-
 /** Search for something in the LDAP directory
  *
  * Binds as the administrative user and performs a search, dealing with any errors.
@@ -814,26 +809,27 @@ ldap_rcode_t rlm_ldap_modify(ldap_instance_t const *inst, REQUEST *request, ldap
 		RDEBUG2("Waiting for modify result...");
 		status = rlm_ldap_result(inst, *pconn, msgid, dn, NULL, &error, &extra);
 		switch (status) {
-			case LDAP_PROC_SUCCESS:
-				break;
-			case LDAP_PROC_RETRY:
-				*pconn = fr_connection_reconnect(inst->pool, *pconn);
-				if (*pconn) {
-					RWDEBUG("Modify failed: %s. Got new socket, retrying...", error);
+		case LDAP_PROC_SUCCESS:
+			break;
 
-					talloc_free(extra); /* don't leak debug info */
+		case LDAP_PROC_RETRY:
+			*pconn = fr_connection_reconnect(inst->pool, *pconn);
+			if (*pconn) {
+				RWDEBUG("Modify failed: %s. Got new socket, retrying...", error);
 
-					continue;
-				}
+				talloc_free(extra); /* don't leak debug info */
 
-				status = LDAP_PROC_ERROR;
+				continue;
+			}
 
-				/* FALL-THROUGH */
-			default:
-				REDEBUG("Failed modifying object: %s", error);
-				REDEBUG("%s", extra);
+			status = LDAP_PROC_ERROR;
 
-				goto finish;
+			/* FALL-THROUGH */
+		default:
+			REDEBUG("Failed modifying object: %s", error);
+			REDEBUG("%s", extra);
+
+			goto finish;
 		}
 
 		break;
@@ -868,7 +864,7 @@ finish:
  * @return The user's DN or NULL on error.
  */
 char const *rlm_ldap_find_user(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t **pconn,
-			       char const *attrs[], int force, LDAPMessage **result, rlm_rcode_t *rcode)
+			       char const *attrs[], bool force, LDAPMessage **result, rlm_rcode_t *rcode)
 {
 	static char const *tmp_attrs[] = { NULL };
 
@@ -924,28 +920,30 @@ char const *rlm_ldap_find_user(ldap_instance_t const *inst, REQUEST *request, ld
 
 	if (radius_xlat(filter, sizeof(filter), request, inst->userobj_filter, rlm_ldap_escape_func, NULL) < 0) {
 		REDEBUG("Unable to create filter");
-
 		*rcode = RLM_MODULE_INVALID;
+
 		return NULL;
 	}
 
 	if (radius_xlat(base_dn, sizeof(base_dn), request, inst->userobj_base_dn, rlm_ldap_escape_func, NULL) < 0) {
 		REDEBUG("Unable to create base_dn");
-
 		*rcode = RLM_MODULE_INVALID;
+
 		return NULL;
 	}
 
 	status = rlm_ldap_search(inst, request, pconn, base_dn, inst->userobj_scope, filter, attrs, result);
 	switch (status) {
-		case LDAP_PROC_SUCCESS:
-			break;
-		case LDAP_PROC_NO_RESULT:
-			*rcode = RLM_MODULE_NOTFOUND;
-			return NULL;
-		default:
-			*rcode = RLM_MODULE_FAIL;
-			return NULL;
+	case LDAP_PROC_SUCCESS:
+		break;
+
+	case LDAP_PROC_NO_RESULT:
+		*rcode = RLM_MODULE_NOTFOUND;
+		return NULL;
+
+	default:
+		*rcode = RLM_MODULE_FAIL;
+		return NULL;
 	}
 
 	rad_assert(*pconn);
@@ -1089,14 +1087,29 @@ static int rlm_ldap_rebind(LDAP *handle, LDAP_CONST char *url, UNUSED ber_tag_t 
 }
 #endif
 
+/** Close and delete a connection
+ *
+ * Unbinds the LDAP connection, informing the server and freeing any memory, then releases the memory used by the
+ * connection handle.
+ *
+ * @param conn to destroy.
+ * @return always indicates success.
+ */
+static int _mod_conn_free(ldap_handle_t *conn)
+{
+	if (conn->handle) {
+		DEBUG3("rlm_ldap: Closing libldap handle %p", conn->handle);
+		ldap_unbind_s(conn->handle);
+	}
+
+	return 0;
+}
+
 /** Create and return a new connection
  *
  * Create a new ldap connection and allocate memory for a new rlm_handle_t
- *
- * @param instance rlm_ldap instance.
- * @return A new connection handle or NULL on error.
  */
-void *mod_conn_create(void *instance)
+void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 {
 	ldap_rcode_t status;
 
@@ -1109,8 +1122,9 @@ void *mod_conn_create(void *instance)
 	/*
 	 *	Allocate memory for the handle.
 	 */
-	conn = talloc_zero(instance, ldap_handle_t);
+	conn = talloc_zero(ctx, ldap_handle_t);
 	if (!conn) return NULL;
+	talloc_set_destructor(conn, _mod_conn_free);
 
 	conn->inst = inst;
 	conn->rebound = false;
@@ -1136,6 +1150,7 @@ void *mod_conn_create(void *instance)
 			goto error;
 		}
 	}
+	DEBUG3("rlm_ldap: New libldap handle %p", conn->handle);
 
 	/*
 	 *	We now have a connection structure, but no actual TCP connection.
@@ -1160,6 +1175,13 @@ void *mod_conn_create(void *instance)
 	}
 
 	/*
+	 *	Leave "dereference" unset to use the OpenLDAP default.
+	 */
+	if (inst->dereference_str) {
+		do_ldap_option(LDAP_OPT_DEREF, "dereference", &(inst->dereference));
+	}
+
+	/*
 	 *	Leave "chase_referrals" unset to use the OpenLDAP default.
 	 */
 	if (!inst->chase_referrals_unset) {
@@ -1176,10 +1198,14 @@ void *mod_conn_create(void *instance)
 		}
 	}
 
-	memset(&tv, 0, sizeof(tv));
-	tv.tv_sec = inst->net_timeout;
+#ifdef LDAP_OPT_NETWORK_TIMEOUT
+	if (inst->net_timeout) {
+		memset(&tv, 0, sizeof(tv));
+		tv.tv_sec = inst->net_timeout;
 
-	do_ldap_option(LDAP_OPT_NETWORK_TIMEOUT, "net_timeout", &tv);
+		do_ldap_option(LDAP_OPT_NETWORK_TIMEOUT, "net_timeout", &tv);
+	}
+#endif
 
 	do_ldap_option(LDAP_OPT_TIMELIMIT, "srv_timelimit", &(inst->srv_timelimit));
 
@@ -1264,33 +1290,11 @@ void *mod_conn_create(void *instance)
 
 	return conn;
 
-	error:
-	if (conn->handle) ldap_unbind_s(conn->handle);
+error:
 	talloc_free(conn);
 
 	return NULL;
 }
-
-
-/** Close and delete a connection
- *
- * Unbinds the LDAP connection, informing the server and freeing any memory, then releases the memory used by the
- * connection handle.
- *
- * @param instance rlm_ldap instance.
- * @param handle to destroy.
- * @return always indicates success.
- */
-int mod_conn_delete(UNUSED void *instance, void *handle)
-{
-	ldap_handle_t *conn = handle;
-
-	ldap_unbind_s(conn->handle);
-	talloc_free(conn);
-
-	return 0;
-}
-
 
 /** Gets an LDAP socket from the connection pool
  *
@@ -1303,7 +1307,6 @@ ldap_handle_t *rlm_ldap_get_socket(ldap_instance_t const *inst, UNUSED REQUEST *
 {
 	return fr_connection_get(inst->pool);
 }
-
 
 /** Frees an LDAP socket back to the connection pool
  *

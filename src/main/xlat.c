@@ -307,9 +307,9 @@ static ssize_t xlat_debug_attr(UNUSED void *instance, REQUEST *request, char con
 	}
 
 	current = request;
-	if (radius_request(&current, vpt.vpt_request) < 0) return -2;
+	if (radius_request(&current, vpt.tmpl_request) < 0) return -2;
 
-	vps = radius_list(current, vpt.vpt_list);
+	vps = radius_list(current, vpt.tmpl_list);
 	if (!vps) {
 		return -2;
 	}
@@ -317,8 +317,8 @@ static ssize_t xlat_debug_attr(UNUSED void *instance, REQUEST *request, char con
 	RIDEBUG("Attributes matching \"%s\"", fmt);
 	vp = fr_cursor_init(&cursor, vps);
 
-	if (vpt.vpt_da) {
-		vp = fr_cursor_next_by_da(&cursor, vpt.vpt_da, TAG_ANY);
+	if (vpt.tmpl_da) {
+		vp = fr_cursor_next_by_da(&cursor, vpt.tmpl_da, TAG_ANY);
 	}
 	while (vp) {
 		DICT_ATTR *dac = NULL;
@@ -328,14 +328,14 @@ static ssize_t xlat_debug_attr(UNUSED void *instance, REQUEST *request, char con
 
 		if (vp->da->flags.has_tag) {
 			RIDEBUG2("\t%s:%s:%i %s %s",
-				fr_int2str(pair_lists, vpt.vpt_list, "<INVALID>"),
+				fr_int2str(pair_lists, vpt.tmpl_list, "<INVALID>"),
 				vp->da->name,
 				vp->tag,
 				fr_int2str(fr_tokens, vp->op, "<INVALID>"),
 				buffer);
 		} else {
 			RIDEBUG2("\t%s:%s %s %s",
-				fr_int2str(pair_lists, vpt.vpt_list, "<INVALID>"),
+				fr_int2str(pair_lists, vpt.tmpl_list, "<INVALID>"),
 				vp->da->name,
 				fr_int2str(fr_tokens, vp->op, "<INVALID>"),
 				buffer);
@@ -360,8 +360,8 @@ static ssize_t xlat_debug_attr(UNUSED void *instance, REQUEST *request, char con
 	next_vp:
 		talloc_free(dac);
 
-		if (vpt.vpt_da) {
-			vp = fr_cursor_next_by_da(&cursor, vpt.vpt_da, TAG_ANY);
+		if (vpt.tmpl_da) {
+			vp = fr_cursor_next_by_da(&cursor, vpt.tmpl_da, TAG_ANY);
 		} else {
 			vp = fr_cursor_next(&cursor);
 		}
@@ -442,17 +442,17 @@ static ssize_t xlat_string(UNUSED void *instance, REQUEST *request,
 	}
 
 	switch (vp->da->type) {
-		case PW_TYPE_OCTETS:
-			len = fr_print_string((char const *) p, vp->length, out, outlen);
-			break;
+	case PW_TYPE_OCTETS:
+		len = fr_print_string((char const *) p, vp->length, out, outlen);
+		break;
 
-		case PW_TYPE_STRING:
-			len = strlcpy(out, vp->vp_strvalue, outlen);
-			break;
+	case PW_TYPE_STRING:
+		len = strlcpy(out, vp->vp_strvalue, outlen);
+		break;
 
-		default:
-			len = fr_print_string((char const *) p, ret, out, outlen);
-			break;
+	default:
+		len = fr_print_string((char const *) p, ret, out, outlen);
+		break;
 	}
 
 	return len;
@@ -574,7 +574,7 @@ int xlat_register(char const *name, RAD_XLAT_FUNC func, RADIUS_ESCAPE_STRING esc
 		int i;
 #endif
 
-		xlat_root = rbtree_create(xlat_cmp, free, 0);
+		xlat_root = rbtree_create(NULL, xlat_cmp, free, 0);
 		if (!xlat_root) {
 			DEBUG("xlat_register: Failed to create tree");
 			return -1;
@@ -1055,7 +1055,7 @@ static ssize_t xlat_tokenize_expansion(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **
 			p++;
 
 		} else if (*p == '*') {
-			node->num = NUM_JOIN;
+			node->num = NUM_ALL;
 			p++;
 
 		} else if (isdigit((int) *p)) {
@@ -1125,53 +1125,53 @@ static ssize_t xlat_tokenize_literal(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **he
 		 *	Convert \n to it's literal representation.
 		 */
 		if (p[0] == '\\') switch (p[1]) {
-			case 't':
-				*(q++) = '\t';
-				p += 2;
-				node->len++;
-				continue;
+		case 't':
+			*(q++) = '\t';
+			p += 2;
+			node->len++;
+			continue;
 
-			case 'n':
-				*(q++) = '\n';
-				p += 2;
-				node->len++;
-				continue;
+		case 'n':
+			*(q++) = '\n';
+			p += 2;
+			node->len++;
+			continue;
 
-			case 'x':
-				p += 2;
-				if (!p[0] || !p[1]) {
-					talloc_free(node);
-					*error = "Hex expansion requires two hex digits";
-					return -(p - fmt);
-				}
-
-				if (!fr_hex2bin((uint8_t *) q, p, 2)) {
-					talloc_free(node);
-					*error = "Invalid hex characters";
-					return -(p - fmt);
-				}
-
-				/*
-				 *	Don't let people shoot themselves in the foot.
-				 *	\x00 is forbidden.
-				 */
-				if (!*q) {
-					talloc_free(node);
-					*error = "Cannot add zero byte to printable string";
-					return -(p - fmt);
-				}
-
-				p += 2;
-				q++;
-				node->len++;
-				continue;
-
-			default:
-				*(q++) = *p;
-				p += 2;
-				node->len++;
-				continue;
+		case 'x':
+			p += 2;
+			if (!p[0] || !p[1]) {
+				talloc_free(node);
+				*error = "Hex expansion requires two hex digits";
+				return -(p - fmt);
 			}
+
+			if (!fr_hex2bin((uint8_t *) q, 1, p, 2)) {
+				talloc_free(node);
+				*error = "Invalid hex characters";
+				return -(p - fmt);
+			}
+
+			/*
+			 *	Don't let people shoot themselves in the foot.
+			 *	\x00 is forbidden.
+			 */
+			if (!*q) {
+				talloc_free(node);
+				*error = "Cannot add zero byte to printable string";
+				return -(p - fmt);
+			}
+
+			p += 2;
+			q++;
+			node->len++;
+			continue;
+
+		default:
+			*(q++) = *p;
+			p += 2;
+			node->len++;
+			continue;
+		}
 
 		/*
 		 *	Process the expansion.
@@ -1326,7 +1326,7 @@ static void xlat_tokenize_debug(xlat_exp_t const *node, int lvl)
 				if (node->num != NUM_ANY) {
 					if (node->num == NUM_COUNT) {
 						DEBUG("%.*s[#]", lvl + 1, xlat_tabs);
-					} else if (node->num == NUM_JOIN) {
+					} else if (node->num == NUM_ALL) {
 						DEBUG("%.*s[*]", lvl + 1, xlat_tabs);
 					} else {
 						DEBUG("%.*s[%d]", lvl + 1, xlat_tabs, node->num);
@@ -1430,7 +1430,7 @@ size_t xlat_sprint(char *buffer, size_t bufsize, xlat_exp_t const *node)
 					*(p++) = '#';
 					break;
 
-				case NUM_JOIN:
+				case NUM_ALL:
 					*(p++) = '*';
 					break;
 
@@ -1777,7 +1777,7 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, pair_lists_t list, DI
 		/*
 		 *	[*] means only one.
 		 */
-		case NUM_JOIN:
+		case NUM_ALL:
 			break;
 
 		/*
@@ -1819,7 +1819,7 @@ do_print:
 		/*
 		 *	Ugly, but working.
 		 */
-		case NUM_JOIN:
+		case NUM_ALL:
 		{
 			char *p, *q;
 
@@ -1862,7 +1862,7 @@ finish:
 }
 
 #ifdef DEBUG_XLAT
-static const char *xlat_spaces = "                                                                                                                                                                                                                                                                ";
+static const char xlat_spaces[] = "                                                                                                                                                                                                                                                                ";
 #endif
 
 static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * const node,
@@ -2249,18 +2249,18 @@ value_pair_tmpl_t *radius_xlat2tmpl(TALLOC_CTX *ctx, xlat_exp_t *xlat)
 	 * @todo it should be possible to emulate the concat and count operations in the
 	 * map code.
 	 */
-	if ((xlat->num == NUM_COUNT) || (xlat->num == NUM_JOIN)) return NULL;
+	if ((xlat->num == NUM_COUNT) || (xlat->num == NUM_ALL)) return NULL;
 
 	vpt = talloc(ctx, value_pair_tmpl_t);
 	if (!vpt) return NULL;
 
-	vpt->type = VPT_TYPE_ATTR;
+	vpt->type = TMPL_TYPE_ATTR;
 	vpt->name = talloc_strdup(vpt, xlat->fmt);
-	vpt->vpt_request = xlat->ref;
-	vpt->vpt_list = xlat->list;
-	vpt->vpt_da = xlat->da;
-	vpt->vpt_num = xlat->num;
-	vpt->vpt_tag = xlat->tag;
+	vpt->tmpl_request = xlat->ref;
+	vpt->tmpl_list = xlat->list;
+	vpt->tmpl_da = xlat->da;
+	vpt->tmpl_num = xlat->num;
+	vpt->tmpl_tag = xlat->tag;
 
 	return vpt;
 }

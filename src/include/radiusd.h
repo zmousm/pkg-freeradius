@@ -32,7 +32,6 @@ RCSIDH(radiusd_h, "$Id$")
 #include <freeradius-devel/conffile.h>
 #include <freeradius-devel/event.h>
 #include <freeradius-devel/connection.h>
-#include <freeradius-devel/map.h>
 
 typedef struct rad_request REQUEST;
 
@@ -61,6 +60,7 @@ typedef struct rad_request REQUEST;
 
 #include <freeradius-devel/stats.h>
 #include <freeradius-devel/realms.h>
+#include <freeradius-devel/map.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -189,9 +189,14 @@ typedef		int (*RAD_REQUEST_FUNP)(REQUEST *);
 #define REQUEST_MAX_REGEX (8)
 
 #if defined(WITH_VERIFY_PTR)
-#define VERIFY_REQUEST(_x) (void) talloc_get_type_abort(_x, REQUEST)
+#  define VERIFY_REQUEST(_x) verify_request(__FILE__, __LINE__, _x)
 #else
-#define VERIFY_REQUEST(_x)
+/*
+ *  Even if were building without WITH_VERIFY_PTR
+ *  the pointer must not be NULL when these various macros are used
+ *  so we can add some sneaky asserts.
+ */
+#  define VERIFY_REQUEST(_x) rad_assert(_x)
 #endif
 
 typedef enum {
@@ -486,10 +491,7 @@ extern log_debug_t	debug_flag;
 extern char const	*radacct_dir;
 extern char const	*radlog_dir;
 extern char const	*radlib_dir;
-extern char const	*radius_libdir;
-extern uint32_t		expiration_seconds;
 extern bool		log_stripped_names;
-extern bool		log_auth_detail;
 extern char const	*radiusd_version;
 void			radius_signal_self(int flag);
 
@@ -526,8 +528,6 @@ int		log_err (char *);
 /* util.c */
 #define MEM(x) if (!(x)) { ERROR("Out of memory"); exit(1); }
 void (*reset_signal(int signo, void (*func)(int)))(int);
-void		request_free(REQUEST **request);
-int			request_opaque_free(REQUEST *request);
 int		rad_mkdir(char *directory, mode_t mode);
 void		*rad_malloc(size_t size); /* calls exit(1) on error! */
 void		rad_const_free(void const *ptr);
@@ -550,7 +550,7 @@ int		rad_expand_xlat(REQUEST *request, char const *cmd,
 				size_t argv_buflen, char *argv_buf);
 void		rad_regcapture(REQUEST *request, int compare, char const *value,
 			       regmatch_t rxmatch[]);
-void		verify_request(REQUEST *request);			/* only for special debug builds */
+void		verify_request(char const *file, int line, REQUEST *request);	/* only for special debug builds */
 
 /* client.c */
 RADCLIENT_LIST	*clients_init(CONF_SECTION *cs);
@@ -624,6 +624,10 @@ VALUE_PAIR	*radius_paircreate(TALLOC_CTX *ctx, VALUE_PAIR **vps, unsigned int at
 void module_failure_msg(REQUEST *request, char const *fmt, ...) CC_HINT(format (printf, 2, 3));
 void vmodule_failure_msg(REQUEST *request, char const *fmt, va_list ap) CC_HINT(format (printf, 2, 0));
 
+int radius_get_vp(VALUE_PAIR **out, REQUEST *request, char const *name);
+int radius_copy_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, char const *name);
+
+
 /*
  *	Less code == fewer bugs
  *
@@ -658,19 +662,19 @@ ssize_t		xlat_fmt_to_ref(uint8_t const **out, REQUEST *request, char const *fmt)
 void		xlat_free(void);
 
 /* threads.c */
-extern int thread_pool_init(CONF_SECTION *cs, bool *spawn_flag);
-extern void thread_pool_stop(void);
-extern int thread_pool_addrequest(REQUEST *, RAD_REQUEST_FUNP);
-extern pid_t rad_fork(void);
-extern pid_t rad_waitpid(pid_t pid, int *status);
-extern int total_active_threads(void);
-extern void thread_pool_lock(void);
-extern void thread_pool_unlock(void);
-extern void thread_pool_queue_stats(int array[RAD_LISTEN_MAX], int pps[2]);
+int	thread_pool_init(CONF_SECTION *cs, bool *spawn_flag);
+void	thread_pool_stop(void);
+int	thread_pool_addrequest(REQUEST *, RAD_REQUEST_FUNP);
+pid_t	rad_fork(void);
+pid_t	rad_waitpid(pid_t pid, int *status);
+int	total_active_threads(void);
+void	thread_pool_lock(void);
+void	thread_pool_unlock(void);
+void	thread_pool_queue_stats(int array[RAD_LISTEN_MAX], int pps[2]);
 
 #ifndef HAVE_PTHREAD_H
-#define rad_fork(n) fork()
-#define rad_waitpid(a,b) waitpid(a,b, 0)
+#  define rad_fork(n) fork()
+#  define rad_waitpid(a,b) waitpid(a,b, 0)
 #endif
 
 /* main_config.c */
@@ -716,8 +720,7 @@ void mark_home_server_dead(home_server_t *home, struct timeval *when);
 
 /* evaluate.c */
 typedef struct fr_cond_t fr_cond_t;
-typedef int (*radius_tmpl_getvalue_t)(VALUE_PAIR **out, REQUEST *request, value_pair_map_t const *map, void *ctx);
-
+int radius_expand_tmpl(char **out, REQUEST *request, value_pair_tmpl_t const *vpt);
 int radius_evaluate_tmpl(REQUEST *request, int modreturn, int depth,
 			 value_pair_tmpl_t const *vpt);
 int radius_evaluate_map(REQUEST *request, int modreturn, int depth,
@@ -725,26 +728,6 @@ int radius_evaluate_map(REQUEST *request, int modreturn, int depth,
 int radius_evaluate_cond(REQUEST *request, int modreturn, int depth,
 			 fr_cond_t const *c);
 void radius_pairmove(REQUEST *request, VALUE_PAIR **to, VALUE_PAIR *from, bool do_xlat) CC_HINT(nonnull);
-
-VALUE_PAIR **radius_list(REQUEST *request, pair_lists_t list);
-TALLOC_CTX *radius_list_ctx(REQUEST *request, pair_lists_t list_name);
-pair_lists_t radius_list_name(char const **name, pair_lists_t unknown);
-int radius_request(REQUEST **request, request_refs_t name);
-request_refs_t radius_request_name(char const **name, request_refs_t unknown);
-
-int radius_mapexec(VALUE_PAIR **out, REQUEST *request, value_pair_map_t const *map);
-int radius_map2vp(VALUE_PAIR **out, REQUEST *request, value_pair_map_t const *map, void *ctx) CC_HINT(nonnull (1,2,3));
-void radius_map_debug(REQUEST *request, value_pair_map_t const *map, VALUE_PAIR const *vp) CC_HINT(nonnull(1, 2));
-int radius_map2request(REQUEST *request, value_pair_map_t const *map, radius_tmpl_getvalue_t func, void *ctx);
-
-int radius_strpair2map(value_pair_map_t **out, REQUEST *request, char const *raw,
-		       request_refs_t dst_request_def, pair_lists_t dst_list_def,
-		       request_refs_t src_request_def, pair_lists_t src_list_def);
-bool radius_map_dst_valid(REQUEST *request, value_pair_map_t const *map);
-int radius_tmpl_get_vp(VALUE_PAIR **out, REQUEST *request, value_pair_tmpl_t const *vpt);
-int radius_get_vp(VALUE_PAIR **out, REQUEST *request, char const *name);
-int radius_tmpl_copy_vp(VALUE_PAIR **out, REQUEST *request, value_pair_tmpl_t const *vpt);
-int radius_copy_vp(VALUE_PAIR **out, REQUEST *request, char const *name);
 
 #ifdef WITH_TLS
 /*

@@ -125,12 +125,15 @@ static void CC_HINT(nonnull) normify(REQUEST *request, VALUE_PAIR *vp, size_t mi
 
 	if (min_length >= sizeof(buffer)) return; /* paranoia */
 
+	rad_assert((vp->da->type == PW_TYPE_OCTETS) || (vp->da->type == PW_TYPE_STRING));
+
 	/*
 	 *	Hex encoding.
 	 */
 	if (vp->length >= (2 * min_length)) {
 		size_t decoded;
-		decoded = fr_hex2bin(buffer, vp->vp_strvalue, sizeof(buffer));
+
+		decoded = fr_hex2bin(buffer, sizeof(buffer), vp->vp_strvalue, vp->length);
 		if (decoded == (vp->length >> 1)) {
 			RDEBUG2("Normalizing %s from hex encoding, %zu bytes -> %zu bytes",
 				vp->da->name, vp->length, decoded);
@@ -454,10 +457,10 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_md5(rlm_pap_t *inst, REQUEST *reque
 		return RLM_MODULE_INVALID;
 	}
 
-	fr_MD5Init(&md5_context);
-	fr_MD5Update(&md5_context, request->password->vp_octets,
+	fr_md5_init(&md5_context);
+	fr_md5_update(&md5_context, request->password->vp_octets,
 		     request->password->length);
-	fr_MD5Final(digest, &md5_context);
+	fr_md5_final(digest, &md5_context);
 
 	if (rad_digest_cmp(digest, vp->vp_octets, vp->length) != 0) {
 		REDEBUG("MD5 digest does not match \"known good\" digest");
@@ -483,11 +486,11 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_smd5(rlm_pap_t *inst, REQUEST *requ
 		return RLM_MODULE_INVALID;
 	}
 
-	fr_MD5Init(&md5_context);
-	fr_MD5Update(&md5_context, request->password->vp_octets,
+	fr_md5_init(&md5_context);
+	fr_md5_update(&md5_context, request->password->vp_octets,
 		     request->password->length);
-	fr_MD5Update(&md5_context, &vp->vp_octets[16], vp->length - 16);
-	fr_MD5Final(digest, &md5_context);
+	fr_md5_update(&md5_context, &vp->vp_octets[16], vp->length - 16);
+	fr_md5_final(digest, &md5_context);
 
 	/*
 	 *	Compare only the MD5 hash results, not the salt.
@@ -515,10 +518,10 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_sha(rlm_pap_t *inst, REQUEST *reque
 		return RLM_MODULE_INVALID;
 	}
 
-	fr_SHA1Init(&sha1_context);
-	fr_SHA1Update(&sha1_context, request->password->vp_octets,
+	fr_sha1_init(&sha1_context);
+	fr_sha1_update(&sha1_context, request->password->vp_octets,
 		      request->password->length);
-	fr_SHA1Final(digest,&sha1_context);
+	fr_sha1_final(digest,&sha1_context);
 
 	if (rad_digest_cmp(digest, vp->vp_octets, vp->length) != 0) {
 		REDEBUG("SHA1 digest does not match \"known good\" digest");
@@ -543,11 +546,11 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_ssha(rlm_pap_t *inst, REQUEST *requ
 		return RLM_MODULE_INVALID;
 	}
 
-	fr_SHA1Init(&sha1_context);
-	fr_SHA1Update(&sha1_context, request->password->vp_octets,
+	fr_sha1_init(&sha1_context);
+	fr_sha1_update(&sha1_context, request->password->vp_octets,
 		      request->password->length);
-	fr_SHA1Update(&sha1_context, &vp->vp_octets[20], vp->length - 20);
-	fr_SHA1Final(digest,&sha1_context);
+	fr_sha1_update(&sha1_context, &vp->vp_octets[20], vp->length - 20);
+	fr_sha1_final(digest,&sha1_context);
 
 	if (rad_digest_cmp(digest, vp->vp_octets, 20) != 0) {
 		REDEBUG("SSHA digest does not match \"known good\" digest");
@@ -628,6 +631,7 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_nt(rlm_pap_t *inst, REQUEST *reques
 {
 	uint8_t digest[16];
 	char charbuf[32 + 1];
+	ssize_t len;
 
 	RDEBUG("Comparing with \"known-good\" NT-Password");
 
@@ -639,11 +643,12 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_nt(rlm_pap_t *inst, REQUEST *reques
 		return RLM_MODULE_INVALID;
 	}
 
-	if (radius_xlat(charbuf, sizeof(charbuf), request, "%{mschap:NT-Hash %{User-Password}}", NULL, NULL) < 0){
+	len = radius_xlat(charbuf, sizeof(charbuf), request, "%{mschap:NT-Hash %{User-Password}}", NULL, NULL);
+	if (len < 0) {
 		return RLM_MODULE_REJECT;
 	}
 
-	if ((fr_hex2bin(digest, charbuf, sizeof(digest)) != vp->length) ||
+	if ((fr_hex2bin(digest, sizeof(digest), charbuf, len) != vp->length) ||
 	    (rad_digest_cmp(digest, vp->vp_octets, vp->length) != 0)) {
 		REDEBUG("NT digest does not match \"known good\" digest");
 		return RLM_MODULE_REJECT;
@@ -657,6 +662,7 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_lm(rlm_pap_t *inst, REQUEST *reques
 {
 	uint8_t digest[16];
 	char charbuf[32 + 1];
+	ssize_t len;
 
 	RDEBUG("Comparing with \"known-good\" LM-Password");
 
@@ -668,11 +674,12 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_lm(rlm_pap_t *inst, REQUEST *reques
 		return RLM_MODULE_INVALID;
 	}
 
-	if (radius_xlat(charbuf, sizeof(charbuf), request, "%{mschap:LM-Hash %{User-Password}}", NULL, NULL) < 0){
+	len = radius_xlat(charbuf, sizeof(charbuf), request, "%{mschap:LM-Hash %{User-Password}}", NULL, NULL);
+	if (len < 0){
 		return RLM_MODULE_FAIL;
 	}
 
-	if ((fr_hex2bin(digest, charbuf, sizeof(digest)) != vp->length) ||
+	if ((fr_hex2bin(digest, sizeof(digest), charbuf, len) != vp->length) ||
 	    (rad_digest_cmp(digest, vp->vp_octets, vp->length) != 0)) {
 		REDEBUG("LM digest does not match \"known good\" digest");
 		return RLM_MODULE_REJECT;
@@ -698,7 +705,7 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_ns_mta_md5(UNUSED rlm_pap_t *inst, 
 	/*
 	 *	Sanity check the value of NS-MTA-MD5-Password
 	 */
-	if (fr_hex2bin(digest, vp->vp_strvalue, 32) != 16) {
+	if (fr_hex2bin(digest, sizeof(digest), vp->vp_strvalue, vp->length) != 16) {
 		REDEBUG("\"known good\" NS-MTA-MD5-Password has invalid value");
 		return RLM_MODULE_INVALID;
 	}
@@ -728,9 +735,9 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_ns_mta_md5(UNUSED rlm_pap_t *inst, 
 		memcpy(p, &vp->vp_octets[32], 32);
 		p += 32;
 
-		fr_MD5Init(&md5_context);
-		fr_MD5Update(&md5_context, (uint8_t *) buff2, p - buff2);
-		fr_MD5Final(buff, &md5_context);
+		fr_md5_init(&md5_context);
+		fr_md5_update(&md5_context, (uint8_t *) buff2, p - buff2);
+		fr_md5_final(buff, &md5_context);
 	}
 
 	if (rad_digest_cmp(digest, buff, 16) != 0) {

@@ -219,7 +219,7 @@ int client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 	 *	Create a tree for it.
 	 */
 	if (!clients->trees[client->ipaddr.prefix]) {
-		clients->trees[client->ipaddr.prefix] = rbtree_create(client_ipaddr_cmp, NULL, 0);
+		clients->trees[client->ipaddr.prefix] = rbtree_create(clients, client_ipaddr_cmp, NULL, 0);
 		if (!clients->trees[client->ipaddr.prefix]) {
 			return 0;
 		}
@@ -271,7 +271,7 @@ int client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 
 #ifdef WITH_STATS
 	if (!tree_num) {
-		tree_num = rbtree_create(client_num_cmp, NULL, 0);
+		tree_num = rbtree_create(clients, client_num_cmp, NULL, 0);
 	}
 
 #ifdef WITH_DYNAMIC_CLIENTS
@@ -367,7 +367,7 @@ RADCLIENT *client_findbynumber(UNUSED const RADCLIENT_LIST *clients, UNUSED int 
  */
 RADCLIENT *client_find(RADCLIENT_LIST const *clients, fr_ipaddr_t const *ipaddr, int proto)
 {
-	uint32_t i, max_prefix;
+  int32_t i, max_prefix;
 	RADCLIENT myclient;
 
 	if (!clients) clients = root_clients;
@@ -387,7 +387,7 @@ RADCLIENT *client_find(RADCLIENT_LIST const *clients, fr_ipaddr_t const *ipaddr,
 		return NULL;
 	}
 
-	for (i = max_prefix; i >= clients->min_prefix; i--) {
+	for (i = max_prefix; i >= (int32_t) clients->min_prefix; i--) {
 		void *data;
 
 		myclient.ipaddr = *ipaddr;
@@ -500,7 +500,7 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 	}
 
 	/*
-	 *	Global clients can set servers to use per-server clients cannot.
+	 *	Global clients can set servers to use, per-server clients cannot.
 	 */
 	if (in_server && c->server) {
 		cf_log_err_cs(cs, "Clients inside of an server section cannot point to a server");
@@ -644,9 +644,15 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 		cl_srcipaddr = NULL;
 	}
 
-	FR_TIMEVAL_BOUND_CHECK("response_window", &c->response_window, >=, 0, 1000);
-	FR_TIMEVAL_BOUND_CHECK("response_window", &c->response_window, <=, 60, 0);
-	FR_TIMEVAL_BOUND_CHECK("response_window", &c->response_window, <=, main_config.max_request_time, 0);
+	/*
+	 *	A response_window of zero is OK, and means that it's
+	 *	ignored by the rest of the server timers.
+	 */
+	if (timerisset(&c->response_window)) {
+		FR_TIMEVAL_BOUND_CHECK("response_window", &c->response_window, >=, 0, 1000);
+		FR_TIMEVAL_BOUND_CHECK("response_window", &c->response_window, <=, 60, 0);
+		FR_TIMEVAL_BOUND_CHECK("response_window", &c->response_window, <=, main_config.max_request_time, 0);
+	}
 
 #ifdef WITH_DYNAMIC_CLIENTS
 	if (c->client_server) {
