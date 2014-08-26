@@ -224,7 +224,7 @@ ATTRIBUTE	MS-CHAP-New-NT-Password			1137	octets
 
 ATTRIBUTE	Stripped-User-Domain			1138	string
 ATTRIBUTE	Called-Station-SSID			1139	string
-ATTRIBUTE	Cache-TTL				1140	integer
+ATTRIBUTE	Cache-TTL				1140	signed
 ATTRIBUTE	Cache-Status-Only			1141	integer
 ATTRIBUTE	Cache-Merge				1142	integer
 ATTRIBUTE	Cache-Entry-Hits			1143	integer
@@ -241,6 +241,12 @@ VALUE	Cache-Read-Only			yes			1
 
 ATTRIBUTE	OTP-Challenge				1145	string
 ATTRIBUTE	EAP-Session-Id				1146	octets
+ATTRIBUTE	Chbind-Response-Code			1147	integer
+
+ATTRIBUTE	Chbind-Response-Code			1147	integer
+
+VALUE	Chbind-Response-Code		success			2
+VALUE	Chbind-Response-Code		failure			3
 
 ATTRIBUTE	Acct-Input-Octets64			1148	integer64
 ATTRIBUTE	Acct-Output-Octets64			1149	integer64
@@ -250,6 +256,8 @@ ATTRIBUTE	FreeRADIUS-Client-IPv6-Prefix		1151	ipv6prefix
 ATTRIBUTE	FreeRADIUS-Response-Delay		1152	integer
 ATTRIBUTE	FreeRADIUS-Client-Src-IP-Address	1153	ipaddr
 ATTRIBUTE	FreeRADIUS-Client-Src-IPv6-Address	1154	ipv6addr
+
+ATTRIBUTE	REST-HTTP-Header			1160	string
 
 #
 #	Range:	1200-1279
@@ -296,6 +304,7 @@ ATTRIBUTE	EAP-Sim-Algo-Version			1216	integer
 #
 #  egrep VALUE dictionary.freeradius.internal  | grep EAP-Type | awk '{print "ATTRIBUTE EAP-Type-" $3 " " 1280+$4 " octets"}' > foo;./format.pl foo
 #
+ATTRIBUTE	EAP-Type-Base				1280	octets
 ATTRIBUTE	EAP-Type-VALUE				1280	octets
 ATTRIBUTE	EAP-Type-None				1280	octets
 ATTRIBUTE	EAP-Type-Identity			1281	octets
@@ -507,8 +516,9 @@ ATTRIBUTE	TLS-Client-Cert-X509v3-Authority-Key-Identifier 1929	string
 ATTRIBUTE	TLS-Client-Cert-X509v3-Basic-Constraints 1930	string
 ATTRIBUTE	TLS-Client-Cert-Subject-Alt-Name-Dns	1931	string
 ATTRIBUTE	TLS-Client-Cert-Subject-Alt-Name-Upn	1932	string
+ATTRIBUTE	TLS-PSK-Identity			1933	string
 
-# 1933 - 1939: reserved for future cert attributes
+# 1934 - 1939: reserved for future cert attributes
 
 #
 #	Range:	1940-2099
@@ -548,7 +558,13 @@ ATTRIBUTE	SoH-MS-Windows-Health-Status		2120	string
 ATTRIBUTE	SoH-MS-Health-Other			2129	string
 
 #
-#	Range:	2200-2999
+#	Range:	2200-2219
+#		Utilities bundled with the server
+#
+ATTRIBUTE	Radclient-Test-Name			2200	string
+
+#
+#	Range:	2220-2999
 #		Free
 #
 #	Range:	3000-3999

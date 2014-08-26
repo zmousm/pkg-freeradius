@@ -39,16 +39,16 @@ sql {
 #
 #	sqlite {
 #		# Path to the sqlite database
-#		filename = "/my/sqlite/database.db"
+#		filename = "/tmp/freeradius.db"
 #
 #		# If the file above does not exist and bootstrap is set
 #		# a new database file will be created, and the SQL statements
 #		# contained within the file will be executed.
-#		bootstrap = "/my/sqlite/schema.sql"
+#		bootstrap = "${modconfdir}/${..:name}/main/sqlite/schema.sql"
 # 	}
 #
 #	mysql {
-#		# If any of the below files are set tls encryption is enabled
+#		# If any of the files below are set, TLS encryption is enabled
 #		tls {
 #			ca_file = "/etc/ssl/certs/my_ca.crt"
 #			ca_path = "/etc/ssl/certs/"
@@ -58,9 +58,9 @@ sql {
 #		}
 #	}
 #
-#	postgres {
+#	postgresql {
 #		# Send application_name to the postgres server
-#		# Only supported in PG 9.0 and greater. Defaults to yes.
+#		# Only supported in PG 9.0 and greater. Defaults to no.
 #		send_application_name = yes
 #	}
 #
@@ -70,7 +70,7 @@ sql {
 	#
 	# If you're using rlm_sql_null, then it should be the type of
 	# database the logged queries are going to be executed against.
-	dialect = "mysql"
+	dialect = "sqlite"
 
 	# Connection info:
 	#
@@ -109,9 +109,13 @@ sql {
 	# Table to keep group info
 	usergroup_table = "radusergroup"
 
-	# If set to 'yes' (default) we read the group tables
-	# If set to 'no' the user MUST have Fall-Through = Yes in the radreply table
-	# read_groups = yes
+	# If set to 'yes' (default) we read the group tables unless Fall-Through = no in the reply table.
+	# If set to 'no' we do not read the group tables unless Fall-Through = yes in the reply table.
+#	read_groups = yes
+
+	# If set to 'yes' (default) we read profiles unless Fall-Through = no in the groupreply table.
+	# If set to 'no' we do not read profiles unless Fall-Through = yes in the groupreply table.
+#	read_profiles = yes
 
 	# Remove stale session if checkrad does not see a double login
 	delete_stale_sessions = yes
@@ -134,6 +138,23 @@ sql {
 	#
 	# When the server is not threaded, the connection pool
 	# limits are ignored, and only one connection is used.
+	#
+	# If you want to have multiple SQL modules re-use the same
+	# connection pool, use "pool = name" instead of a "pool"
+	# section.  e.g.
+	#
+	#	sql1 {
+	#	    ...
+	#	    pool {
+	#	    	 ...
+	#	    }
+	#	}
+	#
+	#	# sql2 will use the connection pool from sql1
+	#	sql2 {
+	#	     ...
+	#	     pool = sql1
+	#	}
 	#
 	pool {
 		# Number of connections to start

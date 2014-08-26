@@ -176,18 +176,23 @@ size_t fr_print_string(char const *in, size_t inlen, char *out, size_t outlen)
 		case '\\':
 			sp = '\\';
 			break;
+
 		case '\r':
 			sp = 'r';
 			break;
+
 		case '\n':
 			sp = 'n';
 			break;
+
 		case '\t':
 			sp = 't';
 			break;
+
 		case '"':
 			sp = '"';
 			break;
+
 		default:
 			sp = '\0';
 			break;
@@ -298,17 +303,11 @@ size_t fr_print_string_len(char const *in, size_t inlen)
 	return outlen;
 }
 
-
 /** Print the value of an attribute to a string
  *
- * @param[out] out Where to write the string.
- * @param[in] outlen Size of outlen (must be at least 3 bytes).
- * @param[in] vp to print.
- * @param[in] quote Char to add before and after printed value, if 0 no char will be added, if < 0 raw string will be
- *	added.
- * @return the length of data written to out, or a value >= outlen on truncation.
  */
-size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t quote)
+size_t vp_data_prints_value(char *out, size_t outlen,
+			    DICT_ATTR const *da, value_data_t const *data, size_t data_len, int8_t quote)
 {
 	DICT_VALUE	*v;
 	char		buf[1024];	/* Interim buffer to use with poorly behaved printing functions */
@@ -318,26 +317,23 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 
 	size_t		len = 0, freespace = outlen;
 
-	if (!vp) return 0;
-
-	VERIFY_VP(vp);
-
-	if (outlen == 0) return vp->length;
+	if (!data) return 0;
+	if (outlen == 0) return data_len;
 
 	*out = '\0';
 
-	switch (vp->da->type) {
+	switch (da->type) {
 	case PW_TYPE_STRING:
 		/* need to copy the escaped value, but quoted */
 		if (quote > 0) {
 			if (freespace < 3) {
-				return vp->length + 2;
+				return data_len + 2;
 			}
 
 			*out++ = (char) quote;
 			freespace--;
 
-			len = fr_print_string(vp->vp_strvalue, vp->length, out, freespace);
+			len = fr_print_string(data->strvalue, data_len, out, freespace);
 			/* always terminate the quoted string with another quote */
 			if (len >= (freespace - 1)) {
 				out[outlen - 2] = (char) quote;
@@ -356,49 +352,37 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 
 		/* xlat.c - need to copy raw value verbatim */
 		else if (quote < 0) {
-			if (outlen > vp->length) {
-				memcpy(out, vp->vp_strvalue, vp->length + 1);
-				return vp->length;
+			if (outlen > data_len) {
+				memcpy(out, data->strvalue, data_len + 1);
+				return data_len;
 			}
 
-			memcpy(out, vp->vp_strvalue, outlen);
+			memcpy(out, data->strvalue, outlen);
 			out[outlen - 1] = '\0';
-			return vp->length;	/* not a typo */
+			return data_len;	/* not a typo */
 		}
 
-		return fr_print_string(vp->vp_strvalue, vp->length, out, outlen);
+		return fr_print_string(data->strvalue, data_len, out, outlen);
 
 	case PW_TYPE_INTEGER:
-		if (vp->da->flags.has_tag) {
-			/* Attribute value has a tag, need to ignore it */
-			if ((v = dict_valbyattr(vp->da->attr, vp->da->vendor, (vp->vp_integer & 0xffffff))) != NULL) {
-				a = v->name;
-				len = strlen(a);
-			} else {
-				/* should never be truncated */
-				len = snprintf(buf, sizeof(buf), "%u", (vp->vp_integer & 0xffffff));
-				a = buf;
-			}
-		} else {
 	case PW_TYPE_BYTE:
 	case PW_TYPE_SHORT:
-			/* Normal, non-tagged attribute */
-			if ((v = dict_valbyattr(vp->da->attr, vp->da->vendor, vp->vp_integer)) != NULL) {
-				a = v->name;
-				len = strlen(a);
-			} else {
-				/* should never be truncated */
-				len = snprintf(buf, sizeof(buf), "%u", vp->vp_integer);
-				a = buf;
-			}
+		/* Normal, non-tagged attribute */
+		if ((v = dict_valbyattr(da->attr, da->vendor, data->integer)) != NULL) {
+			a = v->name;
+			len = strlen(a);
+		} else {
+			/* should never be truncated */
+			len = snprintf(buf, sizeof(buf), "%u", data->integer);
+			a = buf;
 		}
 		break;
 
 	case PW_TYPE_INTEGER64:
-		return snprintf(out, outlen, "%" PRIu64, vp->vp_integer64);
+		return snprintf(out, outlen, "%" PRIu64, data->integer64);
 
 	case PW_TYPE_DATE:
-		t = vp->vp_date;
+		t = data->date;
 		if (quote > 0) {
 			len = strftime(buf, sizeof(buf) - 1, "%%%b %e %Y %H:%M:%S %Z%%", localtime_r(&t, &s_tm));
 			buf[0] = (char) quote;
@@ -411,19 +395,18 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 		break;
 
 	case PW_TYPE_SIGNED: /* Damned code for 1 WiMAX attribute */
-		len = snprintf(buf, sizeof(buf), "%d", vp->vp_signed);
+		len = snprintf(buf, sizeof(buf), "%d", data->sinteger);
 		a = buf;
 		break;
 
 	case PW_TYPE_IPV4_ADDR:
-		a = inet_ntop(AF_INET, &(vp->vp_ipaddr), buf, sizeof(buf));
+		a = inet_ntop(AF_INET, &(data->ipaddr), buf, sizeof(buf));
 		len = strlen(buf);
 		break;
 
 	case PW_TYPE_ABINARY:
 #ifdef WITH_ASCEND_BINARY
-
-		print_abinary(buf, sizeof(buf), vp, quote);
+		print_abinary(buf, sizeof(buf), (uint8_t const *) data->filter, len, quote);
 		a = buf;
 		len = strlen(buf);
 		break;
@@ -436,7 +419,7 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 		size_t max;
 
 		/* Return the number of bytes we would have written */
-		len = (vp->length * 2) + 2;
+		len = (data_len * 2) + 2;
 		if (freespace <= 1) {
 			return len;
 		}
@@ -458,19 +441,17 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 
 		/* Get maximum number of bytes we can encode given freespace */
 		max = ((freespace % 2) ? freespace - 1 : freespace - 2) / 2;
-		fr_bin2hex(out, vp->vp_octets, (vp->length > max) ? max : vp->length);
-
-		return len;
+		fr_bin2hex(out, data->octets, (data_len > max) ? max : data_len);
 	}
-		break;
+		return len;
 
 	case PW_TYPE_IFID:
-		a = ifid_ntoa(buf, sizeof(buf), vp->vp_ifid);
+		a = ifid_ntoa(buf, sizeof(buf), data->ifid);
 		len = strlen(buf);
 		break;
 
 	case PW_TYPE_IPV6_ADDR:
-		a = inet_ntop(AF_INET6, &vp->vp_ipv6addr, buf, sizeof(buf));
+		a = inet_ntop(AF_INET6, &data->ipv6addr, buf, sizeof(buf));
 		len = strlen(buf);
 		break;
 
@@ -481,7 +462,7 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 		/*
 		 *	Alignment issues.
 		 */
-		memcpy(&addr, &(vp->vp_ipv6prefix[2]), sizeof(addr));
+		memcpy(&addr, &(data->ipv6prefix[2]), sizeof(addr));
 
 		a = inet_ntop(AF_INET6, &addr, buf, sizeof(buf));
 		if (a) {
@@ -489,7 +470,7 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 
 			len = strlen(buf);
 			p += len;
-			len += snprintf(p, sizeof(buf) - len, "/%u", (unsigned int) vp->vp_ipv6prefix[1]);
+			len += snprintf(p, sizeof(buf) - len, "/%u", (unsigned int) data->ipv6prefix[1]);
 		}
 	}
 		break;
@@ -501,7 +482,7 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 		/*
 		 *	Alignment issues.
 		 */
-		memcpy(&addr, &(vp->vp_ipv4prefix[2]), sizeof(addr));
+		memcpy(&addr, &(data->ipv4prefix[2]), sizeof(addr));
 
 		a = inet_ntop(AF_INET, &addr, buf, sizeof(buf));
 		if (a) {
@@ -509,16 +490,16 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 
 			len = strlen(buf);
 			p += len;
-			len += snprintf(p, sizeof(buf) - len, "/%u", (unsigned int) (vp->vp_ipv4prefix[1] & 0x3f));
+			len += snprintf(p, sizeof(buf) - len, "/%u", (unsigned int) (data->ipv4prefix[1] & 0x3f));
 		}
 	}
 		break;
 
 	case PW_TYPE_ETHERNET:
 		return snprintf(out, outlen, "%02x:%02x:%02x:%02x:%02x:%02x",
-				vp->vp_ether[0], vp->vp_ether[1],
-				vp->vp_ether[2], vp->vp_ether[3],
-				vp->vp_ether[4], vp->vp_ether[5]);
+				data->ether[0], data->ether[1],
+				data->ether[2], data->ether[3],
+				data->ether[4], data->ether[5]);
 
 	default:
 		a = "UNKNOWN-TYPE";
@@ -529,6 +510,22 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 	if (a) strlcpy(out, a, outlen);
 
 	return len;	/* Return the number of bytes we would of written (for truncation detection) */
+}
+
+/** Print the value of an attribute to a string
+ *
+ * @param[out] out Where to write the string.
+ * @param[in] outlen Size of outlen (must be at least 3 bytes).
+ * @param[in] vp to print.
+ * @param[in] quote Char to add before and after printed value, if 0 no char will be added, if < 0 raw string will be
+ *	added.
+ * @return the length of data written to out, or a value >= outlen on truncation.
+ */
+size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t quote)
+{
+	VERIFY_VP(vp);
+
+	return vp_data_prints_value(out, outlen, vp->da, &vp->data, vp->length, quote);
 }
 
 char *vp_aprint_type(TALLOC_CTX *ctx, PW_TYPE type)
@@ -592,18 +589,18 @@ size_t vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp)
 
 	if (!vp->da->flags.has_tag) {
 		switch (vp->da->type) {
-			case PW_TYPE_INTEGER:
-			case PW_TYPE_BYTE:
-			case PW_TYPE_SHORT:
-				if (vp->da->flags.has_value) break;
+		case PW_TYPE_INTEGER:
+		case PW_TYPE_BYTE:
+		case PW_TYPE_SHORT:
+			if (vp->da->flags.has_value) break;
 
-				return snprintf(out, freespace, "%u", vp->vp_integer);
+			return snprintf(out, freespace, "%u", vp->vp_integer);
 
-			case PW_TYPE_SIGNED:
-				return snprintf(out, freespace, "%d", vp->vp_signed);
+		case PW_TYPE_SIGNED:
+			return snprintf(out, freespace, "%d", vp->vp_signed);
 
-			default:
-				break;
+		default:
+			break;
 		}
 	}
 
@@ -613,71 +610,71 @@ size_t vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp)
 	freespace--;
 
 	switch (vp->da->type) {
-		case PW_TYPE_STRING:
-			for (q = vp->vp_strvalue; q < vp->vp_strvalue + vp->length; q++) {
-				/* Indicate truncation */
-				if (freespace < 3) return outlen + 1;
+	case PW_TYPE_STRING:
+		for (q = vp->vp_strvalue; q < vp->vp_strvalue + vp->length; q++) {
+			/* Indicate truncation */
+			if (freespace < 3) return outlen + 1;
 
-				if (*q == '"') {
-					*out++ = '\\';
-					*out++ = '"';
-					freespace -= 2;
-				} else if (*q == '\\') {
-					*out++ = '\\';
-					*out++ = '\\';
-					freespace -= 2;
-				} else if (*q == '/') {
-					*out++ = '\\';
-					*out++ = '/';
-					freespace -= 2;
-				} else if (*q >= ' ') {
-					*out++ = *q;
+			if (*q == '"') {
+				*out++ = '\\';
+				*out++ = '"';
+				freespace -= 2;
+			} else if (*q == '\\') {
+				*out++ = '\\';
+				*out++ = '\\';
+				freespace -= 2;
+			} else if (*q == '/') {
+				*out++ = '\\';
+				*out++ = '/';
+				freespace -= 2;
+			} else if (*q >= ' ') {
+				*out++ = *q;
+				freespace--;
+			} else {
+				*out++ = '\\';
+				freespace--;
+
+				switch (*q) {
+				case '\b':
+					*out++ = 'b';
 					freespace--;
-				} else {
-					*out++ = '\\';
+					break;
+
+				case '\f':
+					*out++ = 'f';
 					freespace--;
+					break;
 
-					switch (*q) {
-					case '\b':
-						*out++ = 'b';
-						freespace--;
-						break;
+				case '\n':
+					*out++ = 'b';
+					freespace--;
+					break;
 
-					case '\f':
-						*out++ = 'f';
-						freespace--;
-						break;
+				case '\r':
+					*out++ = 'r';
+					freespace--;
+					break;
 
-					case '\n':
-						*out++ = 'b';
-						freespace--;
-						break;
-
-					case '\r':
-						*out++ = 'r';
-						freespace--;
-						break;
-
-					case '\t':
-						*out++ = 't';
-						freespace--;
-						break;
-					default:
-						len = snprintf(out, freespace, "u%04X", *q);
-						if (is_truncated(len, freespace)) return (outlen - freespace) + len;
-						out += len;
-						freespace -= len;
-					}
+				case '\t':
+					*out++ = 't';
+					freespace--;
+					break;
+				default:
+					len = snprintf(out, freespace, "u%04X", *q);
+					if (is_truncated(len, freespace)) return (outlen - freespace) + len;
+					out += len;
+					freespace -= len;
 				}
 			}
-			break;
+		}
+		break;
 
-		default:
-			len = vp_prints_value(out, freespace, vp, 0);
-			if (is_truncated(len, freespace)) return (outlen - freespace) + len;
-			out += len;
-			freespace -= len;
-			break;
+	default:
+		len = vp_prints_value(out, freespace, vp, 0);
+		if (is_truncated(len, freespace)) return (outlen - freespace) + len;
+		out += len;
+		freespace -= len;
+		break;
 	}
 
 	/* Indicate truncation */
@@ -723,9 +720,9 @@ static char const *vp_tokens[] = {
   "<`STRING`>"
 };
 
-extern int fr_attr_max_tlv;
-extern int fr_attr_shift[];
-extern int fr_attr_mask[];
+extern int const fr_attr_max_tlv;
+extern int const fr_attr_shift[];
+extern int const fr_attr_mask[];
 
 
 /** Print one attribute and value to a string
@@ -759,7 +756,7 @@ size_t vp_prints(char *out, size_t outlen, VALUE_PAIR const *vp)
 		token = "<INVALID-TOKEN>";
 	}
 
-	if (vp->da->flags.has_tag) {
+	if (vp->da->flags.has_tag && (vp->tag != TAG_ANY)) {
 		len = snprintf(out, freespace, "%s:%d %s ", vp->da->name, vp->tag, token);
 	} else {
 		len = snprintf(out, freespace, "%s %s ", vp->da->name, token);
@@ -887,7 +884,7 @@ char *vp_aprint_value(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
 #ifdef WITH_ASCEND_BINARY
 		p = talloc_array(ctx, char, 128);
 		if (!p) return NULL;
-		print_abinary(p, 128, vp, 0);
+		print_abinary(p, 128, (uint8_t *) &vp->vp_filter, vp->length, 0);
 		break;
 #else
 		  /* FALL THROUGH */

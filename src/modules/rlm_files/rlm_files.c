@@ -69,7 +69,7 @@ typedef struct rlm_files_t {
 /*
  *     See if a VALUE_PAIR list contains Fall-Through = Yes
  */
-static int fallthrough(VALUE_PAIR *vp)
+static int fall_through(VALUE_PAIR *vp)
 {
 	VALUE_PAIR *tmp;
 	tmp = pairfind(vp, PW_FALL_THROUGH, 0, TAG_ANY);
@@ -356,15 +356,14 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 /*
  *	Common code called by everything below.
  */
-static rlm_rcode_t file_common(rlm_files_t *inst, REQUEST *request,
-		       char const *filename, fr_hash_table_t *ht,
-		       VALUE_PAIR *request_pairs, VALUE_PAIR **reply_pairs)
+static rlm_rcode_t file_common(rlm_files_t *inst, REQUEST *request, char const *filename, fr_hash_table_t *ht,
+			       RADIUS_PACKET *request_packet, RADIUS_PACKET *reply_packet)
 {
 	char const	*name, *match;
 	VALUE_PAIR	*check_tmp;
 	VALUE_PAIR	*reply_tmp;
 	PAIR_LIST const *user_pl, *default_pl;
-	int		found = 0;
+	bool		found = false;
 	PAIR_LIST	my_pl;
 	char		buffer[256];
 
@@ -431,20 +430,20 @@ static rlm_rcode_t file_common(rlm_files_t *inst, REQUEST *request,
 			}
 		}
 
-		if (paircompare(request, request_pairs, pl->check, reply_pairs) == 0) {
+		if (paircompare(request, request_packet->vps, pl->check, &reply_packet->vps) == 0) {
 			RDEBUG2("%s: Matched entry %s at line %d", filename, match, pl->lineno);
-			found = 1;
+			found = true;
 
 			/* ctx may be reply or proxy */
-			reply_tmp = paircopy(request, pl->reply);
-			radius_pairmove(request, reply_pairs, reply_tmp, true);
+			reply_tmp = paircopy(reply_packet, pl->reply);
+			radius_pairmove(request, &reply_packet->vps, reply_tmp, true);
 			pairmove(request, &request->config_items, &check_tmp);
 			pairfree(&check_tmp);
 
 			/*
 			 *	Fallthrough?
 			 */
-			if (!fallthrough(pl->reply))
+			if (!fall_through(pl->reply))
 				break;
 		}
 	}
@@ -452,7 +451,7 @@ static rlm_rcode_t file_common(rlm_files_t *inst, REQUEST *request,
 	/*
 	 *	Remove server internal parameters.
 	 */
-	pairdelete(reply_pairs, PW_FALL_THROUGH, 0, TAG_ANY);
+	pairdelete(&reply_packet->vps, PW_FALL_THROUGH, 0, TAG_ANY);
 
 	/*
 	 *	See if we succeeded.
@@ -477,7 +476,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 
 	return file_common(inst, request, "users",
 			   inst->users ? inst->users : inst->common,
-			   request->packet->vps, &request->reply->vps);
+			   request->packet, request->reply);
 }
 
 
@@ -492,7 +491,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_preacct(void *instance, REQUEST *request
 
 	return file_common(inst, request, "acct_users",
 			   inst->acctusers ? inst->acctusers : inst->common,
-			   request->packet->vps, &request->reply->vps);
+			   request->packet, request->reply);
 }
 
 #ifdef WITH_PROXY
@@ -502,7 +501,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_pre_proxy(void *instance, REQUEST *reque
 
 	return file_common(inst, request, "preproxy_users",
 			   inst->preproxy_users ? inst->preproxy_users : inst->common,
-			   request->packet->vps, &request->proxy->vps);
+			   request->packet, request->proxy);
 }
 
 static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *instance, REQUEST *request)
@@ -511,7 +510,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *instance, REQUEST *requ
 
 	return file_common(inst, request, "postproxy_users",
 			   inst->postproxy_users ? inst->postproxy_users : inst->common,
-			   request->proxy_reply->vps, &request->reply->vps);
+			   request->proxy_reply, request->reply);
 }
 #endif
 
@@ -521,7 +520,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 
 	return file_common(inst, request, "auth_users",
 			   inst->auth_users ? inst->auth_users : inst->common,
-			   request->packet->vps, &request->reply->vps);
+			   request->packet, request->reply);
 }
 
 static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
@@ -530,7 +529,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 
 	return file_common(inst, request, "postauth_users",
 			   inst->postauth_users ? inst->postauth_users : inst->common,
-			   request->packet->vps, &request->reply->vps);
+			   request->packet, request->reply);
 }
 
 

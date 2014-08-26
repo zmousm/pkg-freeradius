@@ -24,6 +24,7 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/md5.h>
 
 #ifdef HAVE_SYS_UN_H
 #include <sys/un.h>
@@ -248,8 +249,8 @@ static void do_challenge(int sockfd)
 		fflush(stdout);
 	}
 
-	fr_hmac_md5((uint8_t const *) secret, strlen(secret),
-		    challenge, sizeof(challenge), challenge);
+	fr_hmac_md5(challenge, (uint8_t const *) secret, strlen(secret),
+		    challenge, sizeof(challenge));
 
 	if (write(sockfd, challenge, sizeof(challenge)) < 0) {
 		fprintf(stderr, "%s: Failed writing challenge data: %s\n",

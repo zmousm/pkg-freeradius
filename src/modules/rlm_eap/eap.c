@@ -63,18 +63,14 @@ RCSID("$Id$")
 
 static char const *eap_codes[] = {
 	 "",				/* 0 is invalid */
-	"request",
-	"response",
-	"success",
-	"failure"
+	"Request",
+	"Response",
+	"Success",
+	"Failure"
 };
 
-static int eap_module_free(void *ctx)
+static int _eap_module_free(eap_module_t *inst)
 {
-	eap_module_t *inst;
-
-	inst = talloc_get_type_abort(ctx, eap_module_t);
-
 	/*
 	 *	We have to check inst->type as it's only allocated
 	 *	if we loaded the eap method.
@@ -106,7 +102,7 @@ int eap_module_load(rlm_eap_t *inst, eap_module_t **m_inst, eap_type_t num, CONF
 	*m_inst = method = talloc_zero(cs, eap_module_t);
 	if (!inst) return -1;
 
-	talloc_set_destructor((void *) method, eap_module_free);
+	talloc_set_destructor(method, _eap_module_free);
 
 	/* fill in the structure */
 	method->cs = cs;
@@ -365,7 +361,7 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 	 *	Don't trust anyone.
 	 */
 	if ((type->num == 0) || (type->num >= PW_EAP_MAX_TYPES)) {
-		REDEBUG("Peer sent type (%d), which is outside known range", type->num);
+		REDEBUG("Peer sent method %d, which is outside known range", type->num);
 
 		return EAP_INVALID;
 	}
@@ -379,7 +375,7 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 		return EAP_INVALID;
 	}
 
-	RDEBUG2("Peer sent %s (%d)", eap_type2name(type->num), type->num);
+	RDEBUG2("Peer sent method %s (%d)", eap_type2name(type->num), type->num);
 	/*
 	 *	Figure out what to do.
 	 */
@@ -610,15 +606,15 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 	rcode = RLM_MODULE_OK;
 	if (!request->reply->code) switch(reply->code) {
 	case PW_EAP_RESPONSE:
-		request->reply->code = PW_CODE_AUTHENTICATION_ACK;
+		request->reply->code = PW_CODE_ACCESS_ACCEPT;
 		rcode = RLM_MODULE_HANDLED; /* leap weirdness */
 		break;
 	case PW_EAP_SUCCESS:
-		request->reply->code = PW_CODE_AUTHENTICATION_ACK;
+		request->reply->code = PW_CODE_ACCESS_ACCEPT;
 		rcode = RLM_MODULE_OK;
 		break;
 	case PW_EAP_FAILURE:
-		request->reply->code = PW_CODE_AUTHENTICATION_REJECT;
+		request->reply->code = PW_CODE_ACCESS_REJECT;
 		rcode = RLM_MODULE_REJECT;
 		break;
 	case PW_EAP_REQUEST:
@@ -637,7 +633,7 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 
 		/* Should never enter here */
 		ERROR("rlm_eap: reply code %d is unknown, Rejecting the request.", reply->code);
-		request->reply->code = PW_CODE_AUTHENTICATION_REJECT;
+		request->reply->code = PW_CODE_ACCESS_REJECT;
 		reply->code = PW_EAP_FAILURE;
 		rcode = RLM_MODULE_REJECT;
 		break;
@@ -783,10 +779,11 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	    (eap_msg->vp_octets[0] >= PW_EAP_MAX_CODES)) {
 		RDEBUG2("Unknown EAP packet");
 	} else {
-		RDEBUG2("EAP packet type %s id %d length %zu",
-		       eap_codes[eap_msg->vp_octets[0]],
-		       eap_msg->vp_octets[1],
-		       eap_msg->length);
+		RDEBUG2("Peer sent code %s (%i) ID %d length %zu",
+		        eap_codes[eap_msg->vp_octets[0]],
+		        eap_msg->vp_octets[0],
+		        eap_msg->vp_octets[1],
+		        eap_msg->length);
 	}
 
 	/*

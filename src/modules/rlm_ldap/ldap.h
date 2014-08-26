@@ -14,6 +14,29 @@
 #include	<freeradius-devel/modules.h>
 #include	<ldap.h>
 
+/*
+ *      For compatibility with other LDAP libraries
+ */
+#if !defined(LDAP_SCOPE_BASE) && defined(LDAP_SCOPE_BASEOBJECT)
+#  define LDAP_SCOPE_BASE LDAP_SCOPE_BASEOBJECT
+#endif
+
+#if !defined(LDAP_SCOPE_ONE) && defined(LDAP_SCOPE_ONELEVEL)
+#  define LDAP_SCOPE_ONE LDAP_SCOPE_ONELEVEL
+#endif
+
+#if !defined(LDAP_SCOPE_SUB) && defined(LDAP_SCOPE_SUBTREE)
+#  define LDAP_SCOPE_SUB LDAP_SCOPE_SUBTREE
+#endif
+
+#if !defined(LDAP_OPT_RESULT_CODE) && defined(LDAP_OPT_ERROR_NUMBER)
+#  define LDAP_OPT_RESULT_CODE LDAP_OPT_ERROR_NUMBER
+#endif
+
+#ifndef LDAP_CONST
+#  define LDAP_CONST
+#endif
+
 #define LDAP_MAX_ATTRMAP		128		//!< Maximum number of mappings between LDAP and
 							//!< FreeRADIUS attributes.
 #define LDAP_MAP_RESERVED		4		//!< Number of additional items to allocate in expanded
@@ -48,6 +71,9 @@ typedef struct ldap_instance {
 	char const	*admin_dn;			//!< DN we bind as when we need to query the LDAP
 							//!< directory.
 	char const	*password;			//!< Password used in administrative bind.
+
+	char const	*dereference_str;		//!< When to dereference (never, searching, finding, always)
+	int		dereference;			//!< libldap value specifying dereferencing behaviour.
 
 	bool		chase_referrals;		//!< If the LDAP server returns a referral to another server
 							//!< or point in the tree, follow it, establishing new
@@ -310,7 +336,7 @@ ldap_rcode_t rlm_ldap_modify(ldap_instance_t const *inst, REQUEST *request, ldap
 			     char const *dn, LDAPMod *mods[]);
 
 char const *rlm_ldap_find_user(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t **pconn,
-			       char const *attrs[], int force, LDAPMessage **result, rlm_rcode_t *rcode);
+			       char const *attrs[], bool force, LDAPMessage **result, rlm_rcode_t *rcode);
 
 rlm_rcode_t rlm_ldap_check_access(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t const *conn,
 				  LDAPMessage *entry);
@@ -320,9 +346,7 @@ void rlm_ldap_check_reply(ldap_instance_t const *inst, REQUEST *request);
 /*
  *	ldap.c - Callbacks for the connection pool API.
  */
-void *mod_conn_create(void *ctx);
-
-int mod_conn_delete(UNUSED void *instance, void *handle);
+void *mod_conn_create(TALLOC_CTX *ctx, void *instance);
 
 ldap_handle_t *rlm_ldap_get_socket(ldap_instance_t const *inst, REQUEST *request);
 

@@ -12,26 +12,33 @@
 #ifdef HAVE_YKCLIENT
 #include <freeradius-devel/connection.h>
 
+/** Frees a ykclient handle
+ *
+ * @param[in] yandle rlm_yubikey_handle_t to close and free.
+ * @return returns 0.
+ */
+static int _mod_conn_free(ykclient_handle_t **yandle)
+{
+	ykclient_handle_done(yandle);
+
+	return 0;
+}
+
 /** Creates a new connection handle for use by the FR connection API.
  *
  * Matches the fr_connection_create_t function prototype, is passed to
  * fr_connection_pool_init, and called when a new connection is required by the
  * connection pool API.
  *
- * @see mod_conn_delete
  * @see fr_connection_pool_init
  * @see fr_connection_create_t
  * @see connection.c
- *
- * @param[in] instance configuration data.
- * @return connection handle or NULL if the connection failed or couldn't
- *	be initialised.
  */
-static void *mod_socket_create(void *instance)
+static void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 {
 	rlm_yubikey_t *inst = instance;
 	ykclient_rc status;
-	ykclient_handle_t *yandle;
+	ykclient_handle_t *yandle, **marker;
 
 	status = ykclient_handle_init(inst->ykc, &yandle);
 	if (status != YKCLIENT_OK) {
@@ -39,23 +46,11 @@ static void *mod_socket_create(void *instance)
 
 		return NULL;
 	}
+	marker = talloc(ctx, ykclient_handle_t *);
+	talloc_set_destructor(marker, _mod_conn_free);
+	*marker = yandle;
 
 	return yandle;
-}
-
-/** Frees a ykclient handle
- *
- * @param[in] instance configuration data.
- * @param[in] handle rlm_yubikey_handle_t to close and free.
- * @return returns true.
- */
-static int mod_socket_delete(UNUSED void *instance, void *handle)
-{
-	ykclient_handle_t *yandle = handle;
-
-	ykclient_handle_done(&yandle);
-
-	return true;
 }
 
 int rlm_yubikey_ykclient_init(CONF_SECTION *conf, rlm_yubikey_t *inst)
@@ -137,7 +132,7 @@ init:
 	}
 
 	snprintf(prefix, sizeof(prefix), "rlm_yubikey (%s)", inst->name);
-	inst->conn_pool = fr_connection_pool_init(conf, inst, mod_socket_create, NULL, mod_socket_delete, prefix);
+	inst->conn_pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, NULL, prefix);
 	if (!inst->conn_pool) {
 		ykclient_done(&inst->ykc);
 

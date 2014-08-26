@@ -4,8 +4,8 @@ checkrad
 radclient
 radiusd
 radlast
-radsniff
 radtest
+radsniff
 radwho
 radmin
 radconf2xml

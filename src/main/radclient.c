@@ -48,7 +48,7 @@ static bool do_output = true;
 static rc_stats_t stats;
 
 static uint16_t server_port = 0;
-static int packet_code = 0;
+static int packet_code = PW_CODE_UNDEFINED;
 static fr_ipaddr_t server_ipaddr;
 static int resend_count = 1;
 static bool done = true;
@@ -73,6 +73,8 @@ static int sleep_time = -1;
 static rc_request_t *request_head = NULL;
 static rc_request_t *rc_request_tail = NULL;
 
+static int rc_debug_flag;
+
 char const *radclient_version = "radclient version " RADIUSD_VERSION_STRING
 #ifdef RADIUSD_VERSION_COMMIT
 " (git #" STRINGIFY(RADIUSD_VERSION_COMMIT) ")"
@@ -83,7 +85,7 @@ static void NEVER_RETURNS usage(void)
 {
 	fprintf(stderr, "Usage: radclient [options] server[:port] <command> [<secret>]\n");
 
-	fprintf(stderr, "  <command>              One of auth, acct, status, coa, or disconnect.\n");
+	fprintf(stderr, "  <command>              One of auth, acct, status, coa, disconnect or auto.\n");
 	fprintf(stderr, "  -4                     Use IPv4 address of server\n");
 	fprintf(stderr, "  -6                     Use IPv6 address of server.\n");
 	fprintf(stderr, "  -c <count>             Send each packet 'count' times.\n");
@@ -112,7 +114,7 @@ static void NEVER_RETURNS usage(void)
 }
 
 static const FR_NAME_NUMBER request_types[] = {
-	{ "auth",	PW_CODE_AUTHENTICATION_REQUEST },
+	{ "auth",	PW_CODE_ACCESS_REQUEST },
 	{ "challenge",	PW_CODE_ACCESS_CHALLENGE },
 	{ "acct",	PW_CODE_ACCOUNTING_REQUEST },
 	{ "status",	PW_CODE_STATUS_SERVER },
@@ -206,11 +208,14 @@ static int getport(char const *name)
 	return ntohs(svp->s_port);
 }
 
+/*
+ *	Set a port from the request type if we don't already have one
+ */
 static void radclient_get_port(PW_CODE type, uint16_t *port)
 {
 	switch (type) {
 	default:
-	case PW_CODE_AUTHENTICATION_REQUEST:
+	case PW_CODE_ACCESS_REQUEST:
 	case PW_CODE_ACCESS_CHALLENGE:
 	case PW_CODE_STATUS_SERVER:
 		if (*port == 0) *port = getport("radius");
@@ -223,13 +228,34 @@ static void radclient_get_port(PW_CODE type, uint16_t *port)
 		return;
 
 	case PW_CODE_DISCONNECT_REQUEST:
+		if (*port == 0) *port = PW_POD_UDP_PORT;
+		return;
+
 	case PW_CODE_COA_REQUEST:
 		if (*port == 0) *port = PW_COA_UDP_PORT;
 		return;
 
 	case PW_CODE_UNDEFINED:
 		if (*port == 0) *port = 0;
+		return;
 	}
+}
+
+/*
+ *	Resolve a port to a request type
+ */
+static PW_CODE radclient_get_code(uint16_t port)
+{
+	if ((port == getport("radius")) || (port == PW_AUTH_UDP_PORT) || (port == PW_AUTH_UDP_PORT_ALT)) {
+		return PW_CODE_ACCESS_REQUEST;
+	}
+	if ((port == getport("radacct")) || (port == PW_ACCT_UDP_PORT) || (port == PW_ACCT_UDP_PORT_ALT)) {
+		return PW_CODE_ACCOUNTING_REQUEST;
+	}
+	if (port == PW_COA_UDP_PORT) return PW_CODE_COA_REQUEST;
+	if (port == PW_POD_UDP_PORT) return PW_CODE_DISCONNECT_REQUEST;
+
+	return PW_CODE_UNDEFINED;
 }
 
 /*
@@ -286,9 +312,8 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 			ERROR("Out of memory");
 			goto error;
 		}
-		talloc_set_destructor(request, _rc_request_free);
 
-		request->packet = rad_alloc(request, 1);
+		request->packet = rad_alloc(request, true);
 		if (!request->packet) {
 			ERROR("Out of memory");
 			goto error;
@@ -310,18 +335,16 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 		 *	Read the request VP's.
 		 */
 		if (readvp2(&request->packet->vps, request->packet, packets, &packets_done) < 0) {
-			ERROR("Error parsing \"%s\"", files->packets);
+			REDEBUG("Error parsing \"%s\"", files->packets);
 			goto error;
 		}
 
-		fr_cursor_init(&cursor, &request->filter);
-		vp = fr_cursor_next_by_num(&cursor, PW_PACKET_TYPE, 0, TAG_ANY);
-		if (vp) {
-			fr_cursor_remove(&cursor);
-			request->packet_code = vp->vp_integer;
-			talloc_free(vp);
-		} else {
-			request->packet_code = packet_code; /* Use the default set on the command line */
+		/*
+		 *	Skip empty entries
+		 */
+		if (!request->packet->vps) {
+			talloc_free(request);
+			continue;
 		}
 
 		/*
@@ -331,32 +354,20 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 			bool filters_done;
 
 			if (readvp2(&request->filter, request, filters, &filters_done) < 0) {
-				ERROR("Error parsing \"%s\"", files->filters);
-				goto error;
-			}
-
-			if (!request->filter) {
+				REDEBUG("Error parsing \"%s\"", files->filters);
 				goto error;
 			}
 
 			if (filters_done && !packets_done) {
-				ERROR("Differing number of packets/filters in %s:%s "
-				      "(too many requests))", files->packets, files->filters);
+				REDEBUG("Differing number of packets/filters in %s:%s "
+				        "(too many requests))", files->packets, files->filters);
 				goto error;
 			}
 
 			if (!filters_done && packets_done) {
-				ERROR("Differing number of packets/filters in %s:%s "
-				      "(too many filters))", files->packets, files->filters);
+				REDEBUG("Differing number of packets/filters in %s:%s "
+				        "(too many filters))", files->packets, files->filters);
 				goto error;
-			}
-
-			fr_cursor_init(&cursor, &request->filter);
-			vp = fr_cursor_next_by_num(&cursor, PW_PACKET_TYPE, 0, TAG_ANY);
-			if (vp) {
-				fr_cursor_remove(&cursor);
-				request->filter_code = vp->vp_integer;
-				talloc_free(vp);
 			}
 
 			/*
@@ -368,6 +379,18 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 				if (vp->type == VT_XLAT) {
 					vp->type = VT_DATA;
 					vp->vp_strvalue = vp->value.xlat;
+					vp->length = talloc_array_length(vp->vp_strvalue) - 1;
+				}
+
+				if (vp->da->vendor == 0 ) switch (vp->da->attr) {
+				case PW_RESPONSE_PACKET_TYPE:
+				case PW_PACKET_TYPE:
+					fr_cursor_remove(&cursor);	/* so we don't break the filter */
+					request->filter_code = vp->vp_integer;
+					talloc_free(vp);
+
+				default:
+					break;
 				}
 			}
 
@@ -377,54 +400,9 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 			pairsort(&request->filter, attrtagcmp);
 		}
 
+		request->password[0] = '\0';
 		/*
-		 *	Determine the response code from the request (if not already set)
-		 */
-		if (!request->filter_code) {
-			switch (request->packet_code) {
-			case PW_CODE_AUTHENTICATION_REQUEST:
-				request->filter_code = PW_CODE_AUTHENTICATION_ACK;
-				break;
-
-			case PW_CODE_ACCOUNTING_REQUEST:
-				request->filter_code = PW_CODE_ACCOUNTING_RESPONSE;
-				break;
-
-			case PW_CODE_COA_REQUEST:
-				request->filter_code = PW_CODE_COA_ACK;
-				break;
-
-			case PW_CODE_DISCONNECT_REQUEST:
-				request->filter_code = PW_CODE_DISCONNECT_ACK;
-				break;
-
-			default:
-				break;
-			}
-		}
-
-		/*
-		 *	Keep a copy of the the User-Password attribute.
-		 */
-		if ((vp = pairfind(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY)) != NULL) {
-			strlcpy(request->password, vp->vp_strvalue,
-				sizeof(request->password));
-		/*
-		 *	Otherwise keep a copy of the CHAP-Password attribute.
-		 */
-		} else if ((vp = pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY)) != NULL) {
-			strlcpy(request->password, vp->vp_strvalue,
-				sizeof(request->password));
-
-		} else if ((vp = pairfind(request->packet->vps, PW_MS_CHAP_PASSWORD, 0, TAG_ANY)) != NULL) {
-			strlcpy(request->password, vp->vp_strvalue,
-				sizeof(request->password));
-		} else {
-			request->password[0] = '\0';
-		}
-
-		/*
-		 *	Fix up Digest-Attributes issues
+		 *	Process special attributes
 		 */
 		for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 		     vp;
@@ -434,21 +412,25 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 			 *	but we don't support that in request.
 			 */
 			if (vp->type == VT_XLAT) {
-				vp->vp_strvalue = vp->value.xlat;
-				vp->value.xlat = NULL;
 				vp->type = VT_DATA;
+				vp->vp_strvalue = vp->value.xlat;
+				vp->length = talloc_array_length(vp->vp_strvalue) - 1;
 			}
 
 			if (!vp->da->vendor) switch (vp->da->attr) {
 			default:
 				break;
 
-				/*
-				 *	Allow it to set the packet type in
-				 *	the attributes read from the file.
-				 */
+			/*
+			 *	Allow it to set the packet type in
+			 *	the attributes read from the file.
+			 */
 			case PW_PACKET_TYPE:
 				request->packet->code = vp->vp_integer;
+				break;
+
+			case PW_RESPONSE_PACKET_TYPE:
+				request->filter_code = vp->vp_integer;
 				break;
 
 			case PW_PACKET_DST_PORT:
@@ -489,53 +471,160 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 			case PW_DIGEST_CNONCE:
 			case PW_DIGEST_NONCE_COUNT:
 			case PW_DIGEST_USER_NAME:
-				/* overlapping! */
-				{
-					DICT_ATTR const *da;
-					uint8_t *p, *q;
+			/* overlapping! */
+			{
+				DICT_ATTR const *da;
+				uint8_t *p, *q;
 
-					p = talloc_array(vp, uint8_t, vp->length + 2);
+				p = talloc_array(vp, uint8_t, vp->length + 2);
 
-					memcpy(p + 2, vp->vp_octets, vp->length);
-					p[0] = vp->da->attr - PW_DIGEST_REALM + 1;
-					vp->length += 2;
-					p[1] = vp->length;
+				memcpy(p + 2, vp->vp_octets, vp->length);
+				p[0] = vp->da->attr - PW_DIGEST_REALM + 1;
+				vp->length += 2;
+				p[1] = vp->length;
 
-					da = dict_attrbyvalue(PW_DIGEST_ATTRIBUTES, 0);
-					if (!da) {
-						ERROR("Out of memory");
-						goto error;
-					}
-					vp->da = da;
-
-					/*
-					 *	Re-do pairmemsteal ourselves,
-					 *	because we play games with
-					 *	vp->da, and pairmemsteal goes
-					 *	to GREAT lengths to sanitize
-					 *	and fix and change and
-					 *	double-check the various
-					 *	fields.
-					 */
-					memcpy(&q, &vp->vp_octets, sizeof(q));
-					talloc_free(q);
-
-					vp->vp_octets = talloc_steal(vp, p);
-					vp->type = VT_DATA;
-
-					VERIFY_VP(vp);
+				da = dict_attrbyvalue(PW_DIGEST_ATTRIBUTES, 0);
+				if (!da) {
+					ERROR("Out of memory");
+					goto error;
 				}
+				vp->da = da;
 
+				/*
+				 *	Re-do pairmemsteal ourselves,
+				 *	because we play games with
+				 *	vp->da, and pairmemsteal goes
+				 *	to GREAT lengths to sanitize
+				 *	and fix and change and
+				 *	double-check the various
+				 *	fields.
+				 */
+				memcpy(&q, &vp->vp_octets, sizeof(q));
+				talloc_free(q);
+
+				vp->vp_octets = talloc_steal(vp, p);
+				vp->type = VT_DATA;
+
+				VERIFY_VP(vp);
+			}
+				break;
+
+			/*
+			 *	Keep a copy of the the password attribute.
+			 */
+			case PW_USER_PASSWORD:
+			case PW_CHAP_PASSWORD:
+			case PW_MS_CHAP_PASSWORD:
+				strlcpy(request->password, vp->vp_strvalue, sizeof(request->password));
+				break;
+
+			case PW_RADCLIENT_TEST_NAME:
+				request->name = vp->vp_strvalue;
 				break;
 			}
 		} /* loop over the VP's we read in */
 
 		/*
-		 *	Automatically set the port if we don't have a global
-		 *	or packet specific one.
+		 *	Use the default set on the command line
 		 */
-		if ((server_port == 0) && (request->packet->dst_port == 0)) {
+		if (request->packet->code == PW_CODE_UNDEFINED) request->packet->code = packet_code;
+
+		/*
+		 *	Default to the filename
+		 */
+		if (!request->name) request->name = request->files->packets;
+
+		/*
+		 *	Automatically set the response code from the request code
+		 *	(if one wasn't already set).
+		 */
+		if (request->filter_code == PW_CODE_UNDEFINED) {
+			switch (request->packet->code) {
+			case PW_CODE_ACCESS_REQUEST:
+				request->filter_code = PW_CODE_ACCESS_ACCEPT;
+				break;
+
+			case PW_CODE_ACCOUNTING_REQUEST:
+				request->filter_code = PW_CODE_ACCOUNTING_RESPONSE;
+				break;
+
+			case PW_CODE_COA_REQUEST:
+				request->filter_code = PW_CODE_COA_ACK;
+				break;
+
+			case PW_CODE_DISCONNECT_REQUEST:
+				request->filter_code = PW_CODE_DISCONNECT_ACK;
+				break;
+
+			case PW_CODE_STATUS_SERVER:
+				switch (radclient_get_code(request->packet->dst_port)) {
+				case PW_CODE_ACCESS_REQUEST:
+					request->filter_code = PW_CODE_ACCESS_ACCEPT;
+					break;
+
+				case PW_CODE_ACCOUNTING_REQUEST:
+					request->filter_code = PW_CODE_ACCOUNTING_RESPONSE;
+					break;
+
+				default:
+					REDEBUG("Can't determine expected response to Status-Server request, specify "
+					        "a well known RADIUS port, or add a Response-Packet-Type attribute "
+					        "to the request of filter");
+					goto error;
+				}
+				break;
+
+			case PW_CODE_UNDEFINED:
+				REDEBUG("Both Packet-Type and Response-Packet-Type undefined, specify at least one, "
+					"or a well known RADIUS port");
+				goto error;
+
+			default:
+				REDEBUG("Can't determine expected Response-Packet-Type for Packet-Type %i",
+					request->packet->code);
+				goto error;
+			}
+		/*
+		 *	Automatically set the request code from the response code
+		 *	(if one wasn't already set).
+		 */
+		} else if (request->packet->code == PW_CODE_UNDEFINED) {
+			switch (request->filter_code) {
+			case PW_CODE_ACCESS_ACCEPT:
+			case PW_CODE_ACCESS_REJECT:
+				request->packet->code = PW_CODE_ACCESS_REQUEST;
+				break;
+
+			case PW_CODE_ACCOUNTING_RESPONSE:
+				request->packet->code = PW_CODE_ACCOUNTING_REQUEST;
+				break;
+
+			case PW_CODE_DISCONNECT_ACK:
+			case PW_CODE_DISCONNECT_NAK:
+				request->packet->code = PW_CODE_DISCONNECT_REQUEST;
+				break;
+
+			case PW_CODE_COA_ACK:
+			case PW_CODE_COA_NAK:
+				request->packet->code = PW_CODE_COA_REQUEST;
+				break;
+
+			default:
+				REDEBUG("Can't determine expected Packet-Type for Response-Packet-Type %i",
+					request->filter_code);
+				goto error;
+			}
+		}
+
+		/*
+		 *	Automatically set the dst port (if one wasn't already set).
+		 */
+		if (request->packet->dst_port == 0) {
 			radclient_get_port(request->packet->code, &request->packet->dst_port);
+			if (request->packet->dst_port == 0) {
+				REDEBUG("Can't determine destination port");
+				goto error;
+			}
 		}
 
 		/*
@@ -553,6 +642,13 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 		rc_request_tail = request;
 		request->next = NULL;
 
+		/*
+		 *	Set the destructor so it removes itself from the
+		 *	request list when freed. We don't set this until
+		 *	the packet is actually in the list, else we trigger
+		 *	the asserts in the free callback.
+		 */
+		talloc_set_destructor(request, _rc_request_free);
 	} while (!packets_done); /* loop until the file is done. */
 
 	if (packets != stdin) fclose(packets);
@@ -626,9 +722,7 @@ static int filename_walk(UNUSED void *context, void *data)
 	/*
 	 *	Read request(s) from the file.
 	 */
-	if (!radclient_init(files, files)) {
-		return -1;	/* stop walking */
-	}
+	if (!radclient_init(files, files)) return -1;	/* stop walking */
 
 	return 0;
 }
@@ -654,10 +748,7 @@ static void deallocate_id(rc_request_t *request)
 	 *	and ensure that the next packet has a unique
 	 *	authentication vector.
 	 */
-	if (request->packet->data) {
-		TALLOC_FREE(request->packet->data);
-	}
-
+	if (request->packet->data) TALLOC_FREE(request->packet->data);
 	if (request->reply) rad_free(&request->reply);
 }
 
@@ -672,9 +763,7 @@ static int send_one_packet(rc_request_t *request)
 	 *	Remember when we have to wake up, to re-send the
 	 *	request, of we didn't receive a reply.
 	 */
-	if ((sleep_time == -1) || (sleep_time > (int) timeout)) {
-		sleep_time = (int) timeout;
-	}
+	if ((sleep_time == -1) || (sleep_time > (int) timeout)) sleep_time = (int) timeout;
 
 	/*
 	 *	Haven't sent the packet yet.  Initialize it.
@@ -692,26 +781,25 @@ static int send_one_packet(rc_request_t *request)
 		 */
 	retry:
 		request->packet->src_ipaddr.af = server_ipaddr.af;
-		rcode = fr_packet_list_id_alloc(pl, ipproto,
-						&request->packet, NULL);
+		rcode = fr_packet_list_id_alloc(pl, ipproto, &request->packet, NULL);
 		if (!rcode) {
 			int mysockfd;
 
 #ifdef WITH_TCP
 			if (proto) {
 				mysockfd = fr_tcp_client_socket(NULL,
-								&server_ipaddr,
-								server_port);
+								&request->packet->dst_ipaddr,
+								request->packet->dst_port);
 			} else
 #endif
 			mysockfd = fr_socket(&client_ipaddr, 0);
 			if (mysockfd < 0) {
-				ERROR("Can't open new socket: %s", strerror(errno));
+				ERROR("Failed opening socket");
 				exit(1);
 			}
 			if (!fr_packet_list_socket_add(pl, mysockfd, ipproto,
-						       &server_ipaddr,
-						       server_port, NULL)) {
+						       &request->packet->dst_ipaddr,
+						       request->packet->dst_port, NULL)) {
 				ERROR("Can't add new socket");
 				exit(1);
 			}
@@ -734,7 +822,6 @@ static int send_one_packet(rc_request_t *request)
 
 			if ((vp = pairfind(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY)) != NULL) {
 				pairstrcpy(vp, request->password);
-
 			} else if ((vp = pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY)) != NULL) {
 				bool already_hex = false;
 
@@ -775,9 +862,7 @@ static int send_one_packet(rc_request_t *request)
 					vp->length = 17;
 				}
 			} else if (pairfind(request->packet->vps, PW_MS_CHAP_PASSWORD, 0, TAG_ANY) != NULL) {
-				mschapv1_encode(request->packet,
-						&request->packet->vps,
-						request->password);
+				mschapv1_encode(request->packet, &request->packet->vps, request->password);
 			} else {
 				DEBUG("WARNING: No password in the request");
 			}
@@ -884,19 +969,13 @@ static int recv_one_packet(int wait_time)
 	max_fd = fr_packet_list_fd_set(pl, &set);
 	if (max_fd < 0) exit(1); /* no sockets to listen on! */
 
-	if (wait_time <= 0) {
-		tv.tv_sec = 0;
-	} else {
-		tv.tv_sec = wait_time;
-	}
+	tv.tv_sec = (wait_time <= 0) ? 0 : wait_time;
 	tv.tv_usec = 0;
 
 	/*
 	 *	No packet was received.
 	 */
-	if (select(max_fd, &set, NULL, NULL, &tv) <= 0) {
-		return 0;
-	}
+	if (select(max_fd, &set, NULL, NULL, &tv) <= 0) return 0;
 
 	/*
 	 *	Look for the packet.
@@ -919,12 +998,17 @@ static int recv_one_packet(int wait_time)
 	 *	udpfromto issues.  We may have bound to "*",
 	 *	and we want to find the replies that are sent to
 	 *	(say) 127.0.0.1.
+	 *
+	 *	This only works if were not using any of the
+	 *	Packet-* attributes, or running with 'auto'.
 	 */
 	reply->dst_ipaddr = client_ipaddr;
 	reply->dst_port = client_port;
 #ifdef WITH_TCP
-	reply->src_ipaddr = server_ipaddr;
-	reply->src_port = server_port;
+	if (server_port > 0) {
+		reply->src_ipaddr = server_ipaddr;
+		reply->src_port = server_port;
+	}
 #endif
 
 	packet_p = fr_packet_list_find_byreply(pl, reply);
@@ -967,7 +1051,7 @@ static int recv_one_packet(int wait_time)
 	 *	Increment counters...
 	 */
 	switch (request->reply->code) {
-	case PW_CODE_AUTHENTICATION_ACK:
+	case PW_CODE_ACCESS_ACCEPT:
 	case PW_CODE_ACCOUNTING_RESPONSE:
 	case PW_CODE_COA_ACK:
 	case PW_CODE_DISCONNECT_ACK:
@@ -986,11 +1070,11 @@ static int recv_one_packet(int wait_time)
 	 *	packet matched that.
 	 */
 	if (request->reply->code != request->filter_code) {
-		if (is_radius_code(request->packet_code)) {
-			REDEBUG("Expected %s got %s", fr_packet_codes[request->filter_code],
+		if (is_radius_code(request->reply->code)) {
+			REDEBUG("%s: Expected %s got %s", request->name, fr_packet_codes[request->filter_code],
 				fr_packet_codes[request->reply->code]);
 		} else {
-			REDEBUG("Expected %u got %i", request->filter_code,
+			REDEBUG("%s: Expected %u got %i", request->name, request->filter_code,
 				request->reply->code);
 		}
 		stats.failed++;
@@ -1004,11 +1088,11 @@ static int recv_one_packet(int wait_time)
 
 		pairsort(&request->reply->vps, attrtagcmp);
 		if (pairvalidate(failed, request->filter, request->reply->vps)) {
-			RDEBUG("Response passed filter");
+			RDEBUG("%s: Response passed filter", request->name);
 			stats.passed++;
 		} else {
 			pairvalidate_debug(request, failed);
-			REDEBUG("Response failed filter");
+			REDEBUG("%s: Response for failed filter", request->name);
 			stats.failed++;
 		}
 	}
@@ -1037,7 +1121,13 @@ int main(int argc, char **argv)
 	rc_request_t	*this;
 	int force_af = AF_UNSPEC;
 
-	fr_debug_flag = 2;
+	/*
+	 *	It's easier having two sets of flags to set the
+	 *	verbosity of library calls and the verbosity of
+	 *	radclient.
+	 */
+	rc_debug_flag = 1;
+	fr_debug_flag = 0;
 	fr_log_fp = stdout;
 
 #ifndef NDEBUG
@@ -1049,7 +1139,7 @@ int main(int argc, char **argv)
 
 	talloc_set_log_stderr();
 
-	filename_tree = rbtree_create(filename_cmp, NULL, 0);
+	filename_tree = rbtree_create(NULL, filename_cmp, NULL, 0);
 	if (!filename_tree) {
 	oom:
 		ERROR("Out of memory");
@@ -1064,20 +1154,25 @@ int main(int argc, char **argv)
 		case '4':
 			force_af = AF_INET;
 			break;
+
 		case '6':
 			force_af = AF_INET6;
 			break;
+
 		case 'c':
 			if (!isdigit((int) *optarg))
 				usage();
 			resend_count = atoi(optarg);
 			break;
+
 		case 'D':
 			dict_dir = optarg;
 			break;
+
 		case 'd':
 			radius_dir = optarg;
 			break;
+
 		case 'f':
 		{
 			char const *p;
@@ -1098,9 +1193,11 @@ int main(int argc, char **argv)
 			rbtree_insert(filename_tree, (void *) files);
 		}
 			break;
+
 		case 'F':
 			print_filename = true;
 			break;
+
 		case 'i':	/* currently broken */
 			if (!isdigit((int) *optarg))
 				usage();
@@ -1147,15 +1244,17 @@ int main(int argc, char **argv)
 			do_output = false;
 			fr_log_fp = NULL; /* no output from you, either! */
 			break;
+
 		case 'r':
-			if (!isdigit((int) *optarg))
-				usage();
+			if (!isdigit((int) *optarg)) usage();
 			retries = atoi(optarg);
 			if ((retries == 0) || (retries > 1000)) usage();
 			break;
+
 		case 's':
 			do_summary = true;
 			break;
+
 		case 'S':
 		{
 			char *p;
@@ -1185,18 +1284,23 @@ int main(int argc, char **argv)
 			secret = filesecret;
 		}
 		       break;
+
 		case 't':
 			if (!isdigit((int) *optarg))
 				usage();
 			timeout = atof(optarg);
 			break;
+
 		case 'v':
 			DEBUG("%s", radclient_version);
 			exit(0);
 			break;
+
 		case 'x':
 			fr_debug_flag++;
+			rc_debug_flag++;
 			break;
+
 		case 'h':
 		default:
 			usage();
@@ -1227,7 +1331,6 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	fr_strerror();	/* Clear the error buffer */
-
 
 	/*
 	 *	Get the request type
@@ -1283,6 +1386,11 @@ int main(int argc, char **argv)
 		 *	Strip port from hostname if needed.
 		 */
 		if (portname) server_port = atoi(portname);
+
+		/*
+		 *	Work backwards from the port to determine the packet type
+		 */
+		if (packet_code == PW_CODE_UNDEFINED) packet_code = radclient_get_code(server_port);
 	}
 
 	radclient_get_port(packet_code, &server_port);
@@ -1504,11 +1612,11 @@ int main(int argc, char **argv)
 
 	if (do_summary) {
 		DEBUG("Packet summary:\n"
-		      "\tAccess-Accepts  : %" PRIu64 "\n"
-		      "\tAccess-Rejects  : %" PRIu64 "\n"
-		      "\tLost            : %" PRIu64 "\n"
-		      "\tPassed filter   : %" PRIu64 "\n"
-		      "\tFailed filter   : %" PRIu64,
+		      "\tAccepted      : %" PRIu64 "\n"
+		      "\tRejected      : %" PRIu64 "\n"
+		      "\tLost          : %" PRIu64 "\n"
+		      "\tPassed filter : %" PRIu64 "\n"
+		      "\tFailed filter : %" PRIu64,
 		      stats.accepted,
 		      stats.rejected,
 		      stats.lost,

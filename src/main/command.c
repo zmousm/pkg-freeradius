@@ -24,6 +24,7 @@
 #ifdef WITH_COMMAND_SOCKET
 
 #include <freeradius-devel/parser.h>
+#include <freeradius-devel/md5.h>
 
 #ifdef HAVE_INTTYPES_H
 #include <inttypes.h>
@@ -315,7 +316,7 @@ static int command_hup(rad_listen_t *listener, int argc, char *argv[])
 	cs = cf_section_find("modules");
 	if (!cs) return 0;
 
-	mi = find_module_instance(cs, argv[0], 0);
+	mi = find_module_instance(cs, argv[0], false);
 	if (!mi) {
 		cprintf(listener, "ERROR: No such module \"%s\"\n", argv[0]);
 		return 0;
@@ -385,7 +386,7 @@ static int command_show_config(rad_listen_t *listener, int argc, char *argv[])
 	return 1;		/* success */
 }
 
-static char const *tabs = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
+static char const tabs[] = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
 
 /*
  *	FIXME: Recurse && indent?
@@ -433,7 +434,10 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 			data = (((char const *)base) + variables[i].offset);
 		}
 
-		switch (variables[i].type) {
+		/*
+		 *	Ignore the various flags
+		 */
+		switch (variables[i].type & 0xff) {
 		default:
 			cprintf(listener, "%.*s%s = ?\n", indent, tabs,
 				variables[i].name);
@@ -494,7 +498,7 @@ static int command_show_module_config(rad_listen_t *listener, int argc, char *ar
 	cs = cf_section_find("modules");
 	if (!cs) return 0;
 
-	mi = find_module_instance(cs, argv[0], 0);
+	mi = find_module_instance(cs, argv[0], false);
 	if (!mi) {
 		cprintf(listener, "ERROR: No such module \"%s\"\n", argv[0]);
 		return 0;
@@ -532,7 +536,7 @@ static int command_show_module_methods(rad_listen_t *listener, int argc, char *a
 	cs = cf_section_find("modules");
 	if (!cs) return 0;
 
-	mi = find_module_instance(cs, argv[0], 0);
+	mi = find_module_instance(cs, argv[0], false);
 	if (!mi) {
 		cprintf(listener, "ERROR: No such module \"%s\"\n", argv[0]);
 		return 0;
@@ -562,7 +566,7 @@ static int command_show_module_flags(rad_listen_t *listener, int argc, char *arg
 	cs = cf_section_find("modules");
 	if (!cs) return 0;
 
-	mi = find_module_instance(cs, argv[0], 0);
+	mi = find_module_instance(cs, argv[0], false);
 	if (!mi) {
 		cprintf(listener, "ERROR: No such module \"%s\"\n", argv[0]);
 		return 0;
@@ -597,7 +601,7 @@ static int command_show_module_status(rad_listen_t *listener, int argc, char *ar
 	cs = cf_section_find("modules");
 	if (!cs) return 0;
 
-	mi = find_module_instance(cs, argv[0], 0);
+	mi = find_module_instance(cs, argv[0], false);
 	if (!mi) {
 		cprintf(listener, "ERROR: No such module \"%s\"\n", argv[0]);
 		return 0;
@@ -632,12 +636,12 @@ static int command_show_modules(rad_listen_t *listener, UNUSED int argc, UNUSED 
 		module_instance_t *mi;
 
 		if (name2) {
-			mi = find_module_instance(cs, name2, 0);
+			mi = find_module_instance(cs, name2, false);
 			if (!mi) continue;
 
 			cprintf(listener, "\t%s (%s)\n", name2, name1);
 		} else {
-			mi = find_module_instance(cs, name1, 0);
+			mi = find_module_instance(cs, name1, false);
 			if (!mi) continue;
 
 			cprintf(listener, "\t%s\n", name1);
@@ -1302,7 +1306,7 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 	fake->decode = null_socket_dencode;
 	fake->send = null_socket_send;
 
-	packet = rad_alloc(NULL, 0);
+	packet = rad_alloc(NULL, false);
 	packet->src_ipaddr = sock->src_ipaddr;
 	packet->src_port = 0;
 
@@ -1312,7 +1316,7 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 	packet->id = inject_id++;
 
 	if (fake->type == RAD_LISTEN_AUTH) {
-		packet->code = PW_CODE_AUTHENTICATION_REQUEST;
+		packet->code = PW_CODE_ACCESS_REQUEST;
 		fun = rad_authenticate;
 
 	} else {
@@ -1501,7 +1505,7 @@ static int command_set_module_config(rad_listen_t *listener, int argc, char *arg
 	cs = cf_section_find("modules");
 	if (!cs) return 0;
 
-	mi = find_module_instance(cs, argv[0], 0);
+	mi = find_module_instance(cs, argv[0], false);
 	if (!mi) {
 		cprintf(listener, "ERROR: No such module \"%s\"\n", argv[0]);
 		return 0;
@@ -1584,7 +1588,7 @@ static int command_set_module_status(rad_listen_t *listener, int argc, char *arg
 	cs = cf_section_find("modules");
 	if (!cs) return 0;
 
-	mi = find_module_instance(cs, argv[0], 0);
+	mi = find_module_instance(cs, argv[0], false);
 	if (!mi) {
 		cprintf(listener, "ERROR: No such module \"%s\"\n", argv[0]);
 		return 0;
@@ -2600,9 +2604,9 @@ static int command_tcp_recv(rad_listen_t *this)
 			if (co->offset < 16) return 0;
 		}
 
-		fr_hmac_md5((void const *) sock->client->secret,
+		fr_hmac_md5(expected, (void const *) sock->client->secret,
 			    strlen(sock->client->secret),
-			    (uint8_t *) co->buffer, 16, expected);
+			    (uint8_t *) co->buffer, 16);
 
 		if (rad_digest_cmp(expected,
 				   (uint8_t *) co->buffer + 16, 16 != 0)) {

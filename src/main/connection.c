@@ -26,6 +26,7 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/modpriv.h>
 #include <freeradius-devel/rad_assert.h>
 
 typedef struct fr_connection fr_connection_t;
@@ -133,8 +134,7 @@ struct fr_connection_pool_t {
 	uint64_t	count;		//!< Number of connections spawned over
 					//!< the lifetime of the pool.
 	uint32_t       	num;		//!< Number of connections in the pool.
-	int		active;	 	//!< Number of currently reserved
-					//!< connections.
+	uint32_t	active;	 	//!< Number of currently reserved connections.
 
 	fr_connection_t	*head;		//!< Start of the connection list.
 	fr_connection_t *tail;		//!< End of the connection list.
@@ -151,10 +151,10 @@ struct fr_connection_pool_t {
 	CONF_SECTION	*cs;		//!< Configuration section holding
 					//!< the section of parsed config file
 					//!< that relates to this pool.
-	void		*ctx;		//!< Pointer to context data that will
+	void		*opaque;	//!< Pointer to context data that will
 					//!< be passed to callbacks.
 
-	char  		*log_prefix;	//!< Log prefix to prepend to all log
+	char const	*log_prefix;	//!< Log prefix to prepend to all log
 					//!< messages created by the connection
 					//!< pool code.
 
@@ -162,11 +162,8 @@ struct fr_connection_pool_t {
 					//!< connections.
 	fr_connection_alive_t	alive;	//!< Function used to check status
 					//!< of connections.
-	fr_connection_delete_t	delete;	//!< Function used to close existing
-					//!< connections.
 };
 
-#define LOG_PREFIX "rlm_%s (%s)"
 #ifndef HAVE_PTHREAD_H
 #define pthread_mutex_lock(_x)
 #define pthread_mutex_unlock(_x)
@@ -291,6 +288,8 @@ static void fr_connection_link_tail(fr_connection_pool_t *pool,
 static fr_connection_t *fr_connection_spawn(fr_connection_pool_t *pool,
 					    time_t now, bool in_use)
 {
+	TALLOC_CTX *ctx;
+
 	fr_connection_t *this;
 	void *conn;
 
@@ -313,9 +312,7 @@ static fr_connection_t *fr_connection_spawn(fr_connection_pool_t *pool,
 	if (pool->spawning) {
 		pthread_mutex_unlock(&pool->mutex);
 
-		ERROR("%s: Cannot open new connection, "
-		      "connection spawning already in "
-		      "progress", pool->log_prefix);
+		ERROR("%s: Cannot open new connection, connection spawning already in progress", pool->log_prefix);
 		return NULL;
 	}
 
@@ -356,12 +353,19 @@ static fr_connection_t *fr_connection_spawn(fr_connection_pool_t *pool,
 	INFO("%s: Opening additional connection (%" PRIu64 ")", pool->log_prefix, pool->count);
 
 	/*
+	 *	Allocate a new top level ctx for the create callback
+	 *	to hang its memory off of.
+	 */
+	ctx = talloc_init("fr_connection_ctx");
+	if (!ctx) return NULL;
+
+	/*
 	 *	This may take a long time, which prevents other
 	 *	threads from releasing connections.  We don't care
 	 *	about other threads opening new connections, as we
 	 *	already have no free connections.
 	 */
-	conn = pool->create(pool->ctx);
+	conn = pool->create(ctx, pool->opaque);
 	if (!conn) {
 		ERROR("%s: Opening connection failed (%" PRIu64 ")", pool->log_prefix, pool->count);
 
@@ -381,6 +385,7 @@ static fr_connection_t *fr_connection_spawn(fr_connection_pool_t *pool,
 		pthread_mutex_unlock(&pool->mutex);
 		return NULL;
 	}
+	fr_link_talloc_ctx_free(this, ctx);
 
 	this->created = now;
 	this->connection = conn;
@@ -413,7 +418,6 @@ static fr_connection_t *fr_connection_spawn(fr_connection_pool_t *pool,
  *
  * @param[in,out] pool to modify.
  * @param[in,out] this Connection to delete.
-
  */
 static void fr_connection_close(fr_connection_pool_t *pool,
 				fr_connection_t *this)
@@ -428,14 +432,13 @@ static void fr_connection_close(fr_connection_pool_t *pool,
 #endif
 		this->in_use = false;
 
-		rad_assert(pool->active > 0);
+		rad_assert(pool->active != 0);
 		pool->active--;
 	}
 
 	if (pool->trigger) exec_trigger(NULL, pool->cs, "close", true);
 
 	fr_connection_unlink(pool, this);
-	pool->delete(pool->ctx, this->connection);
 	rad_assert(pool->num > 0);
 	pool->num--;
 	talloc_free(this);
@@ -548,6 +551,116 @@ void fr_connection_pool_delete(fr_connection_pool_t *pool)
 	talloc_free(pool);
 }
 
+/** Initialise a module specific connection pool
+ *
+ * @see fr_connection_pool_init
+ *
+ * @param[in] module section.
+ * @param[in] opaque data pointer to pass to callbacks.
+ * @param[in] c Callback to create new connections.
+ * @param[in] a Callback to check the status of connections.
+ * @param[in] prefix override, if NULL will be set automatically from the module CONF_SECTION.
+ * @return A new connection pool or NULL on error.
+ */
+fr_connection_pool_t *fr_connection_pool_module_init(CONF_SECTION *module,
+						     void *opaque,
+						     fr_connection_create_t c,
+						     fr_connection_alive_t a,
+						     char const *prefix)
+{
+	CONF_SECTION *cs, *mycs;
+	char buff[128];
+
+	fr_connection_pool_t *pool;
+
+	int ret;
+
+#define CONNECTION_POOL_CF_KEY "connection_pool"
+#define parent_name(_x) cf_section_name(cf_item_parent(cf_sectiontoitem(_x)))
+
+	if (!prefix) {
+		char const *cs_name1, *cs_name2;
+		cs_name1 = cf_section_name1(module);
+		cs_name2 = cf_section_name2(module);
+		if (!cs_name2) cs_name2 = cs_name1;
+
+		snprintf(buff, sizeof(buff), "rlm_%s (%s)", cs_name1, cs_name2);
+		prefix = buff;
+	}
+
+	/*
+	 *	Get sibling's pool config section
+	 */
+	ret = find_module_sibling_section(&cs, module, "pool");
+	switch (ret) {
+	case -1:
+		return NULL;
+
+	case 1:
+		DEBUG4("%s: Using pool section from \"%s\"", prefix, parent_name(cs));
+		break;
+
+	case 0:
+		DEBUG4("%s: Using local pool section", prefix);
+		break;
+	}
+
+	/*
+	 *	Get our pool config section
+	 */
+	mycs = cf_section_sub_find(module, "pool");
+	if (!mycs) {
+		DEBUG4("%s: Adding pool section to \"%s\" to store pool references", prefix,
+		       cf_section_name(module));
+
+		mycs = cf_section_alloc(module, "pool", NULL);
+		cf_section_add(module, mycs);
+	}
+
+	/*
+	 *	Sibling didn't have a pool config section
+	 *	Use our own local pool.
+	 */
+	if (!cs) {
+		DEBUG4("%s: \"%s.pool\" section not found, using \"%s.pool\"", prefix,
+		       parent_name(cs), parent_name(mycs));
+		cs = mycs;
+	}
+
+	/*
+	 *	If fr_connection_pool_init has already been called
+	 *	for this config section, reuse the previous instance.
+	 *
+	 *	This allows modules to pass in the config sections
+	 *	they would like to use the connection pool from.
+	 */
+	pool = cf_data_find(cs, CONNECTION_POOL_CF_KEY);
+	if (!pool) {
+		DEBUG4("%s: No pool reference found in \"%s.pool\"", prefix, parent_name(cs));
+		pool = fr_connection_pool_init(module, cs, opaque, c, a, prefix);
+		if (!pool) return NULL;
+
+		DEBUG4("%s: Adding pool reference %p to \"%s.pool\"", prefix, pool, parent_name(cs));
+		cf_data_add(cs, CONNECTION_POOL_CF_KEY, pool, NULL);
+		return pool;
+	}
+
+	DEBUG4("%s: Found pool reference %p in \"%s.pool\"", prefix, pool, parent_name(cs));
+
+	/*
+	 *	We're reusing pool data add it to our local config
+	 *	section. This allows other modules to transitively
+	 *	re-use a pool through this module.
+	 */
+	if (mycs != cs) {
+		DEBUG4("%s: Copying pool reference %p from \"%s.pool\" to \"%s.pool\"", prefix, pool,
+		       parent_name(cs), parent_name(mycs));
+		cf_data_add(mycs, CONNECTION_POOL_CF_KEY, pool, NULL);
+	}
+
+	return pool;
+}
+
 /** Create a new connection pool
  *
  * Allocates structures used by the connection pool, initialises the various
@@ -558,93 +671,65 @@ void fr_connection_pool_delete(fr_connection_pool_t *pool)
  *
  * @note Will call the 'start' trigger.
  *
- * @param[in] parent configuration section containing a 'pool' subsection.
- * @param[in] ctx pointer to pass to callbacks.
+ * @param[in] parent section.
+ * @param[in] cs pool section.
+ * @param[in] opaque data pointer to pass to callbacks.
  * @param[in] c Callback to create new connections.
  * @param[in] a Callback to check the status of connections.
- * @param[in] d Callback to delete connections.
- * @param[in] prefix to prepend to all log message, if NULL will create prefix
- *	from parent conf section names.
+ * @param[in] prefix to prepend to all log messages.
  * @return A new connection pool or NULL on error.
  */
 fr_connection_pool_t *fr_connection_pool_init(CONF_SECTION *parent,
-					      void *ctx,
+					      CONF_SECTION *cs,
+					      void *opaque,
 					      fr_connection_create_t c,
 					      fr_connection_alive_t a,
-					      fr_connection_delete_t d,
 					      char const *prefix)
 {
 	uint32_t i;
 	fr_connection_pool_t *pool;
 	fr_connection_t *this;
-	CONF_SECTION *modules;
-	CONF_SECTION *cs;
-	char const *cs_name1, *cs_name2;
-	time_t now = time(NULL);
+	time_t now;
 
-	if (!parent || !ctx || !c || !d) return NULL;
+	if (!parent || !cs || !opaque || !c) return NULL;
 
-	cs = cf_section_sub_find(parent, "pool");
-	if (!cs) cs = cf_section_sub_find(parent, "limit");
+	now = time(NULL);
 
-	if (cs) {
-		pool = talloc_zero(cs, fr_connection_pool_t);
-	} else {
-		pool = talloc_zero(parent, fr_connection_pool_t);
-	}
+	/*
+	 *	Pool is allocated in the NULL context as
+	 *	threads are likely to allocate memory
+	 *	beneath the pool.
+	 */
+	pool = talloc_zero(NULL, fr_connection_pool_t);
 	if (!pool) return NULL;
 
+	/*
+	 *	Ensure the pool is freed at the same time
+	 *	as its parent.
+	 */
+	if (fr_link_talloc_ctx_free(cs, pool) < 0) {
+		talloc_free(pool);
+
+		return NULL;
+	}
+
 	pool->cs = cs;
-	pool->ctx = ctx;
+	pool->opaque = opaque;
 	pool->create = c;
 	pool->alive = a;
-	pool->delete = d;
 
 	pool->head = pool->tail = NULL;
+
+	pool->log_prefix = prefix ? talloc_typed_strdup(pool, prefix) : "core";
 
 #ifdef HAVE_PTHREAD_H
 	pthread_mutex_init(&pool->mutex, NULL);
 #endif
 
-	if (!prefix) {
-		modules = cf_item_parent(cf_sectiontoitem(parent));
-		if (modules) {
-			cs_name1 = cf_section_name1(modules);
-			if (cs_name1 && (strcmp(cs_name1, "modules") == 0)) {
-				cs_name1 = cf_section_name1(parent);
-				cs_name2 = cf_section_name2(parent);
-				if (!cs_name2) {
-					cs_name2 = cs_name1;
-				}
-
-				pool->log_prefix = talloc_typed_asprintf(pool, LOG_PREFIX, cs_name1,
-								   cs_name2);
-			}
-		} else {		/* not a module configuration */
-			cs_name1 = cf_section_name1(parent);
-
-			pool->log_prefix = talloc_typed_strdup(pool, cs_name1);
-		}
-	} else {
-		pool->log_prefix = talloc_typed_strdup(pool, prefix);
-	}
-
 	DEBUG("%s: Initialising connection pool", pool->log_prefix);
 
-	if (cs) {
-		if (cf_section_parse(cs, pool, connection_config) < 0) {
-			goto error;
-		}
-
-		if (cf_section_sub_find(cs, "trigger")) pool->trigger = true;
-	} else {
-		pool->start = 5;
-		pool->min = 5;
-		pool->max = 10;
-		pool->spare = 3;
-		pool->cleanup_interval = 30;
-		pool->idle_timeout = 60;
-	}
+	if (cf_section_parse(cs, pool, connection_config) < 0) goto error;
+	if (cf_section_sub_find(cs, "trigger")) pool->trigger = true;
 
 	/*
 	 *	Some simple limits
@@ -653,6 +738,7 @@ fr_connection_pool_t *fr_connection_pool_init(CONF_SECTION *parent,
 		cf_log_err_cs(cs, "Cannot set 'max' to zero");
 		goto error;
 	}
+
 	if (pool->min > pool->max) {
 		cf_log_err_cs(cs, "Cannot set 'min' to more than 'max'");
 		goto error;
@@ -754,7 +840,7 @@ static int fr_connection_manage(fr_connection_pool_t *pool,
 }
 
 
-/** Check whether any connections needs to be removed from the pool
+/** Check whether any connections need to be removed from the pool
  *
  * Maintains the number of connections in the pool as per the configuration
  * parameters for the connection pool.
@@ -846,6 +932,7 @@ static int fr_connection_pool_check(fr_connection_pool_t *pool)
 	}
 
 	if (spawn) {
+		INFO("%s: %i of %u connections in use.  Need more spares", pool->log_prefix, pool->active, pool->num);
 		pthread_mutex_unlock(&pool->mutex);
 		fr_connection_spawn(pool, now, false); /* ignore return code */
 		pthread_mutex_lock(&pool->mutex);
@@ -908,18 +995,17 @@ static int fr_connection_pool_check(fr_connection_pool_t *pool)
 static void *fr_connection_get_internal(fr_connection_pool_t *pool, int spawn)
 {
 	time_t now;
-	fr_connection_t *this, *next;
+	fr_connection_t *this;
 
 	if (!pool) return NULL;
 
 	pthread_mutex_lock(&pool->mutex);
 
 	now = time(NULL);
-	for (this = pool->head; this != NULL; this = next) {
-		next = this->next;
-
+	for (this = pool->head; this != NULL; this = this->next) {
 		if (!this->in_use) goto do_return;
 	}
+	rad_assert(pool->active == pool->num);
 
 	if (pool->num == pool->max) {
 		bool complain = false;
@@ -945,6 +1031,8 @@ static void *fr_connection_get_internal(fr_connection_pool_t *pool, int spawn)
 
 	if (!spawn) return NULL;
 
+	WARN("%s: %i of %u connections in use.  You probably need to increase \"spare\"", pool->log_prefix,
+	     pool->active, pool->num);
 	this = fr_connection_spawn(pool, now, true); /* MY connection! */
 	if (!this) return NULL;
 	pthread_mutex_lock(&pool->mutex);
@@ -1040,7 +1128,7 @@ void fr_connection_release(fr_connection_pool_t *pool, void *conn)
 		}
 	}
 
-	rad_assert(pool->active > 0);
+	rad_assert(pool->active != 0);
 	pool->active--;
 
 	DEBUG("%s: Released connection (%" PRIu64 ")", pool->log_prefix, this->number);
@@ -1084,20 +1172,35 @@ void *fr_connection_reconnect(fr_connection_pool_t *pool, void *conn)
 	void *new_conn;
 	fr_connection_t *this;
 	uint64_t conn_number;
+	TALLOC_CTX *ctx;
 
 	if (!pool || !conn) return NULL;
 
+	/*
+	 *	If fr_connection_find is successful the pool is now locked
+	 */
 	this = fr_connection_find(pool, conn);
 	if (!this) return NULL;
 
-	/*
-	 *	The pool is now locked.
-	 */
+
 	conn_number = this->number;
+
+	/*
+	 *	Destroy any handles associated with the fr_connection_t
+	 */
+	talloc_free_children(this);
 
 	DEBUG("%s: Reconnecting (%" PRIu64 ")", pool->log_prefix, conn_number);
 
-	new_conn = pool->create(pool->ctx);
+	/*
+	 *	Allocate a new top level ctx for the create callback
+	 *	to hang its memory off of.
+	 */
+	ctx = talloc_init("fr_connection_ctx");
+	if (!ctx) return NULL;
+	fr_link_talloc_ctx_free(this, ctx);
+
+	new_conn = pool->create(ctx, pool->opaque);
 	if (!new_conn) {
 		/*
 		 *	We can't create a new connection, so close
@@ -1113,14 +1216,15 @@ void *fr_connection_reconnect(fr_connection_pool_t *pool, void *conn)
 		new_conn = fr_connection_get_internal(pool, false);
 		if (new_conn) return new_conn;
 
-		RATE_LIMIT(ERROR("%s: Failed to reconnect (%" PRIu64 "), no free connections are available", pool->log_prefix,
-				 conn_number));
+		RATE_LIMIT(ERROR("%s: Failed to reconnect (%" PRIu64 "), no free connections are available",
+				 pool->log_prefix, conn_number));
+
 		return NULL;
 	}
 
 	if (pool->trigger) exec_trigger(NULL, pool->cs, "close", true);
-	pool->delete(pool->ctx, conn);
 	this->connection = new_conn;
 	pthread_mutex_unlock(&pool->mutex);
+
 	return new_conn;
 }

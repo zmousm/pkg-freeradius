@@ -24,6 +24,7 @@
 #include <assert.h>
 #include <freeradius-devel/libradius.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 #if defined(HAVE_MALLOPT) && defined(HAVE_MALLOC_H)
 #  include <malloc.h>
@@ -41,6 +42,16 @@
 #  include <sys/prctl.h>
 #endif
 
+#ifdef HAVE_SYS_PTRACE_H
+#  include <sys/ptrace.h>
+#  if !defined(PTRACE_ATTACH) && defined(PT_ATTACH)
+#    define PTRACE_ATTACH PT_ATTACH
+#  endif
+#  if !defined(PTRACE_DETACH) && defined(PT_DETACH)
+#    define PTRACE_DETACH PT_DETACH
+#  endif
+#endif
+
 #ifdef HAVE_SYS_RESOURCE_H
 #  include <sys/resource.h>
 #endif
@@ -54,8 +65,12 @@
 #endif
 
 #ifdef HAVE_EXECINFO
-#  define MAX_BT_FRAMES 128
-#  define MAX_BT_CBUFF  65536				//!< Should be a power of 2
+#  ifndef MAX_BT_FRAMES
+#    define MAX_BT_FRAMES 128
+#  endif
+#  ifndef MAX_BT_CBUFF
+#    define MAX_BT_CBUFF  1048576			//!< Should be a power of 2
+#  endif
 
 #  ifdef HAVE_PTHREAD_H
 static pthread_mutex_t fr_debug_init = PTHREAD_MUTEX_INITIALIZER;
@@ -77,26 +92,124 @@ struct fr_bt_marker {
 static char panic_action[512];				//!< The command to execute when panicking.
 static fr_fault_cb_t panic_cb = NULL;			//!< Callback to execute whilst panicking, before the
 							//!< panic_action.
-static fr_fault_log_t fr_fault_log = NULL;		//!< Function to use to process logging output.
+
+static void CC_HINT(format (printf, 1, 2)) _fr_fault_log(char const *msg, ...);
+
+static fr_fault_log_t fr_fault_log = _fr_fault_log;	//!< Function to use to process logging output.
 static int fr_fault_log_fd = STDERR_FILENO;		//!< Where to write debug output.
 
-static int fr_debugger_present = -1;			//!< Whether were attached to by a debugger.
+static int debugger_attached = -1;			//!< Whether were attached to by a debugger.
 
 #ifdef HAVE_SYS_RESOURCE_H
 static struct rlimit core_limits;
 #endif
 
+static TALLOC_CTX *talloc_null_ctx;
+static TALLOC_CTX *talloc_autofree_ctx;
+
 #define FR_FAULT_LOG(fmt, ...) fr_fault_log(fmt "\n", ## __VA_ARGS__)
 
-/** Stub callback to see if the SIGTRAP handler is overriden
+#ifdef HAVE_SYS_PTRACE_H
+#  ifdef __linux__
+#    define _PTRACE(_x, _y) ptrace(_x, _y, NULL, NULL)
+#  else
+#    define _PTRACE(_x, _y) ptrace(_x, _y, NULL, 0)
+#  endif
+
+/** Determine if we're running under a debugger by attempting to attach using pattach
  *
- * @param signum signal raised.
+ * @return 0 if we're not, 1 if we are, -1 if we can't tell.
  */
-static void _sigtrap_handler(UNUSED int signum)
+static int fr_debugger_attached(void)
 {
-	fr_debugger_present = 0;
-	signal(SIGTRAP, SIG_DFL);
+	int pid;
+
+	int from_child[2] = {-1, -1};
+
+	if (pipe(from_child) < 0) {
+		fr_strerror_printf("Debugger check failed: Error opening internal pipe: %s", fr_syserror(errno));
+		return -1;
+	}
+
+	pid = fork();
+	if (pid == -1) {
+		fr_strerror_printf("Debugger check failed: Error forking: %s", fr_syserror(errno));
+		return -1;
+	}
+
+	/* Child */
+	if (pid == 0) {
+		int8_t ret = 0;
+		int ppid = getppid();
+
+		/* Close parent's side */
+		close(from_child[0]);
+
+		/*
+		 *	FreeBSD is extremely picky about the order of operations here
+		 *	we need to attach, wait *then* write whilst the parent is still
+		 *	suspended, then detach, continuing the process.
+		 *
+		 *	If we don't do it in that order the read in the parent triggers
+		 *	a SIGKILL.
+		 */
+		if (_PTRACE(PTRACE_ATTACH, ppid) == 0) {
+			/* Wait for the parent to stop */
+			waitpid(ppid, NULL, 0);
+
+			/* Tell the parent what happened */
+			if (write(from_child[1], &ret, sizeof(ret)) < 0) {
+				fprintf(stderr, "Writing ptrace status to parent failed: %s", fr_syserror(errno));
+			}
+
+			/* Detach */
+			_PTRACE(PTRACE_DETACH, ppid);
+			exit(0);
+		}
+
+		ret = 1;
+		/* Tell the parent what happened */
+		if (write(from_child[1], &ret, sizeof(ret)) < 0) {
+			fprintf(stderr, "Writing ptrace status to parent failed: %s", fr_syserror(errno));
+		}
+
+		exit(0);
+	/* Parent */
+	} else {
+		int8_t ret = -1;
+
+		/*
+		 *	The child writes a 1 if pattach failed else 0.
+		 *
+		 *	This read may be interrupted by pattach,
+		 *	which is why we need the loop.
+		 */
+		while ((read(from_child[0], &ret, sizeof(ret)) < 0) && (errno == EINTR));
+
+		/* Ret not updated */
+		if (ret < 0) {
+			fr_strerror_printf("Debugger check failed: Error getting status from child: %s",
+			fr_syserror(errno));
+		}
+
+		/* Close the pipes here (if we did it above, it might race with pattach) */
+		close(from_child[1]);
+		close(from_child[0]);
+
+		/* Collect the status of the child */
+		waitpid(pid, NULL, 0);
+
+		return ret;
+	}
 }
+#else
+static int fr_debugger_attached(void)
+{
+	fr_strerror_printf("Debugger check failed: PTRACE not available");
+
+	return -1;
+}
+#endif
 
 /** Break in debugger (if were running under a debugger)
  *
@@ -107,38 +220,19 @@ static void _sigtrap_handler(UNUSED int signum)
  */
 void fr_debug_break(void)
 {
-	if (fr_debugger_present == -1) {
-		fr_debugger_present = 0;
-		signal(SIGTRAP, _sigtrap_handler);
-		raise(SIGTRAP);
-	} else if (fr_debugger_present == 1) {
+	if (debugger_attached == -1) {
+		debugger_attached = fr_debugger_attached();
+	}
+
+	if (debugger_attached == 1) {
+		fprintf(stderr, "Debugger detected, raising SIGTRAP\n");
+		fflush(stderr);
+
 		raise(SIGTRAP);
 	}
 }
 
 #ifdef HAVE_EXECINFO
-/** Generate a backtrace for an object during destruction
- *
- * If this is the first entry being inserted
- */
-static int _fr_do_bt(fr_bt_marker_t *marker)
-{
-	fr_bt_info_t *bt;
-
-	if (!fr_assert(marker->obj) || !fr_assert(marker->cbuff)) {
-		return -1;
-	}
-
-	bt = talloc_zero(marker->cbuff, fr_bt_info_t);
-	if (!bt) {
-		return -1;
-	}
-	bt->count = backtrace(bt->frames, MAX_BT_FRAMES);
-	fr_cbuff_rp_insert(marker->cbuff, bt);
-
-	return 0;
-}
-
 /** Print backtrace entry for a given object
  *
  * @param cbuff to search in.
@@ -148,29 +242,40 @@ void backtrace_print(fr_cbuff_t *cbuff, void *obj)
 {
 	fr_bt_info_t *p;
 	bool found = false;
-	int i = 0;
-	char **frames;
 
 	while ((p = fr_cbuff_rp_next(cbuff, NULL))) {
-		if ((p == obj) || !obj) {
+		if ((p->obj == obj) || !obj) {
 			found = true;
-			frames = backtrace_symbols(p->frames, p->count);
 
-			fprintf(stderr, "Stacktrace for: %p\n", p);
-			for (i = 0; i < p->count; i++) {
-				fprintf(stderr, "%s\n", frames[i]);
-			}
-
-			/* We were only asked to look for one */
-			if (obj) {
-				return;
-			}
+			fprintf(stderr, "Stacktrace for: %p\n", p->obj);
+			backtrace_symbols_fd(p->frames, p->count, STDERR_FILENO);
 		}
 	};
 
 	if (!found) {
 		fprintf(stderr, "No backtrace available for %p", obj);
 	}
+}
+
+/** Generate a backtrace for an object
+ *
+ * If this is the first entry being inserted
+ */
+int fr_backtrace_do(fr_bt_marker_t *marker)
+{
+	fr_bt_info_t *bt;
+
+	if (!fr_assert(marker->obj) || !fr_assert(marker->cbuff)) return -1;
+
+	bt = talloc_zero(NULL, fr_bt_info_t);
+	if (!bt) return -1;
+
+	bt->obj = marker->obj;
+	bt->count = backtrace(bt->frames, MAX_BT_FRAMES);
+
+	fr_cbuff_rp_insert(marker->cbuff, bt);
+
+	return 0;
 }
 
 /** Inserts a backtrace marker into the provided context
@@ -180,7 +285,7 @@ void backtrace_print(fr_cbuff_t *cbuff, void *obj)
  * Code augmentation should look something like:
 @verbatim
 	// Create a static cbuffer pointer, the first call to backtrace_attach will initialise it
-	static fr_cbuff *my_obj_bt;
+	static fr_cbuff_t *my_obj_bt;
 
 	my_obj_t *alloc_my_obj(TALLOC_CTX *ctx) {
 		my_obj_t *this;
@@ -212,12 +317,7 @@ fr_bt_marker_t *fr_backtrace_attach(fr_cbuff_t **cbuff, TALLOC_CTX *obj)
 	if (*cbuff == NULL) {
 		PTHREAD_MUTEX_LOCK(&fr_debug_init);
 		/* Check again now we hold the mutex - eww*/
-		if (*cbuff == NULL) {
-			TALLOC_CTX *ctx;
-
-			ctx = fr_autofree_ctx();
-			*cbuff = fr_cbuff_alloc(ctx, MAX_BT_CBUFF, true);
-		}
+		if (*cbuff == NULL) *cbuff = fr_cbuff_alloc(NULL, MAX_BT_CBUFF, true);
 		PTHREAD_MUTEX_UNLOCK(&fr_debug_init);
 	}
 
@@ -229,7 +329,12 @@ fr_bt_marker_t *fr_backtrace_attach(fr_cbuff_t **cbuff, TALLOC_CTX *obj)
 	marker->obj = (void *) obj;
 	marker->cbuff = *cbuff;
 
-	talloc_set_destructor(marker, _fr_do_bt);
+	fprintf(stderr, "Backtrace attached to %s %p\n", talloc_get_name(obj), obj);
+	/*
+	 *	Generate the backtrace for memory allocation
+	 */
+	fr_backtrace_do(marker);
+	talloc_set_destructor(marker, fr_backtrace_do);
 
 	return marker;
 }
@@ -454,8 +559,12 @@ void fr_fault(int sig)
 	/*
 	 *	Produce a simple backtrace - They've very basic but at least give us an
 	 *	idea of the area of the code we hit the issue in.
+	 *
+	 *	See below in fr_fault_setup() and
+	 *	https://sourceware.org/bugzilla/show_bug.cgi?id=16159
+	 *	for why we only print backtraces in debug builds if we're using GLIBC.
 	 */
-#ifdef HAVE_EXECINFO
+#if defined(HAVE_EXECINFO) && (!defined(NDEBUG) || !defined(__GNUC__))
 	{
 		size_t frame_count, i;
 		void *stack[MAX_BT_FRAMES];
@@ -510,7 +619,7 @@ void fr_fault(int sig)
 
 		/*
 		 *	Here we temporarily enable the dumpable flag so if GBD or LLDB
-		 *	is called in the panic_action, they can pattach tot he running
+		 *	is called in the panic_action, they can pattach to the running
 		 *	process.
 		 */
 		if (fr_get_dumpable_flag() == 0) {
@@ -577,7 +686,6 @@ static void _fr_talloc_log(char const *msg)
 int fr_log_talloc_report(TALLOC_CTX *ctx)
 {
 	FILE *log;
-	char const *null_ctx = NULL;
 	int i = 0;
 	int fd;
 
@@ -593,18 +701,22 @@ int fr_log_talloc_report(TALLOC_CTX *ctx)
 		return -1;
 	}
 
-	fprintf(log, "Current state of talloced memory:\n");
-	if (ctx) {
-		null_ctx = talloc_get_name(NULL);
-	}
-
 	if (!ctx) {
-		talloc_report_full(NULL, log);
-	} else do {
-		fprintf(log, "Context level %i", i++);
+		fprintf(log, "Current state of talloced memory:\n");
+		talloc_report_full(talloc_null_ctx, log);
+	} else {
+		fprintf(log, "Talloc chunk lineage:\n");
+		fprintf(log, "%p (%s)", ctx, talloc_get_name(ctx));
+		while ((ctx = talloc_parent(ctx))) fprintf(log, " < %p (%s)", ctx, talloc_get_name(ctx));
+		fprintf(log, "\n");
 
-		talloc_report_full(ctx, log);
-	} while ((ctx = talloc_parent(ctx)) && (talloc_get_name(ctx) != null_ctx));  /* Stop before we hit NULL ctx */
+		do {
+			fprintf(log, "Talloc context level %i:\n", i++);
+			talloc_report_full(ctx, log);
+		} while ((ctx = talloc_parent(ctx)) &&
+			 (talloc_parent(ctx) != talloc_autofree_ctx) &&	/* Stop before we hit the autofree ctx */
+			 (talloc_parent(ctx) != talloc_null_ctx));  	/* Stop before we hit NULL ctx */
+	}
 
 	fclose(log);
 
@@ -617,7 +729,7 @@ int fr_log_talloc_report(TALLOC_CTX *ctx)
  */
 static void _fr_fault_mem_report(int sig)
 {
-	fr_fault_log("CAUGHT SIGNAL: %s\n", strsignal(sig));
+	FR_FAULT_LOG("CAUGHT SIGNAL: %s", strsignal(sig));
 
 	if (fr_log_talloc_report(NULL) < 0) fr_perror("memreport");
 }
@@ -673,24 +785,33 @@ int fr_fault_setup(char const *cmd, char const *program)
 
 	/* Unsure what the side effects of changing the signal handler mid execution might be */
 	if (!setup) {
+		debugger_attached = fr_debugger_attached();
+
+		/*
+		 *  These signals can't be properly dealt with in the debugger
+		 *  if we set our own signal handlers
+		 */
+		if (debugger_attached == 0) {
 #ifdef SIGSEGV
-		if (fr_set_signal(SIGSEGV, fr_fault) < 0) return -1;
+			if (fr_set_signal(SIGSEGV, fr_fault) < 0) return -1;
 #endif
 #ifdef SIGBUS
-		if (fr_set_signal(SIGBUS, fr_fault) < 0) return -1;
-#endif
-#ifdef SIGABRT
-		if (fr_set_signal(SIGABRT, fr_fault) < 0) return -1;
-		/*
-		 *  Use this instead of abort so we get a
-		 *  full backtrace with broken versions of LLDB
-		 */
-		talloc_set_abort_fn(_fr_talloc_fault);
+			if (fr_set_signal(SIGBUS, fr_fault) < 0) return -1;
 #endif
 #ifdef SIGFPE
-		if (fr_set_signal(SIGFPE, fr_fault) < 0) return -1;
+			if (fr_set_signal(SIGFPE, fr_fault) < 0) return -1;
 #endif
 
+#ifdef SIGABRT
+			if (fr_set_signal(SIGABRT, fr_fault) < 0) return -1;
+
+			/*
+			 *  Use this instead of abort so we get a
+			 *  full backtrace with broken versions of LLDB
+			 */
+			talloc_set_abort_fn(_fr_talloc_fault);
+#endif
+		}
 #ifdef SIGUSR1
 		if (fr_set_signal(SIGUSR1, fr_fault) < 0) return -1;
 #endif
@@ -707,28 +828,48 @@ int fr_fault_setup(char const *cmd, char const *program)
 
 		/*
 		 *  Needed for memory reports
-		 *
-		 *  Disable null tracking on exit, else valgrind complains
 		 */
 		{
-			TALLOC_CTX *autofree;
+			TALLOC_CTX *tmp;
 			bool *marker;
 
-			talloc_enable_null_tracking();
+			tmp = talloc(NULL, bool);
+			talloc_null_ctx = talloc_parent(tmp);
+			talloc_free(tmp);
 
-			autofree = talloc_autofree_context();
-			marker = talloc(autofree, bool);
+			/*
+			 *  Disable null tracking on exit, else valgrind complains
+			 */
+			talloc_autofree_ctx = talloc_autofree_context();
+			marker = talloc(talloc_autofree_ctx, bool);
 			talloc_set_destructor(marker, _fr_disable_null_tracking);
 		}
 
+#if defined(HAVE_MALLOPT) && !defined(NDEBUG)
 		/*
 		 *  If were using glibc malloc > 2.4 this scribbles over
 		 *  uninitialised and freed memory, to make memory issues easier
 		 *  to track down.
 		 */
-#if defined(HAVE_MALLOPT) && !defined(NDEBUG)
-		mallopt(M_PERTURB, 0x42);
+		if (!getenv("TALLOC_FREE_FILL")) mallopt(M_PERTURB, 0x42);
 		mallopt(M_CHECK_ACTION, 3);
+#endif
+
+#if defined(HAVE_EXECINFO) && defined(__GNUC__) && !defined(NDEBUG)
+	       /*
+		*  We need to pre-load lgcc_s, else we can get into a deadlock
+		*  in fr_fault, as backtrace() attempts to dlopen it.
+		*
+		*  Apparently there's a performance impact of loading lgcc_s,
+		*  so only do it if this is a debug build.
+		*
+		*  See: https://sourceware.org/bugzilla/show_bug.cgi?id=16159
+		*/
+		{
+			void *stack[10];
+
+			backtrace(stack, 10);
+		}
 #endif
 	}
 	setup = true;
@@ -758,7 +899,6 @@ static void CC_HINT(format (printf, 1, 2)) _fr_fault_log(char const *msg, ...)
 	va_end(ap);
 }
 
-
 /** Set a file descriptor to log panic_action output to.
  *
  * @param func to call to output log messages.
@@ -777,14 +917,19 @@ void fr_fault_set_log_fd(int fd)
 	fr_fault_log_fd = fd;
 }
 
-
 #ifdef WITH_VERIFY_PTR
 
 /*
  *	Verify a VALUE_PAIR
  */
-inline void fr_verify_vp(VALUE_PAIR const *vp)
+inline void fr_verify_vp(char const *file, int line, VALUE_PAIR const *vp)
 {
+	if (!vp) {
+		FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR pointer was NULL", file, line);
+		fr_assert(0);
+		fr_exit_now(0);
+	}
+
 	(void) talloc_get_type_abort(vp, VALUE_PAIR);
 
 	if (vp->data.ptr) switch (vp->da->type) {
@@ -792,15 +937,28 @@ inline void fr_verify_vp(VALUE_PAIR const *vp)
 	case PW_TYPE_TLV:
 	{
 		size_t len;
+		TALLOC_CTX *parent;
 
 		if (!talloc_get_type(vp->data.ptr, uint8_t)) {
-			fr_perror("Type check failed for attribute \"%s\"", vp->da->name);
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" data buffer type should be "
+				     "uint8_t but is %s\n", file, line, vp->da->name, talloc_get_name(vp->data.ptr));
 			(void) talloc_get_type_abort(vp->data.ptr, uint8_t);
 		}
 
 		len = talloc_array_length(vp->vp_octets);
 		if (vp->length > len) {
-			fr_perror("VALUE_PAIR length %zu does not equal uint8_t buffer length %zu", vp->length, len);
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" length %zu is greater than "
+				     "uint8_t data buffer length %zu\n", file, line, vp->da->name, vp->length, len);
+			fr_assert(0);
+			fr_exit_now(1);
+		}
+
+		parent = talloc_parent(vp->data.ptr);
+		if (parent != vp) {
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" char buffer is not "
+				     "parented by VALUE_PAIR %p, instead parented by %p (%s)\n",
+				     file, line, vp->da->name,
+				     vp, parent, parent ? talloc_get_name(parent) : "NULL");
 			fr_assert(0);
 			fr_exit_now(1);
 		}
@@ -810,21 +968,35 @@ inline void fr_verify_vp(VALUE_PAIR const *vp)
 	case PW_TYPE_STRING:
 	{
 		size_t len;
+		TALLOC_CTX *parent;
 
 		if (!talloc_get_type(vp->data.ptr, char)) {
-			fr_perror("Type check failed for attribute \"%s\"", vp->da->name);
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" data buffer type should be "
+				     "char but is %s\n", file, line, vp->da->name, talloc_get_name(vp->data.ptr));
 			(void) talloc_get_type_abort(vp->data.ptr, char);
 		}
 
 		len = (talloc_array_length(vp->vp_strvalue) - 1);
 		if (vp->length > len) {
-			fr_perror("VALUE_PAIR %s length %zu is too small for char buffer length %zu",
-				  vp->da->name, vp->length, len);
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" length %zu is greater than "
+				     "char buffer length %zu\n", file, line, vp->da->name, vp->length, len);
 			fr_assert(0);
 			fr_exit_now(1);
 		}
+
 		if (vp->vp_strvalue[vp->length] != '\0') {
-			fr_perror("VALUE_PAIR %s buffer not \\0 terminated", vp->da->name);
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" char buffer not \\0 "
+				     "terminated\n", file, line, vp->da->name);
+			fr_assert(0);
+			fr_exit_now(1);
+		}
+
+		parent = talloc_parent(vp->data.ptr);
+		if (parent != vp) {
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" uint8_t buffer is not "
+				     "parented by VALUE_PAIR %p, instead parented by %p (%s)\n",
+				     file, line, vp->da->name,
+				     vp, parent, parent ? talloc_get_name(parent) : "NULL");
 			fr_assert(0);
 			fr_exit_now(1);
 		}
@@ -839,7 +1011,7 @@ inline void fr_verify_vp(VALUE_PAIR const *vp)
 /*
  *	Verify a pair list
  */
-void fr_verify_list(TALLOC_CTX *expected, VALUE_PAIR *vps)
+void fr_verify_list(char const *file, int line, TALLOC_CTX *expected, VALUE_PAIR *vps)
 {
 	vp_cursor_t cursor;
 	VALUE_PAIR *vp;
@@ -852,18 +1024,82 @@ void fr_verify_list(TALLOC_CTX *expected, VALUE_PAIR *vps)
 
 		parent = talloc_parent(vp);
 		if (expected && (parent != expected)) {
-			fr_perror("Expected VALUE_PAIR (%s) to be parented by %p (%s), "
-				  "but parented by %p (%s)",
-				  vp->da->name,
-				  expected, talloc_get_name(expected),
-				  parent, parent ? talloc_get_name(parent) : "NULL");
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: Expected VALUE_PAIR \"%s\" to be parented "
+				     "by %p (%s), instead parented by %p (%s)\n",
+				     file, line, vp->da->name,
+				     expected, talloc_get_name(expected),
+				     parent, parent ? talloc_get_name(parent) : "NULL");
 
 			fr_log_talloc_report(expected);
 			if (parent) fr_log_talloc_report(parent);
 
-			assert(0);
+			fr_assert(0);
+			fr_exit_now(0);
 		}
 
 	}
 }
 #endif
+
+bool fr_assert_cond(char const *file, int line, char const *expr, bool cond)
+{
+	if (!cond) {
+		FR_FAULT_LOG("SOFT ASSERT FAILED %s[%u]: %s", file, line, expr);
+#if !defined(NDEBUG) && defined(SIGUSR1)
+		fr_fault(SIGUSR1);
+#endif
+		return false;
+	}
+
+	return cond;
+}
+
+/** Exit possibly printing a message about why we're exiting.
+ *
+ * Use the fr_exit(status) macro instead of calling this function
+ * directly.
+ *
+ * @param file where fr_exit() was called.
+ * @param line where fr_exit() was called.
+ * @param status we're exiting with.
+ */
+void NEVER_RETURNS _fr_exit(char const *file, int line, int status)
+{
+#ifndef NDEBUG
+	char const *error = fr_strerror();
+
+	if (error && (status != 0)) {
+		FR_FAULT_LOG("EXIT(%i) CALLED %s[%u].  Last error was: %s", status, file, line, error);
+	} else {
+		FR_FAULT_LOG("EXIT(%i) CALLED %s[%u]", status, file, line);
+	}
+#endif
+	fr_debug_break();	/* If running under GDB we'll break here */
+
+	exit(status);
+}
+
+/** Exit possibly printing a message about why we're exiting.
+ *
+ * Use the fr_exit_now(status) macro instead of calling this function
+ * directly.
+ *
+ * @param file where fr_exit_now() was called.
+ * @param line where fr_exit_now() was called.
+ * @param status we're exiting with.
+ */
+void NEVER_RETURNS _fr_exit_now(char const *file, int line, int status)
+{
+#ifndef NDEBUG
+	char const *error = fr_strerror();
+
+	if (error && (status != 0)) {
+		FR_FAULT_LOG("_EXIT(%i) CALLED %s[%u].  Last error was: %s", status, file, line, error);
+	} else {
+		FR_FAULT_LOG("_EXIT(%i) CALLED %s[%u]", status, file, line);
+	}
+#endif
+	fr_debug_break();	/* If running under GDB we'll break here */
+
+	_exit(status);
+}

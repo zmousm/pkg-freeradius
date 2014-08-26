@@ -226,18 +226,20 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 	 *	Lookup sessions in the tree.  We don't free them in
 	 *	the tree, as that's taken care of elsewhere...
 	 */
-	inst->session_tree = rbtree_create(eap_handler_cmp, NULL, 0);
+	inst->session_tree = rbtree_create(NULL, eap_handler_cmp, NULL, 0);
 	if (!inst->session_tree) {
 		ERROR("rlm_eap (%s): Cannot initialize tree", inst->xlat_name);
 		return -1;
 	}
+	fr_link_talloc_ctx_free(inst, inst->session_tree);
 
 	if (fr_debug_flag) {
-		inst->handler_tree = rbtree_create(eap_handler_ptr_cmp, NULL, 0);
+		inst->handler_tree = rbtree_create(NULL, eap_handler_ptr_cmp, NULL, 0);
 		if (!inst->handler_tree) {
 			ERROR("rlm_eap (%s): Cannot initialize tree", inst->xlat_name);
 			return -1;
 		}
+		fr_link_talloc_ctx_free(inst, inst->handler_tree);
 
 #ifdef HAVE_PTHREAD_H
 		if (pthread_mutex_init(&(inst->handler_mutex), NULL) < 0) {
@@ -434,7 +436,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	 *	says that we MUST include a User-Name attribute in the
 	 *	Access-Accept.
 	 */
-	if ((request->reply->code == PW_CODE_AUTHENTICATION_ACK) &&
+	if ((request->reply->code == PW_CODE_ACCESS_ACCEPT) &&
 	    request->username) {
 		VALUE_PAIR *vp;
 
@@ -553,11 +555,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 	vp_cursor_t	cursor;
 
 	/*
-	 *	Just in case the admin lists EAP in post-proxy-type Fail.
-	 */
-	if (!request->proxy_reply) return RLM_MODULE_NOOP;
-
-	/*
 	 *	If there was a handler associated with this request,
 	 *	then it's a tunneled request which was proxied...
 	 */
@@ -620,7 +617,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 		 *	says that we MUST include a User-Name attribute in the
 		 *	Access-Accept.
 		 */
-		if ((request->reply->code == PW_CODE_AUTHENTICATION_ACK) &&
+		if ((request->reply->code == PW_CODE_ACCESS_ACCEPT) &&
 		    request->username) {
 			/*
 			 *	Doesn't exist, add it in.

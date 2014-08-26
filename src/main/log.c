@@ -32,6 +32,8 @@ RCSID("$Id$")
 #  include <sys/stat.h>
 #endif
 
+#include <fcntl.h>
+
 #ifdef HAVE_SYSLOG_H
 #  include <syslog.h>
 #endif
@@ -52,6 +54,7 @@ static const FR_NAME_NUMBER levels[] = {
 	{ ": Auth: ",		L_AUTH		},
 	{ ": Proxy: ",		L_PROXY		},
 	{ ": Info: ",		L_INFO		},
+	{ ": Warning: ",	L_WARN		},
 	{ ": Acct: ",		L_ACCT		},
 	{ ": Error: ",		L_ERR		},
 	{ ": WARNING: ",	L_DBG_WARN	},
@@ -157,7 +160,7 @@ const FR_NAME_NUMBER log_str2dst[] = {
 bool log_dates_utc = false;
 
 fr_log_t default_log = {
-	.colourise = true,
+	.colourise = false,	//!< Will be set later. Should be off before we do terminal detection.
 	.fd = STDOUT_FILENO,
 	.dst = L_DST_STDOUT,
 	.file = NULL,

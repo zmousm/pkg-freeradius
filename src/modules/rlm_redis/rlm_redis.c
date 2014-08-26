@@ -39,10 +39,8 @@ static const CONF_PARSER module_config[] = {
 	{ NULL, -1, 0, NULL, NULL} /* end the list */
 };
 
-static int mod_conn_delete(UNUSED void *instance, void *handle)
+static int _mod_conn_free(REDISSOCK *dissocket)
 {
-	REDISSOCK *dissocket = handle;
-
 	redisFree(dissocket->conn);
 
 	if (dissocket->reply) {
@@ -50,13 +48,12 @@ static int mod_conn_delete(UNUSED void *instance, void *handle)
 		dissocket->reply = NULL;
 	}
 
-	talloc_free(dissocket);
-	return 1;
+	return 0;
 }
 
-static void *mod_conn_create(void *ctx)
+static void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 {
-	REDIS_INST *inst = ctx;
+	REDIS_INST *inst = instance;
 	REDISSOCK *dissocket = NULL;
 	redisContext *conn;
 	redisReply *reply = NULL;
@@ -70,8 +67,8 @@ static void *mod_conn_create(void *ctx)
 
 		reply = redisCommand(conn, buffer);
 		if (!reply) {
-			ERROR("rlm_redis (%s): Failed to run AUTH",
-			       inst->xlat_name);
+			ERROR("rlm_redis (%s): Failed to run AUTH", inst->xlat_name);
+
 		do_close:
 			if (reply) freeReplyObject(reply);
 			redisFree(conn);
@@ -123,8 +120,9 @@ static void *mod_conn_create(void *ctx)
 		}
 	}
 
-	dissocket = talloc_zero(inst, REDISSOCK);
+	dissocket = talloc_zero(ctx, REDISSOCK);
 	dissocket->conn = conn;
+	talloc_set_destructor(dissocket, _mod_conn_free);
 
 	return dissocket;
 }
@@ -262,16 +260,23 @@ int rlm_redis_finish_query(REDISSOCK *dissocket)
 
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
+	static bool version_done;
+
 	REDIS_INST *inst = instance;
+
+	if (!version_done) {
+		version_done = true;
+
+		INFO("rlm_redis: libhiredis version: %i.%i.%i", HIREDIS_MAJOR, HIREDIS_MINOR, HIREDIS_PATCH);
+	}
 
 	inst->xlat_name = cf_section_name2(conf);
 
-	if (!inst->xlat_name)
-		inst->xlat_name = cf_section_name1(conf);
+	if (!inst->xlat_name) inst->xlat_name = cf_section_name1(conf);
 
 	xlat_register(inst->xlat_name, redis_xlat, NULL, inst); /* FIXME! */
 
-	inst->pool = fr_connection_pool_init(conf, inst, mod_conn_create, NULL, mod_conn_delete, NULL);
+	inst->pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, NULL, NULL);
 	if (!inst->pool) {
 		return -1;
 	}

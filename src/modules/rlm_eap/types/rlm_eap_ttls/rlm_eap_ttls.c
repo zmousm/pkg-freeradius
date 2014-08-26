@@ -129,39 +129,14 @@ static int eapttls_attach(CONF_SECTION *cs, void **instance)
 	return 0;
 }
 
-
-/*
- *	Free the TTLS per-session data
- */
-static void ttls_free(void *p)
-{
-	ttls_tunnel_t *t = (ttls_tunnel_t *) p;
-
-	if (!t) return;
-
-	rad_assert(talloc_get_type_abort(t, ttls_tunnel_t) != NULL);
-
-	if (t->username) {
-		DEBUG2("rlm_eap_ttls: Freeing handler for user %s",
-		       t->username->vp_strvalue);
-	}
-
-	pairfree(&t->username);
-	pairfree(&t->state);
-	pairfree(&t->accept_vps);
-	talloc_free(t);
-}
-
-
 /*
  *	Allocate the TTLS per-session data
  */
-static ttls_tunnel_t *ttls_alloc(rlm_eap_ttls_t *inst,
-				 eap_handler_t *handler)
+static ttls_tunnel_t *ttls_alloc(TALLOC_CTX *ctx, rlm_eap_ttls_t *inst)
 {
 	ttls_tunnel_t *t;
 
-	t = talloc_zero(handler, ttls_tunnel_t);
+	t = talloc_zero(ctx, ttls_tunnel_t);
 
 	t->default_method = inst->default_method;
 	t->copy_request_to_tunnel = inst->copy_request_to_tunnel;
@@ -198,18 +173,17 @@ static int eapttls_initiate(void *type_arg, eap_handler_t *handler)
 	 */
 	vp = pairfind(handler->request->config_items, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
 	if (vp) {
-		client_cert = vp->vp_integer;
+		client_cert = vp->vp_integer ? true : false;
 	} else {
 		client_cert = inst->req_client_cert;
 	}
 
-	ssn = eaptls_session(inst->tls_conf, handler, client_cert);
+	ssn = eaptls_session(handler, inst->tls_conf, client_cert);
 	if (!ssn) {
 		return 0;
 	}
 
 	handler->opaque = ((void *)ssn);
-	handler->free_opaque = session_free;
 
 	/*
 	 *	Set up type-specific information.
@@ -257,13 +231,13 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	status = eaptls_process(handler);
 	RDEBUG2("eaptls_process returned %d\n", status);
 	switch (status) {
-		/*
-		 *	EAP-TLS handshake was successful, tell the
-		 *	client to keep talking.
-		 *
-		 *	If this was EAP-TLS, we would just return
-		 *	an EAP-TLS-Success packet here.
-		 */
+	/*
+	 *	EAP-TLS handshake was successful, tell the
+	 *	client to keep talking.
+	 *
+	 *	If this was EAP-TLS, we would just return
+	 *	an EAP-TLS-Success packet here.
+	 */
 	case FR_TLS_SUCCESS:
 		if (SSL_session_reused(tls_session->ssl)) {
 			RDEBUG("Skipping Phase2 due to session resumption");
@@ -286,24 +260,24 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 		}
 		return 1;
 
-		/*
-		 *	The TLS code is still working on the TLS
-		 *	exchange, and it's a valid TLS request.
-		 *	do nothing.
-		 */
+	/*
+	 *	The TLS code is still working on the TLS
+	 *	exchange, and it's a valid TLS request.
+	 *	do nothing.
+	 */
 	case FR_TLS_HANDLED:
 		return 1;
 
-		/*
-		 *	Handshake is done, proceed with decoding tunneled
-		 *	data.
-		 */
+	/*
+	 *	Handshake is done, proceed with decoding tunneled
+	 *	data.
+	 */
 	case FR_TLS_OK:
 		break;
 
-		/*
-		 *	Anything else: fail.
-		 */
+	/*
+	 *	Anything else: fail.
+	 */
 	default:
 		return 0;
 	}
@@ -319,8 +293,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	 *	allocate it here, if it wasn't already alloacted.
 	 */
 	if (!tls_session->opaque) {
-		tls_session->opaque = ttls_alloc(inst, handler);
-		tls_session->free_opaque = ttls_free;
+		tls_session->opaque = ttls_alloc(tls_session, inst);
 	}
 
 	/*
@@ -328,7 +301,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	 */
 	rcode = eapttls_process(handler, tls_session);
 	switch (rcode) {
-	case PW_CODE_AUTHENTICATION_REJECT:
+	case PW_CODE_ACCESS_REJECT:
 		eaptls_fail(handler, 0);
 		return 0;
 
@@ -342,7 +315,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 		/*
 		 *	Success: Automatically return MPPE keys.
 		 */
-	case PW_CODE_AUTHENTICATION_ACK:
+	case PW_CODE_ACCESS_ACCEPT:
 		return eaptls_success(handler, 0);
 
 		/*

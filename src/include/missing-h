@@ -68,6 +68,27 @@ RCSIDH(missing_h, "$Id$")
 #  include <errno.h>
 #endif
 
+#ifdef HAVE_PCREPOSIX_H
+#  include <pcreposix.h>
+#else
+#  ifdef HAVE_REGEX_H
+#    include <regex.h>
+
+/*
+ *  For POSIX Regular expressions.
+ *  (0) Means no extended regular expressions.
+ *  REG_EXTENDED means use extended regular expressions.
+ */
+#    ifndef REG_EXTENDED
+#      define REG_EXTENDED (0)
+#    endif
+
+#    ifndef REG_NOSUB
+#      define REG_NOSUB (0)
+#    endif
+#  endif
+#endif
+
 /*
  *  Check for inclusion of <time.h>, versus <sys/time.h>
  *  Taken verbatim from the autoconf manual.
@@ -103,15 +124,15 @@ extern "C" {
  *	Functions from missing.c
  */
 #ifndef HAVE_STRNCASECMP
-extern int strncasecmp(char *s1, char *s2, int n);
+int strncasecmp(char *s1, char *s2, int n);
 #endif
 
 #ifndef HAVE_STRCASECMP
-extern int strcasecmp(char *s1, char *s2);
+int strcasecmp(char *s1, char *s2);
 #endif
 
 #ifndef HAVE_STRSEP
-extern char *strsep(char **stringp, char const *delim);
+char *strsep(char **stringp, char const *delim);
 #endif
 
 #ifndef HAVE_LOCALTIME_R
@@ -302,46 +323,45 @@ struct addrinfo
 /* Translate name of a service location and/or a service name to set of
    socket addresses. */
 #ifndef HAVE_GETADDRINFO
-extern int getaddrinfo (char const *__name,
-			char const *__service,
-			struct addrinfo const *__req,
-			struct addrinfo **__pai);
+int getaddrinfo(char const *__name, char const *__service,
+		struct addrinfo const *__req,
+		struct addrinfo **__pai);
 
 /* Free `addrinfo' structure AI including associated storage.  */
-extern void freeaddrinfo (struct addrinfo *__ai);
+void freeaddrinfo (struct addrinfo *__ai);
 
 /* Convert error return from getaddrinfo() to a string.  */
-extern char const *gai_strerror (int __ecode);
+char const *gai_strerror (int __ecode);
 #endif
 
 /* Translate a socket address to a location and service name. */
 #ifndef HAVE_GETNAMEINFO
-extern int getnameinfo (struct sockaddr const *__sa,
-			socklen_t __salen, char *__host,
-			size_t __hostlen, char *__serv,
-			size_t __servlen, unsigned int __flags);
+int getnameinfo(struct sockaddr const *__sa,
+		socklen_t __salen, char *__host,
+		size_t __hostlen, char *__serv,
+		size_t __servlen, unsigned int __flags);
 #endif
 
 /*
  *	Functions from snprintf.c
  */
 #ifndef HAVE_VSNPRINTF
-extern int vsnprintf(char *str, size_t count, char const *fmt, va_list arg);
+int vsnprintf(char *str, size_t count, char const *fmt, va_list arg);
 #endif
 
 #ifndef HAVE_SNPRINTF
-extern int snprintf(char *str, size_t count, char const *fmt, ...);
+int snprintf(char *str, size_t count, char const *fmt, ...);
 #endif
 
 /*
  *	Functions from strl{cat,cpy}.c
  */
 #ifndef HAVE_STRLCPY
-extern size_t strlcpy(char *dst, char const *src, size_t siz);
+size_t strlcpy(char *dst, char const *src, size_t siz);
 #endif
 
 #ifndef HAVE_STRLCAT
-extern size_t strlcat(char *dst, char const *src, size_t siz);
+size_t strlcat(char *dst, char const *src, size_t siz);
 #endif
 
 #ifndef INT16SZ
@@ -403,21 +423,35 @@ typedef struct int128_t { uint8_t v[16]; } int128_t;
 #endif
 
 /* abcd efgh -> dcba hgfe -> hgfe dcba */
-#ifdef LITTLE_ENDIAN
-#  define ntohll(x) (((uint64_t)ntohl((uint32_t)(x >> 32))) | (((uint64_t)ntohl(((uint32_t) x)) << 32)))
-
-#  ifdef HAVE_128BIT_INTEGERS
-#    define ntohlll(x) (((uint128_t)ntohll((uint64_t)(x >> 64))) | (((uint128_t)ntohll(((uint64_t) x)) << 64)))
+#ifndef HAVE_HTON_LL
+#  ifdef LITTLE_ENDIAN
+#    ifdef HAVE_BUILTIN_BSWAP64
+#      define ntohll(x) __builtin_bswap64(x)
+#    else
+#      define ntohll(x) (((uint64_t)ntohl((uint32_t)(x >> 32))) | (((uint64_t)ntohl(((uint32_t) x)) << 32)))
+#    endif
 #  else
-uint128_t ntohlll(uint128_t num);
+#    define ntohll(x) (x)
 #  endif
-#else
-#  define ntohll(x) (x)
-#  define ntohlll(x) (x)
+#  define htonll(x) ntohll(x)
 #endif
 
-#define htonll(x) ntohll(x)
-#define htonlll(x) htohlll(x)
+#ifndef HAVE_HTON_LLL
+#  ifdef LITTLE_ENDIAN
+#    ifdef HAVE_128BIT_INTEGERS
+#      define ntohlll(x) (((uint128_t)ntohll((uint64_t)(x >> 64))) | (((uint128_t)ntohll(((uint64_t) x)) << 64)))
+#    else
+uint128_t ntohlll(uint128_t num);
+#    endif
+#  else
+#    define ntohlll(x) (x)
+#  endif
+#  define htonlll(x) htohlll(x)
+#endif
+
+#ifndef HAVE_SIG_T
+typedef void(*sig_t)(int);
+#endif
 
 #ifdef __cplusplus
 }

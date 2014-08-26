@@ -83,7 +83,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 			cleanup(packet);
 			return RLM_MODULE_FAIL;
 
-		case PW_CODE_AUTHENTICATION_REQUEST:
+		case PW_CODE_ACCESS_REQUEST:
 			pool = realm->auth_pool;
 			break;
 
@@ -118,7 +118,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 		 *	we built here.
 		 */
 		if (!packet) {
-			packet = rad_alloc(request, 1);
+			packet = rad_alloc(request, true);
 			if (!packet) {
 				return RLM_MODULE_FAIL;
 			}
@@ -156,7 +156,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 			 *	For CHAP, create the CHAP-Challenge if
 			 *	it doesn't exist.
 			 */
-			if ((code == PW_CODE_AUTHENTICATION_REQUEST) &&
+			if ((code == PW_CODE_ACCESS_REQUEST) &&
 			    (pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY) != NULL) &&
 			    (pairfind(request->packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY) == NULL)) {
 				uint8_t *p;

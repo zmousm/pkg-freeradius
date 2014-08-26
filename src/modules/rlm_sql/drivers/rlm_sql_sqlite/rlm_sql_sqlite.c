@@ -227,22 +227,26 @@ static int sql_loadfile(TALLOC_CTX *ctx, sqlite3 *db, char const *filename)
 
 static int mod_instantiate(CONF_SECTION *conf, rlm_sql_config_t *config)
 {
+	static bool version_done;
+
 	bool exists;
 	rlm_sql_sqlite_config_t *driver;
 	struct stat buf;
 
-	if (sqlite3_libversion_number() != SQLITE_VERSION_NUMBER) {
-		DEBUG2("rlm_sql_sqlite: SQLite library version (%s) is different from the version the server was "
-		       "originally built against (%s), this may cause issues",
-		       sqlite3_libversion(), SQLITE_VERSION);
+	if (!version_done) {
+		version_done = true;
+
+		if (sqlite3_libversion_number() != SQLITE_VERSION_NUMBER) {
+			WARN("rlm_sql_sqlite: libsqlite version changed since the server was built");
+			WARN("rlm_sql_sqlite: linked: %s built: %s", sqlite3_libversion(), SQLITE_VERSION);
+		}
+		INFO("rlm_sql_sqlite: libsqlite version: %s", sqlite3_libversion());
 	}
 
 	MEM(driver = config->driver = talloc_zero(config, rlm_sql_sqlite_config_t));
 	if (cf_section_parse(conf, driver, driver_config) < 0) {
 		return -1;
 	}
-
-	INFO("rlm_sql_sqlite: SQLite library version: %s", sqlite3_libversion());
 	if (!driver->filename) {
 		MEM(driver->filename = talloc_typed_asprintf(driver, "%s/%s", get_radius_dir(), config->sql_db));
 	}
@@ -334,10 +338,9 @@ static int mod_instantiate(CONF_SECTION *conf, rlm_sql_config_t *config)
 	return 0;
 }
 
-static int sql_socket_destructor(void *c)
+static int _sql_socket_destructor(rlm_sql_sqlite_conn_t *conn)
 {
 	int status = 0;
-	rlm_sql_sqlite_conn_t * conn = c;
 
 	DEBUG2("rlm_sql_sqlite: Socket destructor called, closing socket");
 
@@ -374,7 +377,7 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 	int status;
 
 	MEM(conn = handle->conn = talloc_zero(handle, rlm_sql_sqlite_conn_t));
-	talloc_set_destructor((void *) conn, sql_socket_destructor);
+	talloc_set_destructor(conn, _sql_socket_destructor);
 
 	INFO("rlm_sql_sqlite: Opening SQLite database \"%s\"", driver->filename);
 #ifdef HAVE_SQLITE3_OPEN_V2
