@@ -1,3 +1,16 @@
+freeradius (3.0.4~rc2-1+grnet) unstable; urgency=low
+
+  [ Herwin Weststrate ]
+  * Updated some required packages for Debian build
+  * Debian: Ensure some directories exist
+
+  [ Zenon Mousmoulas ]
+  * New upstream version (release candidate).
+  * Remove the rlm_cache update patch (introduced in
+    eef35013ee3e5e2d0b3caf3520c5c5a1fd485bd3) as it is no longer necessary.
+
+ -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Tue, 26 Aug 2014 19:34:03 +0300
+
 freeradius (3.0.4~rc1-4+grnet) unstable; urgency=low
 
   * Update rlm_cache from v3.0.x
