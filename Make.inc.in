@@ -52,7 +52,7 @@ INCLUDE		= -I${top_srcdir} -I${top_srcdir}/src \
 		  -include ${top_srcdir}/src/freeradius-devel/build.h \
 		  -include ${top_srcdir}/src/freeradius-devel/features.h \
 		  -include ${top_srcdir}/src/freeradius-devel/radpaths.h
-CFLAGS		= $(INCLUDE) -std=c99 -fno-strict-aliasing @CFLAGS@
+CFLAGS		= $(INCLUDE) -fno-strict-aliasing @CFLAGS@
 CPPFLAGS	= @CPPFLAGS@
 LIBPREFIX	= @LIBPREFIX@
 EXEEXT		= @EXEEXT@
@@ -76,6 +76,7 @@ TALLOC_LDFLAGS  = @TALLOC_LDFLAGS@
 
 OPENSSL_LIBS    = @OPENSSL_LIBS@
 OPENSSL_LDFLAGS = @OPENSSL_LDFLAGS@
+OPENSSL_CPPFLAGS = @OPENSSL_CPPFLAGS@
 
 PCAP_LIBS	= @PCAP_LIBS@
 PCAP_LDFLAGS    = @PCAP_LDFLAGS@
@@ -124,8 +125,12 @@ HOSTINFO	= @HOSTINFO@
 #  If the system has OpenSSL, use it's version of MD4/MD5/SHA1, instead of
 #  using ours.
 #
+#  We don't use OpenSSL SHA1 by default because src/modules/rlm_eap/libeap/fips186prf.c
+#  needs access to the SHA internals.
+#
 ifeq "$(WITH_OPENSSL)" "yes"
 CFLAGS		+=  -DWITH_OPENSSL_MD4 -DWITH_OPENSSL_MD5
+CPPFLAGS	:= "$(OPENSSL_CPPFLAGS) $(CPPFLAGS)"
 endif
 
 OPENSSL_LIBS	= @OPENSSL_LIBS@
@@ -148,60 +153,9 @@ LIBRADIUS += $(OPENSSL_LIBS)
 endif
 endif
 
-#  http://clang.llvm.org/StaticAnalysis.html
-#
-#  $ make SCAN=/path/to/checker/
-#
-ifneq ($(SCAN),)
-CC		:= $(SCAN)/scan-build gcc -DFR_SCAN_BUILD
-LIBTOOL		:=
-endif
-
-#
-#  Portability cruft.  This is for replacing libtroll && libltdl
-#  with gcc and dlopen().
-#
-ifeq "$(USE_SHARED_LIBS)" "yes"
-LINK_MODE.exe	= -export-dynamic
-CFLAGS		+= -fPIC
-else
-LINK_MODE.exe	= -static
-endif
-
-ifneq "$(LIBTOOL)" ""
-COMPILE.c	:= $(LIBTOOL) --quiet --mode=compile $(CC)
-LINK.lib	:= $(LIBTOOL) --quiet --mode=link $(CC) -rpath $(libdir) -o
-LO		:= lo
-LA		:= la
-else
-COMPILE.c	:= $(CC)
-LO		:= o
-
-ifeq "$(USE_SHARED_LIBS)" "yes"
-LINK.lib	:= $(CC) -shared -o
-LA		:= so
-else
-LINK.lib	:= $(AR) cru
-LA		:= a
-endif
-
-endif
-
-ifeq "$(LA)" "so"
-ifneq "$(findstring Darwin,$(shell uname -a))" ""
-LA		:= dylib
-endif
-endif
-
 # Path to clang, setting this enables the 'scan.*' build targets
 # which perform static analysis on various server components.
 ANALYZE.c       := @clang_path@
-
-ifeq "${CC}" "clang"
-    ifeq "${ANALYZE.c}" ""
-        ANALYZE.c := "${CC}"
-    endif
-endif
 
 #
 #  With shared libs, the test binaries are in a different place

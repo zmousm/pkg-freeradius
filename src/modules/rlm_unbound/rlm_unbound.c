@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -38,9 +39,9 @@ typedef struct rlm_unbound_t {
 	char const	*xlat_aaaa_name;
 	char const	*xlat_ptr_name;
 
-	int		timeout;
+	uint32_t	timeout;
 
-	char		*filename;
+	char const	*filename;
 
 	int		log_fd;
 	FILE		*log_stream;
@@ -54,9 +55,8 @@ typedef struct rlm_unbound_t {
  *	A mapping of configuration file names to internal variables.
  */
 static const CONF_PARSER module_config[] = {
-	{ "filename", PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED, offsetof(rlm_unbound_t, filename), NULL,
-	  "${modconfdir}/unbound/default.conf" },
-	{ "timeout", PW_TYPE_INTEGER, offsetof(rlm_unbound_t, timeout), NULL, "3000" },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED, rlm_unbound_t, filename), "${modconfdir}/unbound/default.conf"  },
+	{ "timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_unbound_t, timeout), "3000" },
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
@@ -155,7 +155,7 @@ static int ub_common_wait(rlm_unbound_t *inst, REQUEST *request, char const *tag
 	iv = inst->timeout > 64 ? 64000 : inst->timeout * 1000;
 	ub_process(inst->ub);
 
-	for (waited = 0; (void*)*ub == (void *)inst; waited += iv, iv += iv) {
+	for (waited = 0; (void*)*ub == (void *)inst; waited += iv, iv *= 2) {
 
 		if (waited + iv > (useconds_t)inst->timeout * 1000) {
 			usleep(inst->timeout * 1000 - waited);
@@ -411,7 +411,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		inst->name = cf_section_name1(conf);
 	}
 
-	if ((inst->timeout < 0) || (inst->timeout > 10000)) {
+	if (inst->timeout > 10000) {
 		ERROR("rlm_unbound (%s): timeout must be 0 to 10000", inst->name);
 		return -1;
 	}
@@ -479,7 +479,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	res = ub_ctx_debuglevel(inst->ub, log_level);
 	if (res) goto error;
 
-	switch(default_log.dst) {
+	switch (default_log.dst) {
 	case L_DST_STDOUT:
 		if (!debug_flag) {
 			log_dst = L_DST_NULL;
@@ -500,9 +500,12 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	case L_DST_FILES:
 		if (main_config.log_file) {
+			char *log_file;
+
 			strcpy(k, "logfile:");
-			res = ub_ctx_set_option(inst->ub, k,
-						main_config.log_file);
+			/* 3rd argument isn't const'd in libunbounds API */
+			memcpy(&log_file, &main_config.log_file, sizeof(log_file));
+			res = ub_ctx_set_option(inst->ub, k, log_file);
 			if (res) {
 				goto error;
 			}
@@ -521,8 +524,13 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	}
 
 	/* Now load the config file, which can override gleaned settings. */
-	res = ub_ctx_config(inst->ub, inst->filename);
-	if (res) goto error;
+	{
+		char *file;
+
+		memcpy(&file, &inst->filename, sizeof(file));
+		res = ub_ctx_config(inst->ub, file);
+		if (res) goto error;
+	}
 
 	/*
 	 *	Check if the config file tried to use syslog.  Unbound
@@ -544,9 +552,13 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		if (res) goto error;
 
 		if (log_dst == L_DST_FILES) {
+			char *log_file;
+
 			/* Reinstate the log file name JIC */
 			strcpy(k, "logfile:");
-			res = ub_ctx_set_option(inst->ub, k, main_config.log_file);
+			/* 3rd argument isn't const'd in libunbounds API */
+			memcpy(&log_file, &main_config.log_file, sizeof(log_file));
+			res = ub_ctx_set_option(inst->ub, k, log_file);
 			if (res) goto error;
 		}
 
@@ -686,9 +698,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	    xlat_register(inst->xlat_aaaa_name, xlat_aaaa, NULL, inst) ||
 	    xlat_register(inst->xlat_ptr_name, xlat_ptr, NULL, inst)) {
 		ERROR("rlm_unbound (%s): Failed registering xlats", inst->name);
-		xlat_unregister(inst->xlat_a_name, xlat_a, inst);
-		xlat_unregister(inst->xlat_aaaa_name, xlat_aaaa, inst);
-		xlat_unregister(inst->xlat_ptr_name, xlat_ptr, inst);
 		goto error_nores;
 	}
 	return 0;
@@ -705,10 +714,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 static int mod_detach(UNUSED void *instance)
 {
 	rlm_unbound_t *inst = instance;
-
-	xlat_unregister(inst->xlat_a_name, xlat_a, inst);
-	xlat_unregister(inst->xlat_aaaa_name, xlat_aaaa, inst);
-	xlat_unregister(inst->xlat_ptr_name, xlat_ptr, inst);
 
 	if (inst->log_fd >= 0) {
 		fr_event_fd_delete(inst->el, 0, inst->log_fd);
@@ -742,6 +747,7 @@ static int mod_detach(UNUSED void *instance)
 	return 0;
 }
 
+extern module_t rlm_unbound;
 module_t rlm_unbound = {
 	RLM_MODULE_INIT,
 	"unbound",

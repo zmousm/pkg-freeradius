@@ -63,18 +63,14 @@ RCSID("$Id$")
 
 static char const *eap_codes[] = {
 	 "",				/* 0 is invalid */
-	"request",
-	"response",
-	"success",
-	"failure"
+	"Request",
+	"Response",
+	"Success",
+	"Failure"
 };
 
-static int eap_module_free(void *ctx)
+static int _eap_module_free(eap_module_t *inst)
 {
-	eap_module_t *inst;
-
-	inst = talloc_get_type_abort(ctx, eap_module_t);
-
 	/*
 	 *	We have to check inst->type as it's only allocated
 	 *	if we loaded the eap method.
@@ -106,7 +102,7 @@ int eap_module_load(rlm_eap_t *inst, eap_module_t **m_inst, eap_type_t num, CONF
 	*m_inst = method = talloc_zero(cs, eap_module_t);
 	if (!inst) return -1;
 
-	talloc_set_destructor((void *) method, eap_module_free);
+	talloc_set_destructor(method, _eap_module_free);
 
 	/* fill in the structure */
 	method->cs = cs;
@@ -157,7 +153,7 @@ open_self:
 	/*
 	 *	Call the attach num in the EAP num module
 	 */
-	if ((method->type->attach) && ((method->type->attach)(method->cs, &(method->instance)) < 0)) {
+	if ((method->type->instantiate) && ((method->type->instantiate)(method->cs, &(method->instance)) < 0)) {
 		ERROR("rlm_eap (%s): Failed to initialise %s", inst->xlat_name, mod_name);
 
 		if (method->instance) {
@@ -184,37 +180,26 @@ static int eap_module_call(eap_module_t *module, eap_handler_t *handler)
 
 	char const *caller = request->module;
 
+	rad_assert(module != NULL);
+
 	RDEBUG2("Calling %s to process EAP data", module->type->name);
 
 	request->module = module->type->name;
 
-	rad_assert(module != NULL);
-
 	switch (handler->stage) {
 	case INITIATE:
-		if (!module->type->initiate(module->instance, handler)) {
+		if (!module->type->session_init(module->instance, handler)) {
 			rcode = 0;
 		}
 
 		break;
 
-	case AUTHORIZE:
+	case PROCESS:
 		/*
 		 *   The called function updates the EAP reply packet.
 		 */
-		if (!module->type->authorize ||
-		    !module->type->authorize(module->instance, handler)) {
-			rcode = 0;
-		}
-
-		break;
-
-	case AUTHENTICATE:
-		/*
-		 *   The called function updates the EAP reply packet.
-		 */
-		if (!module->type->authenticate ||
-		    !module->type->authenticate(module->instance, handler)) {
+		if (!module->type->process ||
+		    !module->type->process(module->instance, handler)) {
 			rcode = 0;
 		}
 
@@ -261,7 +246,7 @@ static eap_type_t eap_process_nak(rlm_eap_t *inst, REQUEST *request,
 	 *	Pick one type out of the one they asked for,
 	 *	as they may have asked for many.
 	 */
-	vp = pairfind(request->config_items, PW_EAP_TYPE, 0, TAG_ANY);
+	vp = pairfind(request->config, PW_EAP_TYPE, 0, TAG_ANY);
 	for (i = 0; i < nak->length; i++) {
 		/*
 		 *	Type 0 is valid, and means there are no
@@ -365,7 +350,7 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 	 *	Don't trust anyone.
 	 */
 	if ((type->num == 0) || (type->num >= PW_EAP_MAX_TYPES)) {
-		REDEBUG("Peer sent type (%d), which is outside known range", type->num);
+		REDEBUG("Peer sent method %d, which is outside known range", type->num);
 
 		return EAP_INVALID;
 	}
@@ -374,21 +359,21 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 	 *	Multiple levels of nesting are invalid.
 	 */
 	if (handler->request->parent && handler->request->parent->parent) {
-		RDEBUG2("Multiple levels of TLS nesting is invalid.");
+		RDEBUG2("Multiple levels of TLS nesting is invalid");
 
 		return EAP_INVALID;
 	}
 
-	RDEBUG2("Peer sent %s (%d)", eap_type2name(type->num), type->num);
+	RDEBUG2("Peer sent method %s (%d)", eap_type2name(type->num), type->num);
 	/*
 	 *	Figure out what to do.
 	 */
-	switch(type->num) {
+	switch (type->num) {
 	case PW_EAP_IDENTITY:
 		/*
 		 *	Allow per-user configuration of EAP types.
 		 */
-		vp = pairfind(handler->request->config_items, PW_EAP_TYPE, 0,
+		vp = pairfind(handler->request->config, PW_EAP_TYPE, 0,
 			      TAG_ANY);
 		if (vp) next = vp->vp_integer;
 
@@ -446,7 +431,6 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 		}
 
 		goto do_initiate;
-		break;
 
 		/*
 		 *	Key off of the configured sub-modules.
@@ -468,7 +452,7 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 				return EAP_INVALID;
 			}
 
-			rad_assert(handler->stage == AUTHENTICATE);
+			rad_assert(handler->stage == PROCESS);
 			handler->type = type->num;
 			if (eap_module_call(inst->methods[type->num],
 					    handler) == 0) {
@@ -587,7 +571,7 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 	vp = radius_paircreate(request->reply, &request->reply->vps, PW_EAP_MESSAGE, 0);
 	if (!vp) return RLM_MODULE_INVALID;
 
-	vp->length = eap_packet->length[0] * 256 + eap_packet->length[1];
+	vp->vp_length = eap_packet->length[0] * 256 + eap_packet->length[1];
 	vp->vp_octets = talloc_steal(vp, reply->packet);
 	reply->packet = NULL;
 
@@ -601,24 +585,24 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 	vp = pairfind(request->reply->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY);
 	if (!vp) {
 		vp = paircreate(request->reply, PW_MESSAGE_AUTHENTICATOR, 0);
-		vp->length = AUTH_VECTOR_LEN;
-		vp->vp_octets = talloc_zero_array(vp, uint8_t, vp->length);
+		vp->vp_length = AUTH_VECTOR_LEN;
+		vp->vp_octets = talloc_zero_array(vp, uint8_t, vp->vp_length);
 		pairadd(&(request->reply->vps), vp);
 	}
 
 	/* Set request reply code, but only if it's not already set. */
 	rcode = RLM_MODULE_OK;
-	if (!request->reply->code) switch(reply->code) {
+	if (!request->reply->code) switch (reply->code) {
 	case PW_EAP_RESPONSE:
-		request->reply->code = PW_CODE_AUTHENTICATION_ACK;
+		request->reply->code = PW_CODE_ACCESS_ACCEPT;
 		rcode = RLM_MODULE_HANDLED; /* leap weirdness */
 		break;
 	case PW_EAP_SUCCESS:
-		request->reply->code = PW_CODE_AUTHENTICATION_ACK;
+		request->reply->code = PW_CODE_ACCESS_ACCEPT;
 		rcode = RLM_MODULE_OK;
 		break;
 	case PW_EAP_FAILURE:
-		request->reply->code = PW_CODE_AUTHENTICATION_REJECT;
+		request->reply->code = PW_CODE_ACCESS_REJECT;
 		rcode = RLM_MODULE_REJECT;
 		break;
 	case PW_EAP_REQUEST:
@@ -637,7 +621,7 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 
 		/* Should never enter here */
 		ERROR("rlm_eap: reply code %d is unknown, Rejecting the request.", reply->code);
-		request->reply->code = PW_CODE_AUTHENTICATION_REJECT;
+		request->reply->code = PW_CODE_ACCESS_REJECT;
 		reply->code = PW_EAP_FAILURE;
 		rcode = RLM_MODULE_REJECT;
 		break;
@@ -667,7 +651,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 */
 	vp = pairfind(request->packet->vps, PW_EAP_TYPE, 0, TAG_ANY);
 	if (vp && vp->vp_integer == 0) {
-		RDEBUG2("Found EAP-Message, but EAP-Type = None, so we're not doing EAP.");
+		RDEBUG2("Found EAP-Message, but EAP-Type = None, so we're not doing EAP");
 		return EAP_NOOP;
 	}
 
@@ -681,7 +665,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 *	Check for a Proxy-To-Realm.  Don't get excited over LOCAL
 	 *	realms (sigh).
 	 */
-	proxy = pairfind(request->config_items, PW_PROXY_TO_REALM, 0, TAG_ANY);
+	proxy = pairfind(request->config, PW_PROXY_TO_REALM, 0, TAG_ANY);
 	if (proxy) {
 		REALM *realm;
 
@@ -704,7 +688,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 *	Lengths of two are what we see in practice as
 	 *	EAP-Starts.
 	 */
-	if ((eap_msg->length == 0) || (eap_msg->length == 2)) {
+	if ((eap_msg->vp_length == 0) || (eap_msg->vp_length == 2)) {
 		uint8_t *p;
 
 		/*
@@ -727,8 +711,8 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 		/*
 		 *	Manually create an EAP Identity request
 		 */
-		vp->length = 5;
-		vp->vp_octets = p = talloc_array(vp, uint8_t, vp->length);
+		vp->vp_length = 5;
+		vp->vp_octets = p = talloc_array(vp, uint8_t, vp->vp_length);
 
 		p[0] = PW_EAP_REQUEST;
 		p[1] = 0; /* ID */
@@ -744,10 +728,10 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 *	EAP sub-type.  Short packets are discarded, unless
 	 *	we're proxying.
 	 */
-	if (eap_msg->length < (EAP_HEADER_LEN + 1)) {
+	if (eap_msg->vp_length < (EAP_HEADER_LEN + 1)) {
 		if (proxy) goto do_proxy;
 
-		RDEBUG2("Ignoring EAP-Message which is too short to be meaningful.");
+		RDEBUG2("Ignoring EAP-Message which is too short to be meaningful");
 		return EAP_FAIL;
 	}
 
@@ -783,10 +767,11 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	    (eap_msg->vp_octets[0] >= PW_EAP_MAX_CODES)) {
 		RDEBUG2("Unknown EAP packet");
 	} else {
-		RDEBUG2("EAP packet type %s id %d length %zu",
-		       eap_codes[eap_msg->vp_octets[0]],
-		       eap_msg->vp_octets[1],
-		       eap_msg->length);
+		RDEBUG2("Peer sent code %s (%i) ID %d length %zu",
+		        eap_codes[eap_msg->vp_octets[0]],
+		        eap_msg->vp_octets[0],
+		        eap_msg->vp_octets[1],
+		        eap_msg->vp_length);
 	}
 
 	/*
@@ -797,7 +782,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 */
 	if ((eap_msg->vp_octets[0] != PW_EAP_REQUEST) &&
 	    (eap_msg->vp_octets[0] != PW_EAP_RESPONSE)) {
-		RDEBUG2("Ignoring EAP packet which we don't know how to handle.");
+		RDEBUG2("Ignoring EAP packet which we don't know how to handle");
 		return EAP_FAIL;
 	}
 
@@ -814,7 +799,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	    ((eap_msg->vp_octets[4] == 0) ||
 	     (eap_msg->vp_octets[4] >= PW_EAP_MAX_TYPES) ||
 	     (!inst->methods[eap_msg->vp_octets[4]]))) {
-		RDEBUG2(" Ignoring Unknown EAP type");
+		RDEBUG2("Ignoring Unknown EAP type");
 		return EAP_NOOP;
 	}
 
@@ -834,7 +819,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 *	the request.
 	 */
 	if ((eap_msg->vp_octets[4] == PW_EAP_NAK) &&
-	    (eap_msg->length >= (EAP_HEADER_LEN + 2)) &&
+	    (eap_msg->vp_length >= (EAP_HEADER_LEN + 2)) &&
 	    inst->ignore_unknown_types &&
 	    ((eap_msg->vp_octets[5] == 0) ||
 	     (eap_msg->vp_octets[5] >= PW_EAP_MAX_TYPES) ||
@@ -845,11 +830,11 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 
 	if ((eap_msg->vp_octets[4] == PW_EAP_TTLS) ||
 	    (eap_msg->vp_octets[4] == PW_EAP_PEAP)) {
-		RDEBUG2("Continuing tunnel setup.");
+		RDEBUG2("Continuing tunnel setup");
 		return EAP_OK;
 	}
 	/*
-	 * We return ok in response to EAP identity and MSCHAP success/fail
+	 * We return ok in response to EAP identity
 	 * This means we can write:
 	 *
 	 * eap {
@@ -863,16 +848,6 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	if (eap_msg->vp_octets[4] == PW_EAP_IDENTITY) {
 		RDEBUG2("EAP-Identity reply, returning 'ok' so we can short-circuit the rest of authorize");
 		return EAP_OK;
-	}
-	if ((eap_msg->vp_octets[4] == PW_EAP_MSCHAPV2) && (eap_msg->length >= 6)) {
-		switch (eap_msg->vp_octets[5]) {
-			case 3:
-				RDEBUG2("EAP-MSCHAPV2 success, returning short-circuit ok");
-				return EAP_OK;
-			case 4:
-				RDEBUG2("EAP-MSCHAPV2 failure, returning short-circuit ok");
-				return EAP_OK;
-		}
 	}
 
 	/*
@@ -916,9 +891,10 @@ void eap_success(eap_handler_t *handler)
 /*
  * Basic EAP packet verfications & validations
  */
-static int eap_validation(REQUEST *request, eap_packet_raw_t *eap_packet)
+static int eap_validation(REQUEST *request, eap_packet_raw_t **eap_packet_p)
 {
 	uint16_t len;
+	eap_packet_raw_t *eap_packet = *eap_packet_p;
 
 	memcpy(&len, eap_packet->length, sizeof(uint16_t));
 	len = ntohs(len);
@@ -928,11 +904,74 @@ static int eap_validation(REQUEST *request, eap_packet_raw_t *eap_packet)
 	 */
 	if ((len <= EAP_HEADER_LEN) ||
 	    ((eap_packet->code != PW_EAP_RESPONSE) &&
-	     (eap_packet->code != PW_EAP_REQUEST)) ||
-	    (eap_packet->data[0] <= 0) ||
-	    (eap_packet->data[0] >= PW_EAP_MAX_TYPES)) {
-
+	     (eap_packet->code != PW_EAP_REQUEST))) {
 		RAUTH("Badly formatted EAP Message: Ignoring the packet");
+		return EAP_INVALID;
+	}
+
+	if ((eap_packet->data[0] <= 0) ||
+	    (eap_packet->data[0] >= PW_EAP_MAX_TYPES)) {
+		/*
+		 *	Handle expanded types by smashing them to
+		 *	normal types.
+		 */
+		if (eap_packet->data[0] == PW_EAP_EXPANDED_TYPE) {
+			uint8_t *p, *q;
+
+			if (len <= (EAP_HEADER_LEN + 1 + 3 + 4)) {
+				RAUTH("Expanded EAP type is too short: ignoring the packet");
+				return EAP_INVALID;
+			}
+
+			if ((eap_packet->data[1] != 0) ||
+			    (eap_packet->data[2] != 0) ||
+			    (eap_packet->data[3] != 0)) {
+				RAUTH("Expanded EAP type has unknown Vendor-ID: ignoring the packet");
+				return EAP_INVALID;
+			}
+
+			if ((eap_packet->data[4] != 0) ||
+			    (eap_packet->data[5] != 0) ||
+			    (eap_packet->data[6] != 0)) {
+				RAUTH("Expanded EAP type has unknown Vendor-Type: ignoring the packet");
+				return EAP_INVALID;
+			}
+
+			if ((eap_packet->data[7] == 0) ||
+			    (eap_packet->data[7] >= PW_EAP_MAX_TYPES)) {
+				RAUTH("Unsupported Expanded EAP type %u: ignoring the packet", eap_packet->data[7]);
+				return EAP_INVALID;
+			}
+
+			if (eap_packet->data[7] == PW_EAP_NAK) {
+				RAUTH("Unsupported Expanded EAP-NAK: ignoring the packet");
+				return EAP_INVALID;
+			}
+
+			/*
+			 *	Re-write the EAP packet to NOT have the expanded type.
+			 */
+			q = (uint8_t *) eap_packet;
+			memmove(q + EAP_HEADER_LEN, q + EAP_HEADER_LEN + 7, len - 7 - EAP_HEADER_LEN);
+
+			p = talloc_realloc(talloc_parent(eap_packet), eap_packet, uint8_t, len - 7);
+			if (!p) {
+				RAUTH("Unsupported EAP type %u: ignoring the packet", eap_packet->data[0]);
+				return EAP_INVALID;
+			}
+
+			len -= 7;
+			p[2] = (len >> 8) & 0xff;
+			p[3] = len & 0xff;
+
+			*eap_packet_p = (eap_packet_raw_t *) p;
+			RWARN("Converting Expanded EAP to normal EAP.");
+			RWARN("Unnecessary use of Expanded EAP types is not recommened.");
+
+			return EAP_VALID;
+		}
+		
+		RAUTH("Unsupported EAP type %u: ignoring the packet", eap_packet->data[0]);
 		return EAP_INVALID;
 	}
 
@@ -966,7 +1005,12 @@ static char *eap_identity(REQUEST *request, eap_handler_t *handler, eap_packet_r
 	len = ntohs(len);
 
 	if ((len <= 5) || (eap_packet->data[1] == 0x00)) {
-		RDEBUG("UserIdentity Unknown ");
+		RDEBUG("EAP-Identity Unknown");
+		return NULL;
+	}
+
+	if (len > 1024) {
+		RDEBUG("EAP-Identity too long");
 		return NULL;
 	}
 
@@ -1045,18 +1089,20 @@ eap_handler_t *eap_handler(rlm_eap_t *inst, eap_packet_raw_t **eap_packet_p,
 			   REQUEST *request)
 {
 	eap_handler_t	*handler = NULL;
-	eap_packet_raw_t	*eap_packet = *eap_packet_p;
+	eap_packet_raw_t *eap_packet;
 	VALUE_PAIR	*vp;
 
 	/*
 	 *	Ensure it's a valid EAP-Request, or EAP-Response.
 	 */
-	if (eap_validation(request, eap_packet) == EAP_INVALID) {
+	if (eap_validation(request, eap_packet_p) == EAP_INVALID) {
 	error:
 		talloc_free(*eap_packet_p);
 		*eap_packet_p = NULL;
 		return NULL;
 	}
+
+	eap_packet = *eap_packet_p;
 
 	/*
 	 *	eap_handler_t MUST be found in the list if it is not
@@ -1114,7 +1160,7 @@ eap_handler_t *eap_handler(rlm_eap_t *inst, eap_packet_raw_t **eap_packet_p,
 			*/
 		       if (strncmp(handler->identity, vp->vp_strvalue,
 				   MAX_STRING_LEN) != 0) {
-			       RDEBUG("Identity does not match User-Name.  Authentication failed.");
+			       RDEBUG("Identity does not match User-Name.  Authentication failed");
 			       goto error;
 		       }
 	       }
@@ -1158,7 +1204,7 @@ eap_handler_t *eap_handler(rlm_eap_t *inst, eap_packet_raw_t **eap_packet_p,
 			*/
 		       if (strncmp(handler->identity, vp->vp_strvalue,
 				   MAX_STRING_LEN) != 0) {
-			       RDEBUG("Identity does not match User-Name, setting from EAP Identity.");
+			       RDEBUG("Identity does not match User-Name, setting from EAP Identity");
 			       goto error2;
 		       }
 	       }

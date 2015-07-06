@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -36,27 +37,17 @@ static int ninstance = 0;	//!< Number of instances, for global init.
 
 /* A mapping of configuration file names to internal variables. */
 static const CONF_PARSER module_config[] = {
-	{ "otpd_rp", PW_TYPE_STRING_PTR, offsetof(rlm_otp_t, otpd_rp),
-	  NULL, OTP_OTPD_RP },
-	{ "challenge_prompt", PW_TYPE_STRING_PTR,offsetof(rlm_otp_t, chal_prompt),
-	  NULL, OTP_CHALLENGE_PROMPT },
-	{ "challenge_length", PW_TYPE_INTEGER, offsetof(rlm_otp_t, challenge_len),
-	  NULL, "6" },
-	{ "challenge_delay", PW_TYPE_INTEGER, offsetof(rlm_otp_t, challenge_delay),
-	  NULL, "30" },
-	{ "allow_sync", PW_TYPE_BOOLEAN, offsetof(rlm_otp_t, allow_sync),
-	  NULL, "yes" },
-	{ "allow_async", PW_TYPE_BOOLEAN, offsetof(rlm_otp_t, allow_async),
-	  NULL, "no" },
+	{ "otpd_rp", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_otp_t, otpd_rp), OTP_OTPD_RP  },
+	{ "challenge_prompt", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_otp_t, chal_prompt), OTP_CHALLENGE_PROMPT  },
+	{ "challenge_length", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_otp_t, challenge_len), "6" },
+	{ "challenge_delay", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_otp_t, challenge_delay), "30" },
+	{ "allow_sync", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_otp_t, allow_sync), "yes" },
+	{ "allow_async", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_otp_t, allow_async), "no" },
 
-	{ "mschapv2_mppe", PW_TYPE_INTEGER,
-	  offsetof(rlm_otp_t, mschapv2_mppe_policy), NULL, "2" },
-	{ "mschapv2_mppe_bits", PW_TYPE_INTEGER,
-	  offsetof(rlm_otp_t, mschapv2_mppe_types), NULL, "2" },
-	{ "mschap_mppe", PW_TYPE_INTEGER,
-	  offsetof(rlm_otp_t, mschap_mppe_policy), NULL, "2" },
-	{ "mschap_mppe_bits", PW_TYPE_INTEGER,
-	  offsetof(rlm_otp_t, mschap_mppe_types), NULL, "2" },
+	{ "mschapv2_mppe", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_otp_t, mschapv2_mppe_policy), "2" },
+	{ "mschapv2_mppe_bits", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_otp_t, mschapv2_mppe_types), "2" },
+	{ "mschap_mppe", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_otp_t, mschap_mppe_policy), "2" },
+	{ "mschap_mppe_bits", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_otp_t, mschap_mppe_types), "2" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -101,23 +92,19 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		return -1;
 	}
 
-	if ((inst->mschapv2_mppe_policy > 2) ||
-	    (inst->mschapv2_mppe_policy < 0)) {
+	if (inst->mschapv2_mppe_policy > 2) {
 		inst->mschapv2_mppe_policy = 2;
-		WARN("Invalid value for mschapv2_mppe, "
-			"using default of 2");
+		WARN("Invalid value for mschapv2_mppe, using default of 2");
 	}
 
-	if ((inst->mschapv2_mppe_types > 2) || (inst->mschapv2_mppe_types < 0)) {
+	if (inst->mschapv2_mppe_types > 2) {
 		inst->mschapv2_mppe_types = 2;
-		WARN("Invalid value for "
-		       "mschapv2_mppe_bits, using default of 2");
+		WARN("Invalid value for mschapv2_mppe_bits, using default of 2");
 	}
 
-	if ((inst->mschap_mppe_policy > 2) || (inst->mschap_mppe_policy < 0)) {
+	if (inst->mschap_mppe_policy > 2) {
 		inst->mschap_mppe_policy = 2;
-		WARN("Invalid value for mschap_mppe, "
-		       "using default of 2");
+		WARN("Invalid value for mschap_mppe, using default of 2");
 	}
 
 	if (inst->mschap_mppe_types != 2) {
@@ -148,7 +135,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		VALUE_PAIR *vp;
 
 		auth_type_found = 0;
-		vp = pairfind(request->config_items, PW_AUTHTYPE, 0, TAG_ANY);
+		vp = pairfind(request->config, PW_AUTHTYPE, 0, TAG_ANY);
 		if (vp) {
 			auth_type_found = 1;
 			if (strcmp(vp->vp_strvalue, inst->name)) {
@@ -167,7 +154,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	/* User-Name attribute required. */
 	if (!request->username) {
 		RWDEBUG("Attribute \"User-Name\" "
-		       "required for authentication.");
+		       "required for authentication");
 
 		return RLM_MODULE_INVALID;
 	}
@@ -175,7 +162,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	if (otp_pwe_present(request) == 0) {
 		RWDEBUG("Attribute "
 			"\"User-Password\" or equivalent required "
-			"for authentication.");
+			"for authentication");
 
 		return RLM_MODULE_INVALID;
 	}
@@ -277,7 +264,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 
 		(void) talloc_steal(vp, expanded);
 		vp->vp_strvalue = expanded;
-		vp->length = len;
+		vp->vp_length = len;
 		vp->op = T_OP_SET;
 		vp->type = VT_DATA;
 
@@ -290,7 +277,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 */
 	request->reply->code = PW_CODE_ACCESS_CHALLENGE;
 
-	DEBUG("rlm_otp: Sending Access-Challenge.");
+	DEBUG("rlm_otp: Sending Access-Challenge");
 
 	if (!auth_type_found) {
 		pairmake_config("Auth-Type", inst->name, T_OP_EQ);
@@ -320,7 +307,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	/* User-Name attribute required. */
 	if (!request->username) {
 		RWDEBUG("Attribute \"User-Name\" required "
-			"for authentication.");
+			"for authentication");
 
 		return RLM_MODULE_INVALID;
 	}
@@ -330,7 +317,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	pwe = otp_pwe_present(request);
 	if (pwe == 0) {
 		RWDEBUG("Attribute \"User-Password\" "
-			"or equivalent required for authentication.");
+			"or equivalent required for authentication");
 
 		return RLM_MODULE_INVALID;
 	}
@@ -352,7 +339,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 */
 		elen = (inst->challenge_len * 2) + 8 + 8 + 32;
 
-		if (vp->length != elen) {
+		if (vp->vp_length != elen) {
 			REDEBUG("Bad radstate for [%s]: length", username);
 			return RLM_MODULE_INVALID;
 		}
@@ -368,8 +355,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 *	There are notes in otp_radstate as to why the state
 		 *	value is encoded as hexits.
 		 */
-		len = fr_hex2bin(bin_state, vp->vp_strvalue, vp->length);
-		if (len != (vp->length / 2)) {
+		len = fr_hex2bin(bin_state, sizeof(bin_state), vp->vp_strvalue, vp->vp_length);
+		if (len != (vp->vp_length / 2)) {
 			REDEBUG("bad radstate for [%s]: not hex", username);
 
 			return RLM_MODULE_INVALID;
@@ -396,7 +383,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 *	against generated state (in hex form)
 		 *	to verify hmac.
 		 */
-		if (memcmp(gen_state, vp->vp_octets, vp->length)) {
+		if (memcmp(gen_state, vp->vp_octets, vp->vp_length)) {
 			REDEBUG("bad radstate for [%s]: hmac", username);
 
 			return RLM_MODULE_REJECT;
@@ -406,7 +393,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 *	State is valid, but check expiry.
 		 */
 		then = ntohl(then);
-		if (time(NULL) - then > inst->challenge_delay) {
+		if ((time(NULL) - then) > (int)inst->challenge_delay) {
 			REDEBUG("bad radstate for [%s]: expired",username);
 
 			return RLM_MODULE_REJECT;
@@ -430,6 +417,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_otp;
 module_t rlm_otp = {
 	RLM_MODULE_INIT,
 	"otp",

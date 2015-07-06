@@ -43,7 +43,7 @@ $(BUILD_DIR)/tests/radiusd-c: raddb/test.conf ${BUILD_DIR}/bin/radiusd | build.r
 	@$(MAKE) -C raddb/certs
 	@printf "radiusd -C... "
 	@if ! ./build/make/jlibtool --mode=execute ./build/bin/radiusd -XCMd ./raddb -D ./share -n test > $(BUILD_DIR)/tests/radiusd.config.log; then \
-		@rm -f raddb/test.conf; \
+		rm -f raddb/test.conf; \
 		cat $(BUILD_DIR)/tests/radiusd.config.log; \
 		echo "fail"; \
 		exit 1; \
@@ -52,7 +52,7 @@ $(BUILD_DIR)/tests/radiusd-c: raddb/test.conf ${BUILD_DIR}/bin/radiusd | build.r
 	@echo "ok"
 	@touch $@
 
-test: ${BUILD_DIR}/bin/radiusd ${BUILD_DIR}/bin/radclient tests.unit tests.keywords $(BUILD_DIR)/tests/radiusd-c | build.raddb
+test: ${BUILD_DIR}/bin/radiusd ${BUILD_DIR}/bin/radclient tests.unit tests.xlat tests.keywords tests.auth tests.modules $(BUILD_DIR)/tests/radiusd-c | build.raddb
 	@$(MAKE) -C src/tests tests
 
 #  Tests specifically for Travis.  We do a LOT more than just
@@ -64,7 +64,6 @@ travis-test: raddb/test.conf test
 	@$(MAKE) install
 	@perl -p -i -e 's/allow_vulnerable_openssl = no/allow_vulnerable_openssl = yes/' ${raddbdir}/radiusd.conf
 	@${sbindir}/radiusd -XC
-	@$(MAKE) deb
 endif
 
 #
@@ -116,6 +115,11 @@ install.man: $(subst man/,$(R)$(mandir)/,$(MANFILES))
 $(R)$(mandir)/%: man/%
 	@echo INSTALL $(notdir $<)
 	@$(INSTALL) -m 644 $< $@
+
+#
+#  Don't install rlm_test
+#
+ALL_INSTALL := $(patsubst %rlm_test.la,,$(ALL_INSTALL))
 
 install: install.dirs install.share install.man
 
@@ -240,14 +244,16 @@ certs:
 #  BEFORE running this command!
 #
 ######################################################################
+BRANCH = $(shell git rev-parse --abbrev-ref HEAD)
+
 freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz: .git
-	git archive --format=tar --prefix=freeradius-server-$(RADIUSD_VERSION_STRING)/ v3.0.x | gzip > $@
+	git archive --format=tar --prefix=freeradius-server-$(RADIUSD_VERSION_STRING)/ $(BRANCH) | gzip > $@
 
 freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz.sig: freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz
 	gpg --default-key aland@freeradius.org -b $<
 
 freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2: .git
-	git archive --format=tar --prefix=freeradius-server-$(RADIUSD_VERSION_STRING)/ v3.0.x | bzip2 > $@
+	git archive --format=tar --prefix=freeradius-server-$(RADIUSD_VERSION_STRING)/ $(BRANCH) | bzip2 > $@
 
 freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2.sig: freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2
 	gpg --default-key aland@freeradius.org -b $<

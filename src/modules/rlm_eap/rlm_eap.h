@@ -56,7 +56,7 @@ typedef struct rlm_eap {
 	/*
 	 *	Configuration items.
 	 */
-	int		timer_limit;
+	uint32_t	timer_limit;
 
 	char const	*default_method_name;
 	eap_type_t	default_method;
@@ -64,7 +64,7 @@ typedef struct rlm_eap {
 	bool		ignore_unknown_types;
 	bool		mod_accounting_username_bug;
 
-	int		max_sessions;
+	uint32_t	max_sessions;
 
 #ifdef HAVE_PTHREAD_H
 	pthread_mutex_t	session_mutex;

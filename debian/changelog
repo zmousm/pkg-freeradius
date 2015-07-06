@@ -1,4 +1,34 @@
-freeradius (3.0.3-1) unstable; urgency=low
+freeradius (3.0.8-1) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Thu, 19 Feb 2015 12:00:00 -0400
+
+freeradius (3.0.7+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Wed, 17 Dec 2014 16:00:00 -0400
+
+freeradius (3.0.6+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Tue, 01 Nov 2014 08:30:00 -0400
+
+freeradius (3.0.5+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Thu, 23 Sep 2014 08:30:00 -0400
+
+freeradius (3.0.4+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Wed, 03 Sep 2014 08:30:00 -0400
+
+freeradius (3.0.3+git) unstable; urgency=medium
 
   * New upstream version.
 

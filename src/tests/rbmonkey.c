@@ -37,17 +37,17 @@ struct rbtree_t {
 	pthread_mutex_t		mutex;
 #endif
 };
-#define RBTREE_MAGIC (0x5ad09c42)
+
 /* Storage for the NIL pointer. */
-rbnode_t *NIL;
+static rbnode_t *NIL;
 
 static int comp(void const *a, void const *b)
 {
-	if (*(int const *)a > *(int const *)b) {
+	if (*(uint32_t const *)a > *(uint32_t const *)b) {
 		return -1;
 	}
 
-	if (*(int const *)a < *(int const *)b) {
+	if (*(uint32_t const *)a < *(uint32_t const *)b) {
 		return 1;
 	}
 	return 0;
@@ -64,7 +64,7 @@ static int print_cb(UNUSED void *ctx, void *i)
 #define MAXSIZE 1024
 
 static int r = 0;
-static int rvals[MAXSIZE];
+static uint32_t rvals[MAXSIZE];
 
 static int store_cb(UNUSED void *ctx, void  *i)
 {
@@ -72,11 +72,11 @@ static int store_cb(UNUSED void *ctx, void  *i)
 	return 0;
 }
 
-static int mask;
+static uint32_t mask;
 
-static int filter_cb(UNUSED void *ctx, void *i)
+static int filter_cb(void *ctx, void *i)
 {
-	if ((*(int *)i & mask) == (*(int *)ctx & mask)) {
+	if ((*(uint32_t *)i & mask) == (*(uint32_t *)ctx & mask)) {
 		return 2;
 	}
 	return 0;
@@ -163,37 +163,35 @@ ascend:
 int main(UNUSED int argc, UNUSED char *argv[])
 {
 	rbtree_t *t;
-	int i, j, thresh;
-	int n, nextseed, rep;
-	int vals[MAXSIZE];
+	int i, j;
+	uint32_t thresh;
+	int n, rep;
+	uint32_t vals[MAXSIZE];
 	struct timeval now;
 	gettimeofday(&now, NULL);
 
 	/* TODO: make starting seed and repetitions a CLI option */
-	nextseed = now.tv_usec;
 	rep = REPS;
 
 again:
 	if (!--rep) return 0;
 
-	srand(nextseed);
-	thresh = rand();
-	mask = 0xff >> (rand() & 7);
+	thresh = fr_rand();
+	mask = 0xff >> (fr_rand() & 7);
 	thresh &= mask;
-	n = (rand() % MAXSIZE) + 1;
-	while (n < 0 || n > MAXSIZE) n >>= 1;
-	fprintf(stderr, "seed = %i filter = %x mask = %x n= %i\n",
-		nextseed, thresh, mask, n);
-	nextseed = rand();
+	n = (fr_rand() % MAXSIZE) + 1;
 
-	t = rbtree_create(comp, free, RBTREE_FLAG_LOCK);
+	fprintf(stderr, "filter = %x mask = %x n= %i\n",
+		thresh, mask, n);
+
+	t = rbtree_create(NULL, comp, free, RBTREE_FLAG_LOCK);
 	/* Find out the value of the NIL node */
 	NIL = t->root->left;
 
 	for (i = 0; i < n; i++) {
 		int *p;
-		p = malloc(sizeof(int));
-		*p = rand();
+		p = malloc(sizeof(*p));
+		*p = fr_rand();
 		vals[i] = *p;
 		rbtree_insert(t, p);
 	}

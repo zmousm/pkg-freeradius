@@ -38,10 +38,19 @@ RADIUS_PACKET *fr_dhcp_recv(int sockfd);
 int fr_dhcp_send(RADIUS_PACKET *packet);
 
 int fr_dhcp_add_arp_entry(int fd, char const *interface, VALUE_PAIR *hwvp, VALUE_PAIR *clvp);
+
+int8_t fr_dhcp_attr_cmp(void const *a, void const *b);
+ssize_t fr_dhcp_encode_option(TALLOC_CTX *ctx, uint8_t *out, size_t outlen, vp_cursor_t *cursor);
 int fr_dhcp_encode(RADIUS_PACKET *packet);
-ssize_t fr_dhcp_decode_options(RADIUS_PACKET *packet,
-			       uint8_t const *data, size_t len, VALUE_PAIR **head);
+ssize_t fr_dhcp_decode_options(TALLOC_CTX *ctx, VALUE_PAIR **out, uint8_t const *data, size_t len);
 int fr_dhcp_decode(RADIUS_PACKET *packet);
+
+#ifdef HAVE_LINUX_IF_PACKET_H
+#include <linux/if_packet.h>
+int fr_socket_packet(int iface_index, struct sockaddr_ll *p_ll);
+int fr_dhcp_send_raw_packet(int sockfd, struct sockaddr_ll *p_ll, RADIUS_PACKET *packet);
+RADIUS_PACKET *fr_dhcp_recv_raw_packet(int sockfd, struct sockaddr_ll *p_ll, RADIUS_PACKET *request);
+#endif
 
 /*
  *	This is a horrible hack.

@@ -49,7 +49,7 @@ typedef struct _pwd_hdr {
 #define EAP_PWD_EXCH_COMMIT	     2
 #define EAP_PWD_EXCH_CONFIRM	    3
 //    uint16_t total_length;      /* there if the L-bit is set */
-    uint8_t data[0];
+    uint8_t data[];
 } CC_HINT(packed) pwd_hdr;
 
 #define EAP_PWD_GET_LENGTH_BIT(x)       ((x)->lm_exchange & 0x80)
@@ -62,15 +62,15 @@ typedef struct _pwd_hdr {
 typedef struct _pwd_id_packet {
     uint16_t group_num;
     uint8_t random_function;
-#define EAP_PWD_DEF_RAND_FUN	    1
+#define EAP_PWD_DEF_RAND_FUN	1
     uint8_t prf;
-#define EAP_PWD_DEF_PRF		 1
+#define EAP_PWD_DEF_PRF		1
     uint8_t token[4];
     uint8_t prep;
-#define EAP_PWD_PREP_NONE	       0
-#define EAP_PWD_PREP_MS		 1
-#define EAP_PWD_PREP_SASL	       2
-    char identity[0];
+#define EAP_PWD_PREP_NONE	0
+#define EAP_PWD_PREP_MS		1
+#define EAP_PWD_PREP_SASL	2
+    char identity[];
 } CC_HINT(packed) pwd_id_packet;
 
 typedef struct _pwd_session_t {
@@ -85,11 +85,11 @@ typedef struct _pwd_session_t {
     size_t peer_id_len;
     int mtu;
     uint8_t *in_buf;      /* reassembled fragments */
-    int in_buf_pos;
-    int in_buf_len;
+    size_t in_buf_pos;
+    size_t in_buf_len;
     uint8_t *out_buf;     /* message to fragment */
-    int out_buf_pos;
-    int out_buf_len;
+    size_t out_buf_pos;
+    size_t out_buf_len;
     EC_GROUP *group;
     EC_POINT *pwe;
     BIGNUM *order;
@@ -105,8 +105,8 @@ typedef struct _pwd_session_t {
 
 int compute_password_element(pwd_session_t *sess, uint16_t grp_num,
 			     char const *password, int password_len,
-			     char *id_server, int id_server_len,
-			     char *id_peer, int id_peer_len,
+			     char const *id_server, int id_server_len,
+			     char const *id_peer, int id_peer_len,
 			     uint32_t *token);
 int compute_scalar_element(pwd_session_t *sess, BN_CTX *bnctx);
 int process_peer_commit (pwd_session_t *sess, uint8_t *commit, BN_CTX *bnctx);

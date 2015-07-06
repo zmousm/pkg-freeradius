@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -66,7 +67,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 	 *	Send as many packets as necessary to different
 	 *	destinations.
 	 */
-	fr_cursor_init(&cursor, &request->config_items);
+	fr_cursor_init(&cursor, &request->config);
 	while ((vp = fr_cursor_next_by_num(&cursor, PW_REPLICATE_TO_REALM, 0, TAG_ANY))) {
 		realm = realm_find2(vp->vp_strvalue);
 		if (!realm) {
@@ -83,7 +84,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 			cleanup(packet);
 			return RLM_MODULE_FAIL;
 
-		case PW_CODE_AUTHENTICATION_REQUEST:
+		case PW_CODE_ACCESS_REQUEST:
 			pool = realm->auth_pool;
 			break;
 
@@ -118,7 +119,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 		 *	we built here.
 		 */
 		if (!packet) {
-			packet = rad_alloc(request, 1);
+			packet = rad_alloc(request, true);
 			if (!packet) {
 				return RLM_MODULE_FAIL;
 			}
@@ -156,7 +157,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 			 *	For CHAP, create the CHAP-Challenge if
 			 *	it doesn't exist.
 			 */
-			if ((code == PW_CODE_AUTHENTICATION_REQUEST) &&
+			if ((code == PW_CODE_ACCESS_REQUEST) &&
 			    (pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY) != NULL) &&
 			    (pairfind(request->packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY) == NULL)) {
 				uint8_t *p;
@@ -252,6 +253,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_recv_coa(void *instance, REQUEST *reques
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_replicate;
 module_t rlm_replicate = {
 	RLM_MODULE_INIT,
 	"replicate",

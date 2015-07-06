@@ -15,7 +15,8 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   License as published by the Free Software Foundation; either
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version. either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -596,7 +597,7 @@ int fr_hash_table_walk(fr_hash_table_t *ht,
 			 fr_hash_table_walk_t callback,
 			 void *context)
 {
-	int i, rcode;;
+	int i, rcode;
 
 	if (!ht || !callback) return 0;
 

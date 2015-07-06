@@ -130,7 +130,7 @@ static int tls_socket_recv(rad_listen_t *listener)
 	RADCLIENT *client = sock->client;
 
 	if (!sock->packet) {
-		sock->packet = rad_alloc(sock, 0);
+		sock->packet = rad_alloc(sock, false);
 		if (!sock->packet) return 0;
 
 		sock->packet->sockfd = listener->fd;
@@ -140,16 +140,15 @@ static int tls_socket_recv(rad_listen_t *listener)
 		sock->packet->dst_port = sock->my_port;
 
 		if (sock->request) {
-			(void) talloc_steal(sock->request, sock->packet);
-			sock->request->packet = sock->packet;
+			sock->request->packet = talloc_steal(sock->request, sock->packet);
 		}
 	}
 
 	/*
-	 *	Allocate a REQUEST for debugging.
+	 *	Allocate a REQUEST for debugging, and initialize the TLS session.
 	 */
 	if (!sock->request) {
-		sock->request = request = request_alloc(NULL);
+		sock->request = request = request_alloc(sock);
 		if (!sock->request) {
 			ERROR("Out of memory");
 			return 0;
@@ -157,30 +156,26 @@ static int tls_socket_recv(rad_listen_t *listener)
 
 		rad_assert(request->packet == NULL);
 		rad_assert(sock->packet != NULL);
-		request->packet = sock->packet;
+		request->packet = talloc_steal(request, sock->packet);
 
 		request->component = "<core>";
 		request->component = "<tls-connect>";
 
-		/*
-		 *	Not sure if we should do this on every packet...
-		 */
-		request->reply = rad_alloc(request, 0);
+		request->reply = rad_alloc(request, false);
 		if (!request->reply) return 0;
 
 		rad_assert(sock->ssn == NULL);
 
-		sock->ssn = tls_new_session(listener->tls, sock->request,
+		sock->ssn = tls_new_session(sock, listener->tls, sock->request,
 					    listener->tls->require_client_cert);
 		if (!sock->ssn) {
-			request_free(&sock->request);
+			TALLOC_FREE(sock->request);
 			sock->packet = NULL;
 			return 0;
 		}
 
-		(void) talloc_steal(sock, sock->ssn);
 		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_REQUEST, (void *)request);
-		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_CERTS, (void *)&request->packet->vps);
+		SSL_set_ex_data(sock->ssn->ssl, fr_tls_ex_index_certs, (void *)&request->packet->vps);
 		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_TALLOC, sock->parent);
 
 		doing_init = true;
@@ -229,28 +224,33 @@ static int tls_socket_recv(rad_listen_t *listener)
 	}
 
 	/*
-	 *	Skip ahead to reading application data.
+	 *	If we need to do more initialization, do that here.
 	 */
-	if (SSL_is_init_finished(sock->ssn->ssl)) goto app;
+	if (!SSL_is_init_finished(sock->ssn->ssl)) {
+		if (!tls_handshake_recv(request, sock->ssn)) {
+			RDEBUG("FAILED in TLS handshake receive");
+			goto do_close;
+		}
 
-	if (!tls_handshake_recv(request, sock->ssn)) {
-		RDEBUG("FAILED in TLS handshake receive");
-		goto do_close;
+		/*
+		 *	More ACK data to send.  Do so.
+		 */
+		if (sock->ssn->dirty_out.used > 0) {
+			tls_socket_write(listener, request);
+			PTHREAD_MUTEX_UNLOCK(&sock->mutex);
+			return 0;
+		}
+
+		/*
+		 *	FIXME: Run the request through a virtual
+		 *	server in order to see if we like the
+		 *	certificate presented by the client.
+		 */
 	}
 
-	if (sock->ssn->dirty_out.used > 0) {
-		tls_socket_write(listener, request);
-		PTHREAD_MUTEX_UNLOCK(&sock->mutex);
-		return 0;
-	}
-
-app:
 	/*
-	 *	FIXME: Run the packet through a virtual server in
-	 *	order to see if we like the certificate presented by
-	 *	the client.
+	 *	Try to get application data.
 	 */
-
 	status = tls_application_data(sock->ssn, request);
 	RDEBUG("Application data status %d", status);
 
@@ -264,7 +264,10 @@ app:
 		return 0;
 	}
 
-	dump_hex("TUNNELED DATA", sock->ssn->clean_out.data, sock->ssn->clean_out.used);
+	/*
+	 *	We now have a bunch of application data.
+	 */
+	dump_hex("TUNNELED DATA > ", sock->ssn->clean_out.data, sock->ssn->clean_out.used);
 
 	/*
 	 *	If the packet is a complete RADIUS packet, return it to
@@ -321,6 +324,11 @@ app:
 
 	FR_STATS_INC(auth, total_requests);
 
+	/*
+	 *	Re-parent the packet to nothing.
+	 */
+	(void) talloc_steal(NULL, packet);
+
 	return 1;
 }
 
@@ -328,7 +336,6 @@ app:
 int dual_tls_recv(rad_listen_t *listener)
 {
 	RADIUS_PACKET *packet;
-	REQUEST *request;
 	RAD_REQUEST_FUNP fun = NULL;
 	listen_socket_t *sock = listener->data;
 	RADCLIENT	*client = sock->client;
@@ -339,13 +346,10 @@ int dual_tls_recv(rad_listen_t *listener)
 		return 0;
 	}
 
-	rad_assert(sock->request != NULL);
-	rad_assert(sock->request->packet != NULL);
 	rad_assert(sock->packet != NULL);
 	rad_assert(sock->ssn != NULL);
 	rad_assert(client != NULL);
 
-	request = sock->request;
 	packet = sock->packet;
 
 	/*
@@ -354,8 +358,8 @@ int dual_tls_recv(rad_listen_t *listener)
 	 *	"auth+acct" are marked as "auth", with the "dual" flag
 	 *	set.
 	 */
-	switch(packet->code) {
-	case PW_CODE_AUTHENTICATION_REQUEST:
+	switch (packet->code) {
+	case PW_CODE_ACCESS_REQUEST:
 		if (listener->type != RAD_LISTEN_AUTH) goto bad_packet;
 		FR_STATS_INC(auth, total_requests);
 		fun = rad_authenticate;
@@ -383,7 +387,6 @@ int dual_tls_recv(rad_listen_t *listener)
 			FR_STATS_INC(auth, total_unknown_types);
 			WARN("Ignoring Status-Server request due to security configuration");
 			rad_free(&sock->packet);
-			request->packet = NULL;
 			return 0;
 		}
 		fun = rad_status_server;
@@ -396,19 +399,16 @@ int dual_tls_recv(rad_listen_t *listener)
 		DEBUG("Invalid packet code %d sent from client %s port %d : IGNORED",
 		      packet->code, client->shortname, packet->src_port);
 		rad_free(&sock->packet);
-		request->packet = NULL;
 		return 0;
 	} /* switch over packet types */
 
-	if (!request_receive(listener, packet, client, fun)) {
+	if (!request_receive(NULL, listener, packet, client, fun)) {
 		FR_STATS_INC(auth, total_packets_dropped);
 		rad_free(&sock->packet);
-		request->packet = NULL;
 		return 0;
 	}
 
 	sock->packet = NULL;	/* we have no need for more partial reads */
-	request->packet = NULL;
 
 	return 1;
 }
@@ -455,11 +455,14 @@ int dual_tls_send(rad_listen_t *listener, REQUEST *request)
 	}
 
 	PTHREAD_MUTEX_LOCK(&sock->mutex);
+
 	/*
 	 *	Write the packet to the SSL buffers.
 	 */
 	sock->ssn->record_plus(&sock->ssn->clean_in,
 			       request->reply->data, request->reply->data_len);
+
+	dump_hex("TUNNELED DATA < ", sock->ssn->clean_in.data, sock->ssn->clean_in.used);
 
 	/*
 	 *	Do SSL magic to get encrypted data.
@@ -627,7 +630,7 @@ int proxy_tls_recv(rad_listen_t *listener)
 
 	data = sock->data;
 
-	packet = rad_alloc(sock, 0);
+	packet = rad_alloc(sock, false);
 	packet->sockfd = listener->fd;
 	packet->src_ipaddr = sock->other_ipaddr;
 	packet->src_port = sock->other_port;
@@ -643,10 +646,10 @@ int proxy_tls_recv(rad_listen_t *listener)
 	/*
 	 *	FIXME: Client MIB updates?
 	 */
-	switch(packet->code) {
-	case PW_CODE_AUTHENTICATION_ACK:
+	switch (packet->code) {
+	case PW_CODE_ACCESS_ACCEPT:
 	case PW_CODE_ACCESS_CHALLENGE:
-	case PW_CODE_AUTHENTICATION_REJECT:
+	case PW_CODE_ACCESS_REJECT:
 		break;
 
 #ifdef WITH_ACCOUNTING
@@ -683,7 +686,8 @@ int proxy_tls_send(rad_listen_t *listener, REQUEST *request)
 
 	VERIFY_REQUEST(request);
 
-	if (listener->status != RAD_LISTEN_STATUS_KNOWN) return 0;
+	if ((listener->status != RAD_LISTEN_STATUS_INIT) &&
+	    (listener->status != RAD_LISTEN_STATUS_KNOWN)) return 0;
 
 	/*
 	 *	Normal proxying calls us with the data already

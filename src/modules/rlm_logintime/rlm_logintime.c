@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -39,7 +40,7 @@ int		timestr_match(char const *, time_t);
  *	be used as the instance handle.
  */
 typedef struct rlm_logintime_t {
-	int min_time;
+	uint32_t	min_time;
 } rlm_logintime_t;
 
 /*
@@ -52,8 +53,8 @@ typedef struct rlm_logintime_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-  { "minimum-timeout", PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, offsetof(rlm_logintime_t,min_time), NULL, NULL},
-  { "minimum_timeout", PW_TYPE_INTEGER, offsetof(rlm_logintime_t,min_time), NULL, "60" },
+  { "minimum-timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, rlm_logintime_t, min_time), NULL },
+  { "minimum_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_logintime_t, min_time), "60" },
 
   { NULL, -1, 0, NULL, NULL }
 };
@@ -149,7 +150,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	VALUE_PAIR *ends, *timeout;
 	int left;
 
-	ends = pairfind(request->config_items, PW_LOGIN_TIME, 0, TAG_ANY);
+	ends = pairfind(request->config, PW_LOGIN_TIME, 0, TAG_ANY);
 	if (!ends) {
 		return RLM_MODULE_NOOP;
 	}
@@ -163,6 +164,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 *	Compare the time the request was received with the current Login-Time value
 	 */
 	left = timestr_match(ends->vp_strvalue, request->timestamp);
+	if (left < 0) return RLM_MODULE_USERLOCK; /* outside of the allowed time */
 
 	/*
 	 *      Do nothing, login time is not controlled (unendsed).
@@ -177,7 +179,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 *
 	 *	We don't know were going to get another chance to lock out the user, so we need to do it now.
 	 */
-	if (left < inst->min_time) {
+	if (left < (int) inst->min_time) {
 		REDEBUG("Login outside of allowed time-slot (session end %s, with lockout %i seconds before)",
 			ends->vp_strvalue, inst->min_time);
 
@@ -190,7 +192,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 *	There's time left in the users session, inform the NAS by including a Session-Timeout
 	 *	attribute in the reply, or modifying the existing one.
 	 */
-	RDEBUG("Login within allowed time-slot, %i seconds left in this session", left);
+	RDEBUG("Login within allowed time-slot, %d seconds left in this session", left);
 
 	timeout = pairfind(request->reply->vps, PW_SESSION_TIMEOUT, 0, TAG_ANY);
 	if (timeout) {	/* just update... */
@@ -202,7 +204,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		timeout->vp_integer = left;
 	}
 
-	RDEBUG("reply:Session-Timeout set to %i", left);
+	RDEBUG("reply:Session-Timeout set to %d", left);
 
 	return RLM_MODULE_UPDATED;
 }
@@ -252,6 +254,7 @@ static int mod_detach(UNUSED void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_logintime;
 module_t rlm_logintime = {
 	RLM_MODULE_INIT,
 	"logintime",
@@ -268,6 +271,6 @@ module_t rlm_logintime = {
 		NULL,			/* checksimul */
 		NULL,			/* pre-proxy */
 		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+		mod_authorize  		/* post-auth */
 	},
 };

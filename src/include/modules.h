@@ -14,7 +14,7 @@
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-/*
+/**
  * $Id$
  *
  * @file modules.h
@@ -54,6 +54,8 @@ typedef enum rlm_components {
 #endif
 	RLM_COMPONENT_COUNT	//!< 10 how many components there are.
 } rlm_components_t;
+
+extern const FR_NAME_NUMBER mod_rcode_table[];
 
 /** Map a section name, to a section typename, to an attribute number
  *

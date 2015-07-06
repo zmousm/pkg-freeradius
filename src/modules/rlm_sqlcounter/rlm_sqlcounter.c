@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -57,15 +58,15 @@ RCSID("$Id$")
  *	be used as the instance handle.
  */
 typedef struct rlm_sqlcounter_t {
-	char		*counter_name;  //!< Daily-Session-Time.
-	char		*limit_name;  	//!< Max-Daily-Session.
-	char		*reply_name;  	//!< Session-Timeout.
-	char		*key_name;  	//!< User-Name.
-	char		*sqlmod_inst;	//!< Instance of SQL module to use,
+	char const	*counter_name;  //!< Daily-Session-Time.
+	char const	*limit_name;  	//!< Max-Daily-Session.
+	char const	*reply_name;  	//!< Session-Timeout.
+	char const	*key_name;  	//!< User-Name.
+	char const	*sqlmod_inst;	//!< Instance of SQL module to use,
 					//!< usually just 'sql'.
-	char		*query;		//!< SQL query to retrieve current
+	char const	*query;		//!< SQL query to retrieve current
 					//!< session time.
-	char		*reset;  	//!< Daily, weekly, monthly,
+	char const	*reset;  	//!< Daily, weekly, monthly,
 					//!< never or user defined.
 	time_t		reset_time;
 	time_t		last_reset;
@@ -84,32 +85,21 @@ typedef struct rlm_sqlcounter_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-	{ "sql-module-instance", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_sqlcounter_t,sqlmod_inst), NULL, NULL },
-	{ "sql_module_instance", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_sqlcounter_t,sqlmod_inst), NULL, NULL },
+	{ "sql-module-instance", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sqlcounter_t, sqlmod_inst), NULL },
+	{ "sql_module_instance", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_sqlcounter_t, sqlmod_inst), NULL },
 
-	{ "key", PW_TYPE_STRING_PTR | PW_TYPE_ATTRIBUTE,
-	  offsetof(rlm_sqlcounter_t,key_name), NULL, NULL },
-	{ "query", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_sqlcounter_t,query), NULL, NULL },
-	{ "reset", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_sqlcounter_t,reset), NULL,  NULL },
+	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_ATTRIBUTE, rlm_sqlcounter_t, key_name), NULL },
+	{ "query", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT | PW_TYPE_REQUIRED, rlm_sqlcounter_t, query), NULL },
+	{ "reset", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_sqlcounter_t, reset), NULL },
 
-	{ "counter-name", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_sqlcounter_t,counter_name), NULL,  NULL },
-	{ "counter_name", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_sqlcounter_t,counter_name), NULL,  NULL },
+	{ "counter-name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sqlcounter_t, counter_name), NULL },
+	{ "counter_name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_sqlcounter_t, counter_name), NULL },
 
-	{ "check-name", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_sqlcounter_t,limit_name), NULL, NULL },
-	{ "check_name", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_sqlcounter_t,limit_name), NULL, NULL },
+	{ "check-name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sqlcounter_t, limit_name), NULL },
+	{ "check_name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_sqlcounter_t, limit_name), NULL },
 
-	{ "reply-name", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_sqlcounter_t,reply_name), NULL, NULL },
-	{ "reply_name", PW_TYPE_STRING_PTR | PW_TYPE_ATTRIBUTE,
-	  offsetof(rlm_sqlcounter_t,reply_name), NULL, "Session-Timeout" },
+	{ "reply-name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sqlcounter_t, reply_name), NULL },
+	{ "reply_name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_ATTRIBUTE, rlm_sqlcounter_t, reply_name), "Session-Timeout" },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -261,43 +251,80 @@ static int find_prev_reset(rlm_sqlcounter_t *inst, time_t timeval)
 
 static size_t sqlcounter_expand(char *out, int outlen, char const *fmt, rlm_sqlcounter_t *inst)
 {
-	int c, freespace;
+	int freespace;
 	char const *p;
 	char *q;
 	char tmpdt[40]; /* For temporary storing of dates */
 
 	q = out;
-	for (p = fmt; *p ; p++) {
+	p = fmt;
+	while (*p) {
 		/* Calculate freespace in output */
 		freespace = outlen - (q - out);
 		if (freespace <= 1) {
 			return -1;
 		}
-		c = *p;
-		if (c != '%') {
-			*q++ = *p;
+
+		/*
+		 *	Non-% get copied as-is.
+		 */
+		if (*p != '%') {
+			*q++ = *p++;
 			continue;
 		}
-		if (*++p == '\0') break;
-		if (c == '%') switch(*p) {
+		p++;
+		if (!*p) {	/* % and then EOS --> % */
+			*q++ = '%';
+			break;
+		}
+
+		if (freespace <= 2) return -1;
+
+		/*
+		 *	We need TWO %% in a row before we do our expansions.
+		 *	If we only get one, just copy the %s as-is.
+		 */
+		if (*p != '%') {
+			*q++ = '%';
+			*q++ = *p++;
+			continue;
+		}
+		p++;
+		if (!*p) {
+			*q++ = '%';
+			*q++ = '%';
+			break;
+		}
+
+		if (freespace <= 3) return -1;
+
+		switch (*p) {
 			case 'b': /* last_reset */
 				snprintf(tmpdt, sizeof(tmpdt), "%" PRId64, (int64_t) inst->last_reset);
 				strlcpy(q, tmpdt, freespace);
 				q += strlen(q);
+				p++;
 				break;
 			case 'e': /* reset_time */
 				snprintf(tmpdt, sizeof(tmpdt), "%" PRId64, (int64_t) inst->reset_time);
 				strlcpy(q, tmpdt, freespace);
 				q += strlen(q);
+				p++;
 				break;
 			case 'k': /* Key Name */
 				WARN("Please replace '%%k' with '${key}'");
 				strlcpy(q, inst->key_name, freespace);
 				q += strlen(q);
+				p++;
 				break;
+
+				/*
+				 *	%%s gets copied over as-is.
+				 */
 			default:
 				*q++ = '%';
-				*q++ = *p;
+				*q++ = '%';				
+				*q++ = *p++;
 				break;
 		}
 	}
@@ -395,29 +422,28 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	 */
 	rad_assert(inst->counter_name && *inst->counter_name);
 	memset(&flags, 0, sizeof(flags));
-	dict_addattr(inst->counter_name, -1, 0, PW_TYPE_INTEGER, flags);
-	da = dict_attrbyname(inst->counter_name);
-	if (!da) {
-		cf_log_err_cs(conf, "Failed to create counter attribute %s", inst->counter_name);
+	if ((dict_addattr(inst->counter_name, -1, 0, PW_TYPE_INTEGER64, flags) < 0) ||
+	    !(da = dict_attrbyname(inst->counter_name))) {
+		cf_log_err_cs(conf, "Failed to create counter attribute %s: %s", inst->counter_name, fr_strerror());
 		return -1;
 	}
+
 	inst->dict_attr = da;
 
 	/*
 	 *  Create a new attribute for the check item.
 	 */
 	rad_assert(inst->limit_name && *inst->limit_name);
-	dict_addattr(inst->limit_name, -1, 0, PW_TYPE_INTEGER, flags);
-	da = dict_attrbyname(inst->limit_name);
-	if (!da) {
-		cf_log_err_cs(conf, "Failed to create check attribute %s", inst->limit_name);
+	if ((dict_addattr(inst->limit_name, -1, 0, PW_TYPE_INTEGER64, flags) < 0) ||
+	    !(da = dict_attrbyname(inst->limit_name))) {
+		cf_log_err_cs(conf, "Failed to create check attribute %s: %s", inst->limit_name, fr_strerror());
 		return -1;
 	}
 
 	now = time(NULL);
 	inst->reset_time = 0;
 
-	if (find_next_reset(inst,now) == -1) {
+	if (find_next_reset(inst, now) == -1) {
 		cf_log_err_cs(conf, "Invalid reset '%s'", inst->reset);
 		return -1;
 	}
@@ -480,10 +506,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	if ((inst->key_attr->vendor == 0) && (inst->key_attr->attr == PW_USER_NAME)) {
 		key_vp = request->username;
 	} else {
-		key_vp = pairfind(request->packet->vps, inst->key_attr->attr, inst->key_attr->vendor, TAG_ANY);
+		key_vp = pair_find_by_da(request->packet->vps, inst->key_attr, TAG_ANY);
 	}
 	if (!key_vp) {
-		RWDEBUG2("Couldn't find key attribute 'request:%s'", inst->key_attr->name);
+		RWDEBUG2("Couldn't find key attribute, request:%s, doing nothing...", inst->key_attr->name);
 		return rcode;
 	}
 
@@ -494,9 +520,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		return rcode;
 	}
 
-	limit = pairfind(request->config_items, da->attr, da->vendor, TAG_ANY);
+	limit = pair_find_by_da(request->config, da, TAG_ANY);
 	if (limit == NULL) {
-		RWDEBUG2("Couldn't find control attribute 'control:%s'", inst->limit_name);
+		/* Yes this really is 'check' as distinct from control */
+		RWDEBUG2("Couldn't find check attribute, control:%s, doing nothing...", inst->limit_name);
 		return rcode;
 	}
 
@@ -536,14 +563,14 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		pairmake_reply("Reply-Message", msg, T_OP_EQ);
 
 		REDEBUG2("Maximum %s usage time reached", inst->reset);
-		REDEBUG2("Rejecting user, control:%s value (%" PRIu64 ") is less than counter value (%" PRIu64 ")",
+		REDEBUG2("Rejecting user, &control:%s value (%" PRIu64 ") is less than counter value (%" PRIu64 ")",
 			 inst->limit_name, limit->vp_integer64, counter);
 
 		return RLM_MODULE_REJECT;
 	}
 
 	res = limit->vp_integer64 - counter;
-	RDEBUG2("Allowing user, control:%s value (%" PRIu64 ") is greater than counter value (%" PRIu64 ")",
+	RDEBUG2("Allowing user, &control:%s value (%" PRIu64 ") is greater than counter value (%" PRIu64 ")",
 		inst->limit_name, limit->vp_integer64, counter);
 	/*
 	 *	We are assuming that simultaneous-use=1. But
@@ -558,18 +585,21 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 *	again.  Do this only for Session-Timeout.
 	 */
 	if (((inst->reply_attr->vendor == 0) && (inst->reply_attr->attr == PW_SESSION_TIMEOUT)) &&
-	    inst->reset_time && ((int) res >= (inst->reset_time - request->timestamp))) {
-		res = (inst->reset_time - request->timestamp);
-		res += limit->vp_integer;
+	    inst->reset_time && (res >= (uint64_t)(inst->reset_time - request->timestamp))) {
+	    	uint64_t to_reset = inst->reset_time - request->timestamp;
+
+		RDEBUG2("Time remaining (%" PRIu64 "s) is greater than time to reset (%" PRIu64 "s).  "
+			"Adding %" PRIu64 "s to reply value", to_reset, res, to_reset);
+		res = to_reset + limit->vp_integer;
 	}
 
 	/*
 	 *	Limit the reply attribute to the minimum of the existing value, or this new one.
 	 */
-	reply_item = pairfind(request->reply->vps, inst->reply_attr->attr, inst->reply_attr->vendor, TAG_ANY);
+	reply_item = pair_find_by_da(request->reply->vps, inst->reply_attr, TAG_ANY);
 	if (reply_item) {
 		if (reply_item->vp_integer64 <= res) {
-			RDEBUG2("Leaving existing reply:%s value of %" PRIu64, inst->reply_attr->name,
+			RDEBUG2("Leaving existing &reply:%s value of %" PRIu64, inst->reply_attr->name,
 				reply_item->vp_integer64);
 
 			return RLM_MODULE_OK;
@@ -580,7 +610,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	}
 	reply_item->vp_integer64 = res;
 
-	RDEBUG2("Setting reply:%s value to %" PRIu64, inst->reply_name, reply_item->vp_integer64);
+	RDEBUG2("Setting &reply:%s value to %" PRIu64, inst->reply_name, reply_item->vp_integer64);
 
 	return RLM_MODULE_OK;
 }
@@ -594,6 +624,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_sqlcounter;
 module_t rlm_sqlcounter = {
 	RLM_MODULE_INIT,
 	"rlm_sqlcounter",

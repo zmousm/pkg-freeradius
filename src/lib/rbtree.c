@@ -97,6 +97,8 @@ void rbtree_free(rbtree_t *tree)
 #endif
 	tree->root = NULL;
 
+	PTHREAD_MUTEX_UNLOCK(tree);
+
 #ifdef HAVE_PTHREAD_H
 	if (tree->lock) pthread_mutex_destroy(&tree->mutex);
 #endif
@@ -107,13 +109,13 @@ void rbtree_free(rbtree_t *tree)
 /** Create a new RED-BLACK tree
  *
  */
-rbtree_t *rbtree_create(rb_comparator_t compare, rb_free_t node_free, int flags)
+rbtree_t *rbtree_create(TALLOC_CTX *ctx, rb_comparator_t compare, rb_free_t node_free, int flags)
 {
 	rbtree_t *tree;
 
 	if (!compare) return NULL;
 
-	tree = talloc_zero(NULL, rbtree_t);
+	tree = talloc_zero(ctx, rbtree_t);
 	if (!tree) return NULL;
 
 #ifndef NDEBUG
@@ -472,7 +474,7 @@ static void rbtree_delete_internal(rbtree_t *tree, rbnode_t *z, bool skiplock)
 	} else {
 		if (tree->free) tree->free(y->data);
 
-		if (y->colour == BLACK) 
+		if (y->colour == BLACK)
 			delete_fixup(tree, x, parent);
 
 		talloc_free(y);
@@ -722,7 +724,7 @@ int rbtree_walk(rbtree_t *tree, rb_order_t order, rb_walker_t compare, void *con
 	return rcode;
 }
 
-int rbtree_num_elements(rbtree_t *tree)
+uint32_t rbtree_num_elements(rbtree_t *tree)
 {
 	if (!tree) return 0;
 

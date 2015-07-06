@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -29,6 +30,7 @@
  *
  * Comp128v2 & v3 is a port of the python code from:
  *   http://www.hackingprojects.net/
+ * The author of the original code is Tamas Jos <tamas.jos@skelsec.com>
  *
  * @note The above GPL license only applies to comp128v1, the license for comp128v2 and comp128v3 is unknown.
  *

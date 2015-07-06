@@ -22,18 +22,17 @@
 RCSID("$Id$")
 
 #include "sql_fbapi.h"
+#include <freeradius-devel/rad_assert.h>
 
 
 /* Forward declarations */
-static char const *sql_error(rlm_sql_handle_t *handle, rlm_sql_config_t *config);
 static sql_rcode_t sql_free_result(rlm_sql_handle_t *handle, rlm_sql_config_t *config);
 static int sql_affected_rows(rlm_sql_handle_t *handle, rlm_sql_config_t *config);
 static int sql_num_fields(rlm_sql_handle_t *handle, rlm_sql_config_t *config);
 static sql_rcode_t sql_finish_query(rlm_sql_handle_t *handle, rlm_sql_config_t *config);
 
-static int sql_socket_destructor(void *c)
+static int _sql_socket_destructor(rlm_sql_firebird_conn_t *conn)
 {
-	rlm_sql_firebird_conn_t *conn = c;
 	int i;
 
 	DEBUG2("rlm_sql_firebird: socket destructor called, closing socket");
@@ -71,13 +70,14 @@ static int sql_socket_destructor(void *c)
 /** Establish connection to the db
  *
  */
-static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *config) {
+static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
+{
 	rlm_sql_firebird_conn_t	*conn;
 
 	long res;
 
 	MEM(conn = handle->conn = talloc_zero(handle, rlm_sql_firebird_conn_t));
-	talloc_set_destructor((void *) conn, sql_socket_destructor);
+	talloc_set_destructor(conn, _sql_socket_destructor);
 
 	res = fb_init_socket(conn);
 	if (res) {
@@ -96,7 +96,8 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 /** Issue a non-SELECT query (ie: update/delete/insert) to the database.
  *
  */
-static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config, char const *query) {
+static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config, char const *query)
+{
 	rlm_sql_firebird_conn_t *conn = handle->conn;
 
 	int deadlock = 0;
@@ -164,30 +165,32 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 /** Issue a select query to the database.
  *
  */
-static sql_rcode_t sql_select_query(rlm_sql_handle_t *handle, rlm_sql_config_t *config, char const *query) {
+static sql_rcode_t sql_select_query(rlm_sql_handle_t *handle, rlm_sql_config_t *config, char const *query)
+{
 	return sql_query(handle, config, query);
 }
 
 /** Returns a result set for the query.
  *
  */
-static sql_rcode_t sql_store_result(UNUSED rlm_sql_handle_t *handle,
-			    UNUSED rlm_sql_config_t *config) {
+static sql_rcode_t sql_store_result(UNUSED rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
 	return 0;
 }
 
 /** Returns number of columns from query.
  *
  */
-static int sql_num_fields(rlm_sql_handle_t *handle,
-			  UNUSED rlm_sql_config_t *config) {
+static int sql_num_fields(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
 	return ((rlm_sql_firebird_conn_t *) handle->conn)->sqlda_out->sqld;
 }
 
 /** Returns number of rows in query.
  *
  */
-static int sql_num_rows(rlm_sql_handle_t *handle, rlm_sql_config_t *config) {
+static int sql_num_rows(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
+{
 	return sql_affected_rows(handle, config);
 }
 
@@ -226,9 +229,8 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, UNUSED rlm_sql_config
 /** End the select query, such as freeing memory or result.
  *
  */
-static sql_rcode_t sql_finish_select_query(rlm_sql_handle_t *handle,
-				   UNUSED rlm_sql_config_t *config) {
-
+static sql_rcode_t sql_finish_select_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
 	rlm_sql_firebird_conn_t *conn = (rlm_sql_firebird_conn_t *) handle->conn;
 
 	fb_commit(conn);
@@ -240,8 +242,8 @@ static sql_rcode_t sql_finish_select_query(rlm_sql_handle_t *handle,
 /** End the query
  *
  */
-static sql_rcode_t sql_finish_query(rlm_sql_handle_t *handle,
-			    rlm_sql_config_t *config) {
+static sql_rcode_t sql_finish_query(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
+{
 	sql_free_result(handle, config);
 
 	return 0;
@@ -250,47 +252,60 @@ static sql_rcode_t sql_finish_query(rlm_sql_handle_t *handle,
 /** Frees memory allocated for a result set.
  *
  */
-static sql_rcode_t sql_free_result(UNUSED rlm_sql_handle_t *handle,
-			   UNUSED rlm_sql_config_t *config) {
+static sql_rcode_t sql_free_result(UNUSED rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
 	return 0;
 }
 
-/** Returns error associated with connection.
+/** Retrieves any errors associated with the connection handle
  *
+ * @note Caller will free any memory allocated in ctx.
+ *
+ * @param ctx to allocate temporary error buffers in.
+ * @param out Array of sql_log_entrys to fill.
+ * @param outlen Length of out array.
+ * @param handle rlm_sql connection handle.
+ * @param config rlm_sql config.
+ * @return number of errors written to the sql_log_entry array.
  */
-static char const *sql_error(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config) {
+static size_t sql_error(UNUSED TALLOC_CTX *ctx, sql_log_entry_t out[], size_t outlen,
+			rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
 	rlm_sql_firebird_conn_t *conn = handle->conn;
 
-	return conn->error;
+	rad_assert(conn);
+	rad_assert(outlen > 0);
+
+	if (!conn->error) return 0;
+
+	out[0].type = L_ERR;
+	out[0].msg = conn->error;
+
+	return 1;
 }
 
 /** Return the number of rows affected by the query (update, or insert)
  *
  */
-static int sql_affected_rows(rlm_sql_handle_t *handle, rlm_sql_config_t *config) {
-	int affected_rows=fb_affected_rows(handle->conn);
-
-	if (affected_rows < 0) {
-		ERROR("sql_affected_rows, rlm_sql_firebird. error:%s", sql_error(handle, config));
-	}
-
-	return affected_rows;
+static int sql_affected_rows(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
+	return fb_affected_rows(handle->conn);
 }
 
 /* Exported to rlm_sql */
+extern rlm_sql_module_t rlm_sql_firebird;
 rlm_sql_module_t rlm_sql_firebird = {
-	"rlm_sql_firebird",
-	NULL,
-	sql_socket_init,
-	sql_query,
-	sql_select_query,
-	sql_store_result,
-	sql_num_fields,
-	sql_num_rows,
-	sql_fetch_row,
-	sql_free_result,
-	sql_error,
-	sql_finish_query,
-	sql_finish_select_query,
-	sql_affected_rows
+	.name				= "rlm_sql_firebird",
+	.sql_socket_init		= sql_socket_init,
+	.sql_query			= sql_query,
+	.sql_select_query		= sql_select_query,
+	.sql_store_result		= sql_store_result,
+	.sql_num_fields			= sql_num_fields,
+	.sql_num_rows			= sql_num_rows,
+	.sql_affected_rows		= sql_affected_rows,
+	.sql_fetch_row			= sql_fetch_row,
+	.sql_free_result		= sql_free_result,
+	.sql_error			= sql_error,
+	.sql_finish_query		= sql_finish_query,
+	.sql_finish_select_query	= sql_finish_select_query
 };

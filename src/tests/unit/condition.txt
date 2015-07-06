@@ -8,6 +8,9 @@
 #  A bunch of errors, in the order that the error strings
 #  appear in parser.c
 #
+
+
+# All IP address literals should be parsed as prefixes
 condition ("foo\
 data ERROR offset 6 End of string after escape
 
@@ -195,8 +198,12 @@ data &User-Name
 condition <ipaddr>Framed-IP-Address == 127.0.0.1
 data &Framed-IP-Address == 127.0.0.1
 
-condition <cidr>Framed-IP-Address <= 192.168/16
-data <ipv4prefix>&Framed-IP-Address <= 192.168/16
+condition <cidr>Framed-IP-Address <= 192.168.0.0/16
+data <ipv4prefix>&Framed-IP-Address <= 192.168.0.0/16
+
+# All IP address literals should be parsed as prefixes
+condition Framed-IP-Address <= 192.168.0.0/16
+data &Framed-IP-Address <= 192.168.0.0/16
 
 # string attributes must be string
 condition User-Name == "bob"
@@ -206,7 +213,7 @@ condition User-Name == `bob`
 data &User-Name == `bob`
 
 condition User-Name == 'bob'
-data &User-Name == "bob"
+data &User-Name == 'bob'
 
 condition User-Name == bob
 data ERROR offset 13 Must have string as value for attribute
@@ -311,7 +318,7 @@ condition ("foo" == "%{sql: foo}")
 data foo == "%{sql: foo}"
 
 condition ("foo bar" == "%{sql: foo}")
-data 'foo bar' == "%{sql: foo}"
+data "foo bar" == "%{sql: foo}"
 
 condition ("foo" == "bar")
 data false
@@ -321,7 +328,8 @@ data false
 
 #
 #  The RHS gets parsed as a VPT_TYPE_DATA, which is
-#  a double-quoted string
+#  a double-quoted string.  Except that there's no '%'
+#  in it, so it reverts back to a literal.
 #
 condition (&User-Name == "bob")
 data &User-Name == "bob"
@@ -428,8 +436,11 @@ data ERROR offset 0 Attribute comparisons must be of the same data type
 condition <ipaddr>127.0.0.1 == &Filter-Id
 data ERROR offset 0 Attribute comparisons must be of the same data type
 
-condition <ipaddr>&Tmp-Integer64-0 == &Foo-Stuff-Bar
-data ERROR offset 0 Unknown attribute
+condition &Tmp-Integer64-0 == &request:Foo-Stuff-Bar
+data &Tmp-Integer64-0 == &Foo-Stuff-Bar
+
+condition &Tmp-Integer64-0 == &reply:Foo-Stuff-Bar
+data &Tmp-Integer64-0 == &reply:Foo-Stuff-Bar
 
 #
 #  Casting attributes of different size
@@ -451,25 +462,203 @@ condition <ipaddr>&Class == &Framed-IP-Address
 data <ipaddr>&Class == &Framed-IP-Address
 
 #
-#  Tags of zero get parsed and the tag gets ignored
+#  Tags of zero mean restrict to attributes with no tag
 #
 condition &Tunnel-Password:0 == "Hello"
-data &Tunnel-Password == "Hello"
+data &Tunnel-Password:0 == "Hello"
 
 condition &Tunnel-Password:1 == "Hello"
 data &Tunnel-Password:1 == "Hello"
 
 #
+# Single quoted strings are left as-is
+#
+condition &Tunnel-Password:1 == 'Hello'
+data &Tunnel-Password:1 == 'Hello'
+
+#
 #  zero offset into arrays get parsed and ignored
 #
 condition &User-Name[0] == "bob"
-data &User-Name == "bob"
+data &User-Name[0] == "bob"
 
 condition &User-Name[1] == "bob"
 data &User-Name[1] == "bob"
 
+condition &User-Name[n] == "bob"
+data &User-Name[n] == "bob"
+
 condition &Tunnel-Password:1[0] == "Hello"
-data &Tunnel-Password:1 == "Hello"
+data &Tunnel-Password:1[0] == "Hello"
 
 condition &Tunnel-Password:1[3] == "Hello"
 data &Tunnel-Password:1[3] == "Hello"
+
+#
+#  This is allowed for pass2-fixups.  Foo-Bar MAY be an attribute.
+#  If so allow it so that pass2 can fix it up.  Until then,
+#  it's an unknown attribute
+#
+condition &Foo-Bar
+data &Foo-Bar
+
+#  Same types are optimized
+#
+#  FIXME: the tests don't currently run the "pass2" checks.
+#  This test should really be:
+#
+#	data &Acct-Input-Octets > &Session-Timeout
+#
+condition &Acct-Input-Octets > "%{Session-Timeout}"
+data &Acct-Input-Octets > "%{Session-Timeout}"
+
+#  Separate types aren't optimized
+condition &Acct-Input-Octets-64 > "%{Session-Timeout}"
+data &Acct-Input-Octets-64 > "%{Session-Timeout}"
+
+#
+#  Parse OIDs into known attributes, where possible.
+#
+condition &Attr-26.24757.84.9.5.4 == 0x1a99
+data &WiMAX-PFDv2-Src-Port == 6809
+
+#
+#  This OID is known, but the data is malformed.
+#  This is disallowed.  Fix the configuration so that
+#  it works.
+#
+condition &Attr-26.24757.84.9.5.7 == 0x1a99
+data ERROR offset 27 Failed to parse value for attribute
+
+#  This one is really unknown
+condition &Attr-26.24757.84.9.5.15 == 0x1a99
+data &Attr-26.24757.84.9.5.15 == 0x1a99
+
+#
+#  Invalid array references.
+#
+condition &User-Name[a] == 'bob'
+data ERROR offset 11 Array index is not an integer
+
+condition &User-Name == &Filter-Id[a]
+data ERROR offset 25 Array index is not an integer
+
+#
+#  This one is still wrong.
+#
+condition User-Name[a] == 'bob'
+data false
+
+#
+#  Bounds checks...
+#
+condition &User-Name[1001] == 'bob'
+data ERROR offset 11 Invalid array reference '1001' (should be between 0-1000)
+
+condition &User-Name[-1] == 'bob'
+data ERROR offset 11 Invalid array reference '-1' (should be between 0-1000)
+
+#
+#  Tags
+#
+condition &Tunnel-Private-Group-Id:10 == 'test'
+data &Tunnel-Private-Group-Id:10 == 'test'
+
+condition &User-Name:10 == 'test'
+data ERROR offset 10 Attribute 'User-Name' cannot have a tag
+
+#
+#  Tags are always wrong for attributes which aren't tagged.
+#
+condition &User-Name:0 == 'test'
+data ERROR offset 10 Attribute 'User-Name' cannot have a tag
+
+#
+#  Bounds checks...
+#
+condition &Tunnel-Private-Group-Id:32 == 'test'
+data ERROR offset 25 Invalid tag value '32' (should be between 0-31)
+
+condition &request:Tunnel-Private-Group-Id:-1 == 'test'
+data ERROR offset 33 Invalid tag value '-1' (should be between 0-31)
+
+#
+#  Sometimes the attribute/condition parser needs to fallback to bare words
+#
+condition request:Foo == 'request:Foo'
+data true
+
+condition request:Foo+Bar == request:Foo+Bar
+data true
+
+condition &request:Foo+Bar == 'request:Foo+Bar'
+data ERROR offset 12 Unexpected text after attribute name
+
+condition 'request:Foo+d' == &request:Foo+Bar
+data ERROR offset 31 Unexpected text after attribute name
+
+#  Attribute tags are not allowed for unknown attributes
+condition &request:FooBar:0 == &request:FooBar
+data ERROR offset 15 Unexpected text after attribute name
+
+condition &not-a-list:User-Name == &not-a-list:User-Name
+data ERROR offset 1 Invalid list qualifier
+
+# . is a valid dictionary name attribute, so we can't error out in pass1
+condition &not-a-packet.User-Name == &not-a-packet.User-Name
+data &not-a-packet.User-Name == &not-a-packet.User-Name
+
+#
+#  The LHS is a string with ASCII 5C 30 30 30 inside of it.
+#
+condition ('i have scary embedded things\000 inside me' == "i have scary embedded things\000 inside me")
+data false
+
+#
+#  'Unknown' attributes which are defined in the main dictionary
+#  should be resolved to their real names.
+condition &Attr-1 == 'bar'
+data &User-Name == 'bar'
+
+condition &Vendor-11344-Attr-1 == 127.0.0.1
+data &FreeRADIUS-Proxied-To == 127.0.0.1/32
+
+condition &FreeRADIUS-Attr-1 == 127.0.0.1
+data &FreeRADIUS-Proxied-To == 127.0.0.1/32
+
+#
+#  Escape the backslashes correctly
+#  And print them correctly
+#
+condition &User-Name =~ /@|\\/
+data &User-Name =~ /@|\\/
+
+condition &User-Name == '\\'
+data &User-Name == '\\'
+
+condition &User-Name !~ /^foo\nbar$/
+data !&User-Name =~ /^foo\nbar$/
+
+condition &User-Name == "@|\\"
+data &User-Name == "@|\\"
+
+condition &User-Name != "foo\nbar"
+data !&User-Name == "foo\nbar"
+
+condition User-Name =~ /^([^\\]*)\\(.*)$/
+data &User-Name =~ /^([^\\]*)\\(.*)$/
+
+#
+#  We require explicit casts
+#
+condition 192.168.0.0/16 > 192.168.1.2
+data false
+
+condition <ipv4prefix>192.168.0.0/16 > 192.168.1.2
+data true
+
+condition <ipv4prefix>&NAS-IP-Address == 192.168.0.0/24
+data <ipv4prefix>&NAS-IP-Address == 192.168.0.0/24
+
+condition <ipv4prefix>192.168.0.0/24 > &NAS-IP-Address
+data <ipv4prefix>192.168.0.0/24 > &NAS-IP-Address

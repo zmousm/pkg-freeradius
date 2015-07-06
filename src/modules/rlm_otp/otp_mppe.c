@@ -46,13 +46,14 @@ void otp_mppe(REQUEST *request, otp_pwe_t pwe, rlm_otp_t const *opt, char const 
 {
 	VALUE_PAIR *cvp, *rvp;
 
-	cvp = pairfind(request->packet->vps, pwattr[pwe - 1]->attr, pwattr[pwe - 1]->vendor, TAG_ANY);
-	rvp = pairfind(request->packet->vps, pwattr[pwe]->attr, pwattr[pwe]->vendor, TAG_ANY);
+	cvp = pair_find_by_da(request->packet->vps, pwattr[pwe - 1], TAG_ANY);
+	rvp = pair_find_by_da(request->packet->vps, pwattr[pwe], TAG_ANY);
 	if (!cvp || !rvp) {
 		return;
 	}
 
 	switch (pwe) {
+	case PW_NONE:
 	case PWE_PAP:
 	case PWE_CHAP:
 		return;
@@ -156,7 +157,7 @@ void otp_mppe(REQUEST *request, otp_pwe_t pwe, rlm_otp_t const *opt, char const 
 			char auth_octet_string[2 + 2 + (2 * sizeof(auth_md_string))];
 
 			char const *username = request->username->vp_strvalue;
-			int username_len = request->username->length;
+			int username_len = request->username->vp_length;
 
 			/* "Magic server to client signing constant" */
 			uint8_t magic1[39] = {

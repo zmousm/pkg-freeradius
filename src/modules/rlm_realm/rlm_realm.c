@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -25,26 +26,39 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
 
+#include "trustrouter.h"
+
 #define  REALM_FORMAT_PREFIX   0
 #define  REALM_FORMAT_SUFFIX   1
 
-typedef struct realm_config_t {
-	int	format;
-	char	*formatstring;
-	char	*delim;
-	bool	ignore_default;
-	bool	ignore_null;
-} realm_config_t;
+typedef struct rlm_realm_t {
+	int		format;
+	char const	*format_string;
+	char const	*delim;
+	bool		ignore_default;
+	bool		ignore_null;
+
+#ifdef HAVE_TRUST_ROUTER_TR_DH_H
+	char const	*default_community;
+	char const	*rp_realm;
+	char const	*trust_router;
+	uint32_t	tr_port;
+#endif
+} rlm_realm_t;
 
 static CONF_PARSER module_config[] = {
-  { "format", PW_TYPE_STRING_PTR,
-    offsetof(realm_config_t,formatstring), NULL, "suffix" },
-  { "delimiter", PW_TYPE_STRING_PTR,
-    offsetof(realm_config_t,delim), NULL, "@" },
-  { "ignore_default", PW_TYPE_BOOLEAN,
-    offsetof(realm_config_t,ignore_default), NULL, "no" },
-  { "ignore_null", PW_TYPE_BOOLEAN,
-    offsetof(realm_config_t,ignore_null), NULL, "no" },
+  { "format", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_realm_t, format_string), "suffix" },
+  { "delimiter", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_realm_t, delim), "@" },
+  { "ignore_default", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_realm_t, ignore_default), "no" },
+  { "ignore_null", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_realm_t, ignore_null), "no" },
+
+#ifdef HAVE_TRUST_ROUTER_TR_DH_H
+  { "default_community", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_realm_t,default_community),  "none" },
+  { "rp_realm", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_realm_t,rp_realm),  "none" },
+  { "trust_router", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_realm_t,trust_router),  "none" },
+  { "tr_port", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_realm_t,tr_port),  "0" },
+#endif
+
   { NULL, -1, 0, NULL, NULL }    /* end the list */
 };
 
@@ -63,7 +77,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	VALUE_PAIR *vp;
 	REALM *realm;
 
-	struct realm_config_t *inst = instance;
+	struct rlm_realm_t *inst = instance;
 
 	/* initiate returnrealm */
 	*returnrealm = NULL;
@@ -84,7 +98,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 #endif
 	    ) {
 
-		RDEBUG2("Proxy reply, or no User-Name.  Ignoring.");
+		RDEBUG2("Proxy reply, or no User-Name.  Ignoring");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -94,7 +108,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	 */
 
 	if (pairfind(request->packet->vps, PW_REALM, 0, TAG_ANY) != NULL ) {
-		RDEBUG2("Request already has destination realm set.  Ignoring.");
+		RDEBUG2("Request already has destination realm set.  Ignoring");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -105,10 +119,9 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	namebuf = talloc_typed_strdup(request,  request->username->vp_strvalue);
 	username = namebuf;
 
-	switch(inst->format) {
+	switch (inst->format) {
 	case REALM_FORMAT_SUFFIX:
-
-	  /* DEBUG2("  rlm_realm: Checking for suffix after \"%c\"", inst->delim[0]); */
+		RDEBUG2("Checking for suffix after \"%c\"", inst->delim[0]);
 		ptr = strrchr(username, inst->delim[0]);
 		if (ptr) {
 			*ptr = '\0';
@@ -117,15 +130,13 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 		break;
 
 	case REALM_FORMAT_PREFIX:
-
-		/* DEBUG2("  rlm_realm: Checking for prefix before \"%c\"", inst->delim[0]); */
-
+		RDEBUG2("Checking for prefix before \"%c\"", inst->delim[0]);
 		ptr = strchr(username, inst->delim[0]);
 		if (ptr) {
 			*ptr = '\0';
-		     ptr++;
-		     realmname = username;
-		     username = ptr;
+			ptr++;
+			realmname = username;
+			username = ptr;
 		}
 		break;
 
@@ -150,22 +161,30 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 			return RLM_MODULE_NOOP;
 		}
 		RDEBUG2("No '%c' in User-Name = \"%s\", looking up realm NULL",
-		       inst->delim[0], request->username->vp_strvalue);
+			inst->delim[0], request->username->vp_strvalue);
 	}
 
 	/*
 	 *	Allow DEFAULT realms unless told not to.
 	 */
 	realm = realm_find(realmname);
+
+#ifdef HAVE_TRUST_ROUTER_TR_DH_H
+	/*
+	 *	Try querying for the dynamic realm.
+	 */
+	if (!realm && inst->trust_router)
+		realm = tr_query_realm(request, realmname, inst->default_community, inst->rp_realm, inst->trust_router, inst->tr_port);
+#endif
+
 	if (!realm) {
-		RDEBUG2("No such realm \"%s\"",
-			(!realmname) ? "NULL" : realmname);
+		RDEBUG2("No such realm \"%s\"", (!realmname) ? "NULL" : realmname);
 		talloc_free(namebuf);
 		return RLM_MODULE_NOOP;
 	}
-	if( inst->ignore_default &&
-	    (strcmp(realm->name, "DEFAULT")) == 0) {
-		RDEBUG2("Found DEFAULT, but skipping due to config.");
+
+	if (inst->ignore_default && (strcmp(realm->name, "DEFAULT")) == 0) {
+		RDEBUG2("Found DEFAULT, but skipping due to config");
 		talloc_free(namebuf);
 		return RLM_MODULE_NOOP;
 	}
@@ -175,7 +194,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	/*
 	 *	If we've been told to strip the realm off, then do so.
 	 */
-	if (realm->striprealm) {
+	if (realm->strip_realm) {
 		/*
 		 *	Create the Stripped-User-Name attribute, if it
 		 *	doesn't exist.
@@ -223,7 +242,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 		 */
 	case PW_CODE_ACCOUNTING_REQUEST:
 		if (!realm->acct_pool) {
-			RDEBUG2("Accounting realm is LOCAL.");
+			RDEBUG2("Accounting realm is LOCAL");
 			return RLM_MODULE_OK;
 		}
 		break;
@@ -231,9 +250,9 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 		/*
 		 *	Perhaps authentication proxying was turned off.
 		 */
-	case PW_CODE_AUTHENTICATION_REQUEST:
+	case PW_CODE_ACCESS_REQUEST:
 		if (!realm->auth_pool) {
-			RDEBUG2("Authentication realm is LOCAL.");
+			RDEBUG2("Authentication realm is LOCAL");
 			return RLM_MODULE_OK;
 		}
 		break;
@@ -331,25 +350,38 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
-	struct realm_config_t *inst = instance;
+	struct rlm_realm_t *inst = instance;
 
-	if (strcasecmp(inst->formatstring, "suffix") == 0) {
+	if (strcasecmp(inst->format_string, "suffix") == 0) {
 	     inst->format = REALM_FORMAT_SUFFIX;
 
-	} else if (strcasecmp(inst->formatstring, "prefix") == 0) {
+	} else if (strcasecmp(inst->format_string, "prefix") == 0) {
 	     inst->format = REALM_FORMAT_PREFIX;
 
 	} else {
 		cf_log_err_cs(conf, "Invalid value \"%s\" for format",
-			      inst->formatstring);
+			      inst->format_string);
 	     return -1;
 	}
+
+	if (cf_new_escape && (strcmp(inst->delim, "\\\\") == 0)) {
+		/* it's OK */
+	} else
 
 	if (strlen(inst->delim) != 1) {
 		cf_log_err_cs(conf, "Invalid value \"%s\" for delimiter",
 			      inst->delim);
 	     return -1;
 	}
+
+#ifdef HAVE_TRUST_ROUTER_TR_DH_H
+	/* initialize the trust router integration code */
+	if (strcmp(inst->trust_router, "none") != 0) {
+		if (!tr_init()) return -1;
+	} else {
+		rad_const_free(&inst->trust_router);
+	}
+#endif
 
 	return 0;
 }
@@ -429,7 +461,7 @@ static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 	REALM *realm;
 
 	if (pairfind(request->packet->vps, PW_REALM, 0, TAG_ANY) != NULL) {
-		RDEBUG2("Request already has destination realm set.  Ignoring.");
+		RDEBUG2("Request already has destination realm set.  Ignoring");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -444,7 +476,7 @@ static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 	/*
 	 *	The string is too short.
 	 */
-	if (vp->length == 1) return RLM_MODULE_NOOP;
+	if (vp->vp_length == 1) return RLM_MODULE_NOOP;
 
 	/*
 	 *	'1' means "the rest of the string is a realm"
@@ -455,7 +487,7 @@ static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 	if (!realm) return RLM_MODULE_NOTFOUND;
 
 	if (!realm->coa_pool) {
-		RDEBUG2("CoA realm is LOCAL.");
+		RDEBUG2("CoA realm is LOCAL");
 		return RLM_MODULE_OK;
 	}
 
@@ -471,11 +503,12 @@ static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 #endif
 
 /* globally exported name */
+extern module_t rlm_realm;
 module_t rlm_realm = {
 	RLM_MODULE_INIT,
 	"realm",
 	RLM_TYPE_HUP_SAFE,   	/* type */
-	sizeof(struct realm_config_t),
+	sizeof(struct rlm_realm_t),
 	module_config,
 	mod_instantiate,	       	/* instantiation */
 	NULL,				/* detach */

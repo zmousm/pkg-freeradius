@@ -50,6 +50,9 @@ RCSID("$Id$")
 #include <stdlib.h>
 #include "eap.h"
 #include "eap_leap.h"
+
+#include <freeradius-devel/md5.h>
+
 /*
  *   Extract the data from the LEAP packet.
  */
@@ -101,7 +104,6 @@ leap_packet_t *eapleap_extract(REQUEST *request, EAP_DS *eap_ds)
 	default:
 		REDEBUG("Invalid EAP code %d", eap_ds->response->code);
 		return NULL;
-		break;
 	}
 
 	packet = talloc(eap_ds, leap_packet_t);
@@ -166,7 +168,7 @@ static int eapleap_ntpwdhash(uint8_t *out, REQUEST *request, VALUE_PAIR *passwor
 		/*
 		 *	Convert the password to NT's weird Unicode format.
 		 */
-		len = fr_utf8_to_ucs2(ucs2_password, sizeof(ucs2_password), password->vp_strvalue, password->length);
+		len = fr_utf8_to_ucs2(ucs2_password, sizeof(ucs2_password), password->vp_strvalue, password->vp_length);
 		if (len < 0) {
 			REDEBUG("Error converting password to UCS2");
 			return 0;
@@ -179,11 +181,11 @@ static int eapleap_ntpwdhash(uint8_t *out, REQUEST *request, VALUE_PAIR *passwor
 	} else {		/* MUST be NT-Password */
 		uint8_t *p = NULL;
 
-		if (password->length == 32) {
+		if (password->vp_length == 32) {
 			p = talloc_array(password, uint8_t, 16);
-			password->length = fr_hex2bin(p, password->vp_strvalue, 16);
+			password->vp_length = fr_hex2bin(p, 16, password->vp_strvalue, password->vp_length);
 		}
-		if (password->length != 16) {
+		if (password->vp_length != 16) {
 			REDEBUG("Bad NT-Password");
 			return 0;
 		}
@@ -256,7 +258,7 @@ leap_packet_t *eapleap_stage6(REQUEST *request, leap_packet_t *packet, VALUE_PAI
 	if (!reply) return NULL;
 
 	reply->code = PW_EAP_RESPONSE;
-	reply->length = LEAP_HEADER_LEN + 24 + user_name->length;
+	reply->length = LEAP_HEADER_LEN + 24 + user_name->vp_length;
 	reply->count = 24;
 
 	reply->challenge = talloc_array(reply, uint8_t, reply->count);
@@ -268,7 +270,7 @@ leap_packet_t *eapleap_stage6(REQUEST *request, leap_packet_t *packet, VALUE_PAI
 	/*
 	 *	The LEAP packet also contains the user name.
 	 */
-	reply->name = talloc_array(reply, char, user_name->length + 1);
+	reply->name = talloc_array(reply, char, user_name->vp_length + 1);
 	if (!reply->name) {
 		talloc_free(reply);
 		return NULL;
@@ -277,9 +279,9 @@ leap_packet_t *eapleap_stage6(REQUEST *request, leap_packet_t *packet, VALUE_PAI
 	/*
 	 *	Copy the name over, and ensure it's NUL terminated.
 	 */
-	memcpy(reply->name, user_name->vp_strvalue, user_name->length);
-	reply->name[user_name->length] = '\0';
-	reply->name_len = user_name->length;
+	memcpy(reply->name, user_name->vp_strvalue, user_name->vp_length);
+	reply->name[user_name->vp_length] = '\0';
+	reply->name_len = user_name->vp_length;
 
 	/*
 	 *  MPPE hash = ntpwdhash(ntpwdhash(unicode(pw)))
@@ -332,7 +334,7 @@ leap_packet_t *eapleap_stage6(REQUEST *request, leap_packet_t *packet, VALUE_PAI
 	i = 16;
 	rad_tunnel_pwencode(q + 17, &i, request->client->secret, request->packet->vector);
 	pairstrsteal(vp, q);
-	vp->length = 17 + i;
+	vp->vp_length = 17 + i;
 
 	return reply;
 }
@@ -352,7 +354,7 @@ leap_packet_t *eapleap_initiate(REQUEST *request, EAP_DS *eap_ds, VALUE_PAIR *us
 	}
 
 	reply->code = PW_EAP_REQUEST;
-	reply->length = LEAP_HEADER_LEN + 8 + user_name->length;
+	reply->length = LEAP_HEADER_LEN + 8 + user_name->vp_length;
 	reply->count = 8;	/* random challenge */
 
 	reply->challenge = talloc_array(reply, uint8_t, reply->count);
@@ -372,7 +374,7 @@ leap_packet_t *eapleap_initiate(REQUEST *request, EAP_DS *eap_ds, VALUE_PAIR *us
 	/*
 	 *	The LEAP packet also contains the user name.
 	 */
-	reply->name = talloc_array(reply, char, user_name->length + 1);
+	reply->name = talloc_array(reply, char, user_name->vp_length + 1);
 	if (!reply->name) {
 		talloc_free(reply);
 		return NULL;
@@ -381,9 +383,9 @@ leap_packet_t *eapleap_initiate(REQUEST *request, EAP_DS *eap_ds, VALUE_PAIR *us
 	/*
 	 *	Copy the name over, and ensure it's NUL terminated.
 	 */
-	memcpy(reply->name, user_name->vp_strvalue, user_name->length);
-	reply->name[user_name->length] = '\0';
-	reply->name_len = user_name->length;
+	memcpy(reply->name, user_name->vp_strvalue, user_name->vp_length);
+	reply->name[user_name->vp_length] = '\0';
+	reply->name_len = user_name->vp_length;
 
 	return reply;
 }
@@ -435,7 +437,6 @@ int eapleap_compose(REQUEST *request, EAP_DS *eap_ds, leap_packet_t *reply)
 	default:
 		REDEBUG("Internal sanity check failed");
 		return 0;
-		break;
 	}
 
 	/*

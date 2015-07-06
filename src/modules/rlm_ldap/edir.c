@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -31,14 +32,10 @@ RCSID("$Id$")
 #include	<freeradius-devel/radiusd.h>
 #include	<freeradius-devel/rad_assert.h>
 
-#include <ldap.h>
-#include <lber.h>
 #include "ldap.h"
 
 /* NMAS error codes */
 #define NMAS_E_BASE	(-1600)
-
-#define NMAS_SUCCESS	0
 
 #define NMAS_E_FRAG_FAILURE		(NMAS_E_BASE-31)	/* -1631 0xFFFFF9A1 */
 #define NMAS_E_BUFFER_OVERFLOW		(NMAS_E_BASE-33)	/* -1633 0xFFFFF99F */

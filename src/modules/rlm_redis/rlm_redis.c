@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -30,24 +31,17 @@ RCSID("$Id$")
 #include "rlm_redis.h"
 
 static const CONF_PARSER module_config[] = {
-	{ "hostname", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(REDIS_INST, hostname), NULL, NULL},
-	{ "server", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(REDIS_INST, hostname), NULL, NULL},
-	{ "port", PW_TYPE_INTEGER,
-	  offsetof(REDIS_INST, port), NULL, "6379"},
-	{ "database", PW_TYPE_INTEGER,
-	  offsetof(REDIS_INST, database), NULL, "0"},
-	{ "password", PW_TYPE_STRING_PTR | PW_TYPE_SECRET,
-	  offsetof(REDIS_INST, password), NULL, NULL},
+	{ "hostname", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, REDIS_INST, hostname), NULL },
+	{ "server", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, REDIS_INST, hostname), NULL },
+	{ "port", FR_CONF_OFFSET(PW_TYPE_SHORT, REDIS_INST, port), "6379" },
+	{ "database", FR_CONF_OFFSET(PW_TYPE_INTEGER, REDIS_INST, database), "0" },
+	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, REDIS_INST, password), NULL },
 
 	{ NULL, -1, 0, NULL, NULL} /* end the list */
 };
 
-static int mod_conn_delete(UNUSED void *instance, void *handle)
+static int _mod_conn_free(REDISSOCK *dissocket)
 {
-	REDISSOCK *dissocket = handle;
-
 	redisFree(dissocket->conn);
 
 	if (dissocket->reply) {
@@ -55,13 +49,12 @@ static int mod_conn_delete(UNUSED void *instance, void *handle)
 		dissocket->reply = NULL;
 	}
 
-	talloc_free(dissocket);
-	return 1;
+	return 0;
 }
 
-static void *mod_conn_create(void *ctx)
+static void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 {
-	REDIS_INST *inst = ctx;
+	REDIS_INST *inst = instance;
 	REDISSOCK *dissocket = NULL;
 	redisContext *conn;
 	redisReply *reply = NULL;
@@ -75,8 +68,8 @@ static void *mod_conn_create(void *ctx)
 
 		reply = redisCommand(conn, buffer);
 		if (!reply) {
-			ERROR("rlm_redis (%s): Failed to run AUTH",
-			       inst->xlat_name);
+			ERROR("rlm_redis (%s): Failed to run AUTH", inst->xlat_name);
+
 		do_close:
 			if (reply) freeReplyObject(reply);
 			redisFree(conn);
@@ -128,8 +121,9 @@ static void *mod_conn_create(void *ctx)
 		}
 	}
 
-	dissocket = talloc_zero(inst, REDISSOCK);
+	dissocket = talloc_zero(ctx, REDISSOCK);
 	dissocket->conn = conn;
+	talloc_set_destructor(dissocket, _mod_conn_free);
 
 	return dissocket;
 }
@@ -194,7 +188,7 @@ static int mod_detach(void *instance)
 {
 	REDIS_INST *inst = instance;
 
-	fr_connection_pool_delete(inst->pool);
+	fr_connection_pool_free(inst->pool);
 
 	return 0;
 }
@@ -267,16 +261,23 @@ int rlm_redis_finish_query(REDISSOCK *dissocket)
 
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
+	static bool version_done;
+
 	REDIS_INST *inst = instance;
+
+	if (!version_done) {
+		version_done = true;
+
+		INFO("rlm_redis: libhiredis version: %i.%i.%i", HIREDIS_MAJOR, HIREDIS_MINOR, HIREDIS_PATCH);
+	}
 
 	inst->xlat_name = cf_section_name2(conf);
 
-	if (!inst->xlat_name)
-		inst->xlat_name = cf_section_name1(conf);
+	if (!inst->xlat_name) inst->xlat_name = cf_section_name1(conf);
 
 	xlat_register(inst->xlat_name, redis_xlat, NULL, inst); /* FIXME! */
 
-	inst->pool = fr_connection_pool_init(conf, inst, mod_conn_create, NULL, mod_conn_delete, NULL);
+	inst->pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, NULL, NULL);
 	if (!inst->pool) {
 		return -1;
 	}
@@ -287,6 +288,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	return 0;
 }
 
+extern module_t rlm_redis;
 module_t rlm_redis = {
 	RLM_MODULE_INIT,
 	"redis",

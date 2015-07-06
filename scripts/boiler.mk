@@ -75,9 +75,9 @@ endef
 #	delete references to ${BUILD_DIR}/make/include, the "config.mk"
 #	file adds these dependencies automatically.
 #	replace "build/" with "${BUILD_DIR}/" when it's in the middle of a line
-#	
+#
 #	remove sequential duplicate lines
-#	
+#
 #  2) Create empty dependencies from the files
 #
 #	COMMON
@@ -130,7 +130,7 @@ ifeq "${CPP_MAKEDEPEND}" "yes"
 define ADD_OBJECT_RULE
 $${BUILD_DIR}/objs/%.${OBJ_EXT} $${BUILD_DIR}/objs/%.d: ${1} ${JLIBTOOL}
 	${2}
-	$${CPP} $${CPPFLAGS} $${SRC_INCDIRS} $${SRC_DEFS} $$< | sed \
+	$${CPP} $${CPPFLAGS} $$(addprefix -I,$${SRC_INCDIRS}) $${SRC_DEFS} $$< | sed \
 	  -n 's,^\# *[0-9][0-9]* *"\([^"]*\)".*,$$@: \1,p' > $${BUILD_DIR}/objs/$$*.d
 ${FILTER_DEPENDS}
 endef
@@ -175,7 +175,7 @@ endef
 
 # ADD_TARGET_RULE.* - Parameterized "functions" that adds a new target to the
 #   Makefile.  There should be one ADD_TARGET_RULE definition for each
-#   type of target that is used in the build.  
+#   type of target that is used in the build.
 #
 #   New rules can be added by copying one of the existing ones, and
 #   replacing the line after the "mkdir"
@@ -260,27 +260,44 @@ $(patsubst ${CURDIR}/%,%,$(abspath ${1}))
 endef
 
 # COMPILE_C_CMDS - Commands for compiling C source code.
+ifeq "$(CPPCHECK)" ""
 define COMPILE_C_CMDS
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(ECHO) CC $<
-	$(Q)$(strip ${COMPILE.c} -o $@ -c -MD ${CFLAGS} ${SRC_CFLAGS} ${INCDIRS} \
-	    ${SRC_INCDIRS} ${SRC_DEFS} ${DEFS} $<)
+	$(Q)$(strip ${COMPILE.c} -o $@ -c -MD ${CPPFLAGS} ${CFLAGS} ${SRC_CFLAGS} ${INCDIRS} \
+	    $(addprefix -I, ${SRC_INCDIRS}) ${SRC_DEFS} ${DEFS} $<)
 endef
+else
+#
+#  do cppcheck AND compilation, so that we have correct dependencies
+#  Suppress variable scope warnings for now.  They're style, and don't really
+#  affect anything.
+#
+define COMPILE_C_CMDS
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(ECHO) CC $<
+	$(Q)$(strip ${COMPILE.c} -o $@ -c -MD ${CPPFLAGS} ${CFLAGS} ${SRC_CFLAGS} ${INCDIRS} \
+             $(addprefix -I,${SRC_INCDIRS}) ${SRC_DEFS} ${DEFS} $<)
+	$(Q)cppcheck --enable=style -q ${CHECKFLAGS} $(filter -isystem%,${SRC_CFLAGS}) \
+	     $(filter -I%,${SRC_CFLAGS}) $(filter -D%,${SRC_CFLAGS}) ${INCDIRS} \
+	     $(addprefix -I,${SRC_INCDIRS}) ${SRC_DEFS} ${DEFS} --suppress=variableScope --suppress=invalidscanf $<
+endef
+endif
 
 # ANALYZE_C_CMDS - Commands for analyzing C source code with clang.
 define ANALYZE_C_CMDS
 	$(Q)mkdir -p $(dir $@)
 	$(Q)$(ECHO) SCAN $<
-	${Q}$(strip ${ANALYZE.c} --analyze -Xanalyzer -analyzer-output=html -c $< -o $@ ${CFLAGS} \
-	    ${SRC_CFLAGS} ${INCDIRS} ${SRC_INCDIRS} ${SRC_DEFS} ${DEFS}) || (rm -f $@ && false)
+	$(Q)$(strip ${ANALYZE.c} --analyze -Xanalyzer -analyzer-output=html -c $< -o $@ ${CPPFLAGS} \
+	    ${CFLAGS} ${SRC_CFLAGS} ${INCDIRS} $(addprefix -I,${SRC_INCDIRS}) ${SRC_DEFS} ${DEFS}) || (rm -f $@ && false)
 	$(Q)touch $@
 endef
 
 # COMPILE_CXX_CMDS - Commands for compiling C++ source code.
 define COMPILE_CXX_CMDS
 	$(Q)mkdir -p $(dir $@)
-	$(Q)$(strip ${COMPILE.cxx} -o $@ -c -MD ${CXXFLAGS} ${SRC_CXXFLAGS} ${INCDIRS} \
-	    ${SRC_INCDIRS} ${SRC_DEFS} ${DEFS} $<)
+	$(Q)$(strip ${COMPILE.cxx} -o $@ -c -MD ${CPPFLAGS} ${CXXFLAGS} ${SRC_CXXFLAGS} ${INCDIRS} \
+	    $(addprefix -I,${SRC_INCDIRS}) ${SRC_DEFS} ${DEFS} $<)
 endef
 
 # INCLUDE_SUBMAKEFILE - Parameterized "function" that includes a new
@@ -354,6 +371,14 @@ define INCLUDE_SUBMAKEFILE
         $${TGT}_SOURCES :=
         $${TGT}_MAN := $${MAN}
         $${TGT}_SUFFIX := $$(if $$(suffix $${TGT}),$$(suffix $${TGT}),.exe)
+
+        # If it's an EXE, ensure that transitive library linking works.
+        # i.e. we build libfoo.a which in turn requires -lbar.  So, the executable
+        # has to be linked to both libfoo.a and -lbar.
+        ifeq "$${$${TGT}_SUFFIX}" ".exe"
+                $${TGT}_LDLIBS += $$(filter-out %.a %.so %.la,$${$${TGT_PREREQS}_LDLIBS})
+        endif
+
         $${TGT}_BUILD := $$(if $$(suffix $${TGT}),$${BUILD_DIR}/lib,$${BUILD_DIR}/bin)
         $${TGT}_MAKEFILES += ${1}
         $${TGT}_CHECK_HEADERS := $${TGT_CHECK_HEADERS}
@@ -416,13 +441,13 @@ define INCLUDE_SUBMAKEFILE
         $${OBJS}: SRC_CFLAGS := $${SRC_CFLAGS}
         $${OBJS}: SRC_CXXFLAGS := $${SRC_CXXFLAGS}
         $${OBJS}: SRC_DEFS := $$(addprefix -D,$${SRC_DEFS})
-        $${OBJS}: SRC_INCDIRS := $$(addprefix -I,$${SRC_INCDIRS})
+        $${OBJS}: SRC_INCDIRS := $${SRC_INCDIRS}
         $${OBJS}: ${1}
 
         $${PLISTS}: SRC_CFLAGS := $${SRC_CFLAGS}
         $${PLISTS}: SRC_CXXFLAGS := $${SRC_CXXFLAGS}
         $${PLISTS}: SRC_DEFS := $$(addprefix -D,$${SRC_DEFS})
-        $${PLISTS}: SRC_INCDIRS := $$(addprefix -I,$${SRC_INCDIRS})
+        $${PLISTS}: SRC_INCDIRS := $${SRC_INCDIRS}
         $${PLISTS}: ${1}
     endif
     endif
@@ -578,7 +603,7 @@ ECHO = echo
 # Define the "all" target (which simply builds all user-defined targets) as the
 # default goal.
 .PHONY: all
-all: 
+all:
 
 # Add "clean" rules to remove all build-generated files.
 .PHONY: clean
@@ -588,6 +613,10 @@ top_makedir := $(dir $(lastword ${MAKEFILE_LIST}))
 
 -include ${top_makedir}/install.mk
 -include ${top_makedir}/libtool.mk
+
+ifneq "${CPPCHECK}" ""
+CHECKFLAGS := -DCPPCHECK $(filter -isystem%,$(CPPFLAGS) $(CFLAGS)) $(filter -I%,$(CPPFLAGS) $(CFLAGS)) $(filter -D%,$(CPPFLAGS) $(CFLAGS))
+endif
 
 # Include the main user-supplied submakefile. This also recursively includes
 # all other user-supplied submakefiles.
@@ -622,6 +651,6 @@ scan: ${ALL_PLISTS}
 
 .PHONY: clean.scan
 clean.scan:
-	$(Q)rm -f ${ALL_PLISTS}
+	$(Q)rm -rf ${ALL_PLISTS}
 
 clean: clean.scan

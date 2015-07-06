@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -41,6 +42,7 @@ RCSID("$Id$")
  */
 #undef HAVE_CRYPT
 
+DIAG_OFF(disabled-macro-expansion)
 #include <ruby.h>
 
 /*
@@ -68,8 +70,8 @@ typedef struct rlm_ruby_t {
 #endif
 	RLM_RUBY_STRUCT(detach);
 
-	char *filename;
-	char *module_name;
+	char const *filename;
+	char const *module_name;
 	VALUE module;
 
 } rlm_ruby_t;
@@ -84,11 +86,9 @@ typedef struct rlm_ruby_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-	{ "filename", PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED,
-	  offsetof(struct rlm_ruby_t, filename), NULL, NULL},
-	{ "module", PW_TYPE_STRING_PTR,
-	  offsetof(struct rlm_ruby_t, module_name), NULL, "Radiusd"},
-	{ NULL, -1, 0, NULL, NULL} /* end of module_config */
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED, struct rlm_ruby_t, filename), NULL },
+	{ "module", FR_CONF_OFFSET(PW_TYPE_STRING, struct rlm_ruby_t, module_name), "Radiusd" },
+	{ NULL, -1, 0, NULL, NULL } /* end of module_config */
 };
 
 
@@ -203,7 +203,7 @@ static rlm_rcode_t CC_HINT(nonnull (4)) do_ruby(REQUEST *request, unsigned long 
 	char buf[BUF_SIZE]; /* same size as vp_print buffer */
 
 	VALUE_PAIR *vp;
-	VALUE rb_request, rb_result, rb_reply_items, rb_config_items, rbString1, rbString2;
+	VALUE rb_request, rb_result, rb_reply_items, rb_config, rbString1, rbString2;
 
 	int n_tuple;
 	DEBUG("Calling ruby function %s which has id: %lu\n", function_name, func);
@@ -275,12 +275,12 @@ static rlm_rcode_t CC_HINT(nonnull (4)) do_ruby(REQUEST *request, unsigned long 
 		 */
 		if (request) {
 			rb_reply_items = rb_ary_entry(rb_result, 1);
-			rb_config_items = rb_ary_entry(rb_result, 2);
+			rb_config = rb_ary_entry(rb_result, 2);
 
 			add_vp_tuple(request->reply, request, &request->reply->vps,
 				     rb_reply_items, function_name);
-			add_vp_tuple(request, request, &request->config_items,
-				     rb_config_items, function_name);
+			add_vp_tuple(request, request, &request->config,
+				     rb_config, function_name);
 		}
 	} else if (FIXNUM_P(rb_result)) {
 		rcode = FIX2INT(rb_result);
@@ -453,6 +453,7 @@ static int mod_detach(UNUSED void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_ruby;
 module_t rlm_ruby = {
 	RLM_MODULE_INIT,
 	"ruby",

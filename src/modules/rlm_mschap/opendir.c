@@ -37,8 +37,8 @@ USES_APPLE_DEPRECATED_API
 /*
  *	In rlm_mschap.c
  */
-extern void mschap_add_reply(REQUEST *request, VALUE_PAIR** vp, unsigned char ident,
-			     char const* name, char const* value, int len);
+void mschap_add_reply(REQUEST *request, VALUE_PAIR** vp, unsigned char ident,
+		      char const* name, char const* value, int len);
 
 /*
  *	Only used by rlm_mschap.c
@@ -170,7 +170,7 @@ static rlm_rcode_t getUserNodeRef(REQUEST *request, char* inUserName, char **out
 		}
 
 		if (!pUserLocation) {
-			DEBUG2("[mschap] OpenDirectory has no user location.");
+			DEBUG2("[mschap] OpenDirectory has no user location");
 			result = RLM_MODULE_NOOP;
 			break;
 		}
@@ -180,7 +180,7 @@ static rlm_rcode_t getUserNodeRef(REQUEST *request, char* inUserName, char **out
 		 * normal freeradius AD path (i.e. ntlm_auth).
 		 */
 		if (strncmp(pUserLocation, kActiveDirLoc, strlen(kActiveDirLoc)) == 0) {
-			DEBUG2("[mschap] OpenDirectory authentication returning noop.  OD doesn't support MSCHAPv2 for ActiveDirectory users.");
+			DEBUG2("[mschap] OpenDirectory authentication returning noop.  OD doesn't support MSCHAPv2 for ActiveDirectory users");
 			result = RLM_MODULE_NOOP;
 			break;
 		}
@@ -251,12 +251,11 @@ rlm_rcode_t od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR *
 	unsigned int t;
 #endif
 
-	username_string = talloc_array(request, char, usernamepair->length + 1);
+	username_string = talloc_array(request, char, usernamepair->vp_length + 1);
 	if (!username_string)
 		return RLM_MODULE_FAIL;
 
-	strlcpy(username_string, usernamepair->vp_strvalue,
-		usernamepair->length + 1);
+	strlcpy(username_string, usernamepair->vp_strvalue, usernamepair->vp_length + 1);
 
 	status = dsOpenDirService(&dsRef);
 	if (status != eDSNoErr) {
@@ -313,8 +312,9 @@ rlm_rcode_t od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR *
 	memcpy(&(tDataBuff->fBufferData[uiCurr]), shortUserName, uiLen);
 	uiCurr += uiLen;
 #ifndef NDEBUG
-	RDEBUG2("	stepbuf server challenge:\t");
-	for (t = 0; t < challenge->length; t++) {
+	RINDENT();
+	RDEBUG2("Stepbuf server challenge : ");
+	for (t = 0; t < challenge->vp_length; t++) {
 		fprintf(stderr, "%02x", challenge->vp_strvalue[t]);
 	}
 	fprintf(stderr, "\n");
@@ -329,7 +329,7 @@ rlm_rcode_t od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR *
 	uiCurr += uiLen;
 
 #ifndef NDEBUG
-	RDEBUG2("	stepbuf peer challenge:\t\t");
+	RDEBUG2("Stepbuf peer challenge   : ");
 	for (t = 2; t < 18; t++) {
 		fprintf(stderr, "%02x", response->vp_strvalue[t]);
 	}
@@ -345,7 +345,8 @@ rlm_rcode_t od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR *
 	uiCurr += uiLen;
 
 #ifndef NDEBUG
-	RDEBUG2("	stepbuf p24:\t\t");
+	RDEBUG2("Stepbuf p24              : ");
+	REXDENT();
 	for (t = 26; t < 50; t++) {
 		fprintf(stderr, "%02x", response->vp_strvalue[t]);
 	}

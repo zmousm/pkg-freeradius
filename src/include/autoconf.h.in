@@ -3,15 +3,22 @@
 /* Define if building universal (internal helper macro) */
 #undef AC_APPLE_UNIVERSAL_BUILD
 
-/* Define if your processor stores words with the most significant byte first
-   */
-#undef BIG_ENDIAN
-
 /* BSD-Style get*byaddr_r */
 #undef BSDSTYLE
 
 /* style of ctime_r function */
 #undef CTIMERSTYLE
+
+/* Define to 1 to have OpenSSL version check enabled */
+#undef ENABLE_OPENSSL_VERSION_CHECK
+
+/* Define if your processor stores words with the most significant byte first
+   */
+#undef FR_BIG_ENDIAN
+
+/* Define if your processor stores words with the least significant byte first
+   */
+#undef FR_LITTLE_ENDIAN
 
 /* style of gethostbyaddr_r functions */
 #undef GETHOSTBYADDRRSTYLE
@@ -25,8 +32,33 @@
 /* Define to 1 if you have the <arpa/inet.h> header file. */
 #undef HAVE_ARPA_INET_H
 
+/* Define if your compiler supports the __bounded__ attribute (usually OpenBSD
+   gcc). */
+#undef HAVE_ATTRIBUTE_BOUNDED
+
+/* Define to 1 if you have the `bindat' function. */
+#undef HAVE_BINDAT
+
+/* Define if we have a binary safe regular expression library */
+#undef HAVE_BINSAFE_REGEX
+
+/* Define if the compiler supports __builtin_types_compatible_p */
+#undef HAVE_BUILTIN_BSWAP_64
+
+/* Define if the compiler supports __builtin_choose_expr */
+#undef HAVE_BUILTIN_CHOOSE_EXPR
+
+/* Define if the compiler supports __builtin_types_compatible_p */
+#undef HAVE_BUILTIN_TYPES_COMPATIBLE_P
+
+/* Define to 1 if you have the <sys/capability.h> header file. */
+#undef HAVE_CAPABILITY_H
+
 /* Define to 1 if you have the `closefrom' function. */
 #undef HAVE_CLOSEFROM
+
+/* Define to 1 if you have the `collectdclient' library (-lcollectdclient). */
+#undef HAVE_COLLECTDC_H
 
 /* Do we have the crypt function */
 #undef HAVE_CRYPT
@@ -69,6 +101,9 @@
 /* Define to 1 if you have the `getaddrinfo' function. */
 #undef HAVE_GETADDRINFO
 
+/* Define to 1 if you have the getgrnam_r. */
+#undef HAVE_GETGRNAM_R
+
 /* Define to 1 if you have the `getnameinfo' function. */
 #undef HAVE_GETNAMEINFO
 
@@ -80,6 +115,9 @@
 
 /* Define to 1 if you have the `getpeereid' function. */
 #undef HAVE_GETPEEREID
+
+/* Define to 1 if you have the getpwnam_r. */
+#undef HAVE_GETPWNAM_R
 
 /* Define to 1 if you have the `getresuid' function. */
 #undef HAVE_GETRESUID
@@ -102,6 +140,12 @@
 /* Define to 1 if you have the <history.h> header file. */
 #undef HAVE_HISTORY_H
 
+/* Define if the function (or macro) htonll exists. */
+#undef HAVE_HTONLL
+
+/* Define if the function (or macro) htonlll exists. */
+#undef HAVE_HTONLLL
+
 /* define if you have IN6_PKTINFO (Linux) */
 #undef HAVE_IN6_PKTINFO
 
@@ -122,6 +166,12 @@
 
 /* define if you have IP_PKTINFO (Linux) */
 #undef HAVE_IP_PKTINFO
+
+/* Define to 1 if you have the `kqueue' function. */
+#undef HAVE_KQUEUE
+
+/* Define to 1 if you have the `cap' library (-lcap). */
+#undef HAVE_LIBCAP
 
 /* Define to 1 if you have the `crypto' library (-lcrypto). */
 #undef HAVE_LIBCRYPTO
@@ -150,14 +200,23 @@
 /* Define to 1 if you have the `ws2_32' library (-lws2_32). */
 #undef HAVE_LIBWS2_32
 
+/* Define to 1 if you have the <limits.h> header file. */
+#undef HAVE_LIMITS_H
+
 /* Define to 1 if you have the `localtime_r' function. */
 #undef HAVE_LOCALTIME_R
 
 /* Define to 1 if you have the <malloc.h> header file. */
 #undef HAVE_MALLOC_H
 
+/* Define to 1 if you have the `mallopt' function. */
+#undef HAVE_MALLOPT
+
 /* Define to 1 if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H
+
+/* Define to 1 if you have the `mkdirat' function. */
+#undef HAVE_MKDIRAT
 
 /* Define to 1 if you have the <ndir.h> header file, and it defines `DIR'. */
 #undef HAVE_NDIR_H
@@ -170,6 +229,9 @@
 
 /* Define to 1 if you have the <net/if.h> header file. */
 #undef HAVE_NET_IF_H
+
+/* Define to 1 if you have the `openat' function. */
+#undef HAVE_OPENAT
 
 /* Define to 1 if you have the <openssl/crypto.h> header file. */
 #undef HAVE_OPENSSL_CRYPTO_H
@@ -198,17 +260,23 @@
 /* Define to 1 if you have the <openssl/ssl.h> header file. */
 #undef HAVE_OPENSSL_SSL_H
 
-/* Define to 1 if you have the function pcap_dump_fopen. */
+/* Define to 1 if you have the `pcap_activate' function. */
+#undef HAVE_PCAP_ACTIVATE
+
+/* Define to 1 if you have the `pcap_create' function. */
+#undef HAVE_PCAP_CREATE
+
+/* Define to 1 if you have the `pcap_dump_fopen' function. */
 #undef HAVE_PCAP_DUMP_FOPEN
 
-/* Define to 1 if you have the function pcap_fopen_offline. */
+/* Define to 1 if you have the `pcap_fopen_offline' function. */
 #undef HAVE_PCAP_FOPEN_OFFLINE
 
 /* Define to 1 if you have the <pcap.h> header file. */
 #undef HAVE_PCAP_H
 
-/* define this if we have the <pcreposix.h> header file */
-#undef HAVE_PCREPOSIX_H
+/* define this if we have libpcre */
+#undef HAVE_PCRE
 
 /* Define to 1 if you have the <prot.h> header file. */
 #undef HAVE_PROT_H
@@ -234,8 +302,14 @@
 /* Define to 1 if you have the <readline/readline.h> header file. */
 #undef HAVE_READLINE_READLINE_H
 
-/* define if we have any regex */
-#undef HAVE_REGEX_H
+/* Define if we have any regular expression library */
+#undef HAVE_REGEX
+
+/* Define to 1 if you have the `regncomp' function. */
+#undef HAVE_REGNCOMP
+
+/* Define to 1 if you have the `regnexec' function. */
+#undef HAVE_REGNEXEC
 
 /* define this if we have REG_EXTENDED (from <regex.h>) */
 #undef HAVE_REG_EXTENDED
@@ -276,8 +350,14 @@
 /* Define to 1 if you have the `sigprocmask' function. */
 #undef HAVE_SIGPROCMASK
 
+/* Define if the type sig_t is defined by signal.h */
+#undef HAVE_SIG_T
+
 /* Define to 1 if you have the `snprintf' function. */
 #undef HAVE_SNPRINTF
+
+/* Define to 1 if you have the <stdbool.h> header file. */
+#undef HAVE_STDBOOL_H
 
 /* Define to 1 if you have the <stddef.h> header file. */
 #undef HAVE_STDDEF_H
@@ -334,6 +414,9 @@
    */
 #undef HAVE_SYS_DIR_H
 
+/* Define to 1 if you have the <sys/event.h> header file. */
+#undef HAVE_SYS_EVENT_H
+
 /* Define to 1 if you have the <sys/fcntl.h> header file. */
 #undef HAVE_SYS_FCNTL_H
 
@@ -343,6 +426,9 @@
 
 /* Define to 1 if you have the <sys/prctl.h> header file. */
 #undef HAVE_SYS_PRCTL_H
+
+/* Define to 1 if you have the <sys/ptrace.h> header file. */
+#undef HAVE_SYS_PTRACE_H
 
 /* Define to 1 if you have the <sys/resource.h> header file. */
 #undef HAVE_SYS_RESOURCE_H
@@ -371,14 +457,17 @@
 /* Define to 1 if you have the <sys/wait.h> header file. */
 #undef HAVE_SYS_WAIT_H
 
-/* Define if the compiler supports __thread */
-#undef HAVE_THREAD_TLS
+/* Define to 1 if you have the function talloc_set_memlimit. */
+#undef HAVE_TALLOC_SET_MEMLIMIT
 
 /* 128 bit unsigned integer */
 #undef HAVE_UINT128_T
 
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
+
+/* Define to 1 if you have the `unlinkat' function. */
+#undef HAVE_UNLINKAT
 
 /* Define to 1 if you have the <utime.h> header file. */
 #undef HAVE_UTIME_H
@@ -397,10 +486,6 @@
 
 /* compiler specific 128 bit unsigned integer */
 #undef HAVE___UINT128_T
-
-/* Define if your processor stores words with the least significant byte first
-   */
-#undef LITTLE_ENDIAN
 
 /* define if you have OSFC2 authentication */
 #undef OSFC2
@@ -452,6 +537,9 @@
 
 /* Define to 1 if you can safely include both <sys/time.h> and <time.h>. */
 #undef TIME_WITH_SYS_TIME
+
+/* Define if the compiler supports a thread local storage class */
+#undef TLS_STORAGE_CLASS
 
 /* Enable extensions on AIX 3, Interix.  */
 #ifndef _ALL_SOURCE
@@ -529,6 +617,9 @@
 /* Define to 1 if you need to in order for `stat' and other things to work. */
 #undef _POSIX_SOURCE
 
+/* Force OSX >= 10.7 Lion to use RFC2292 IPv6 socket options */
+#undef __APPLE_USE_RFC_3542
+
 /* Define to empty if `const' does not conform to ANSI C. */
 #undef const
 
@@ -540,9 +631,6 @@
 
 /* Define to `int' if <sys/types.h> does not define. */
 #undef pid_t
-
-/* signal action callback function */
-#undef sig_t
 
 /* Define to `unsigned int' if <sys/types.h> does not define. */
 #undef size_t

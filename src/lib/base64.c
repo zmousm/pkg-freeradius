@@ -27,9 +27,6 @@ RCSID("$Id$")
 #include <freeradius-devel/libradius.h>
 #include <freeradius-devel/base64.h>
 
-/* Get UCHAR_MAX from stdint.h, in src/include/missing.h */
-#include <limits.h>
-
 #define us(x) (uint8_t) x
 
 /** Base 64 encode binary data
@@ -45,8 +42,7 @@ RCSID("$Id$")
  */
 size_t fr_base64_encode(char *out, size_t outlen, uint8_t const *in, size_t inlen)
 {
-	static char const b64str[64] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm"
-				       "nopqrstuvwxyz0123456789+/";
+	static char const b64str[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 	char *p = out;
 	if (outlen < (FR_BASE64_ENC_LENGTH(inlen) + 1)) {
@@ -231,13 +227,13 @@ int fr_isbase64(char c)
  *
  * Decode base64 encoded input array IN of length INLEN to output array OUT that
  * can hold *OUTLEN bytes.  Return true if decoding was successful, i.e.
- * if the input was valid base64 data, false otherwise.
+ * if the input was valid base64 data, -1 otherwise.
  *
  * If *OUTLEN is too small, as many bytes as possible will be written to OUT.
  * On return, *OUTLEN holds the length of decoded bytes in OUT.
  *
  * Note that as soon as any non-alphabet characters are encountered,
- * decoding is stopped and false is returned.
+ * decoding is stopped and -1 is returned.
  *
  * This means that, when applicable, you must remove any line terminators
  * that is part of the data stream before calling this function.

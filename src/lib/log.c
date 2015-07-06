@@ -6,7 +6,8 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   License as published by the Free Software Foundation; either
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version. either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -197,41 +198,4 @@ void fr_perror(char const *fmt, ...)
 	}
 
 	va_end(ap);
-}
-
-bool fr_assert_cond(char const *file, int line, char const *expr, bool cond)
-{
-	if (!cond) {
-		fr_perror("SOFT ASSERT FAILED %s[%u]: %s: ", file, line, expr);
-#if !defined(NDEBUG) && defined(SIGUSR1)
-		fr_fault(SIGUSR1);
-#endif
-		return false;
-	}
-
-	return cond;
-}
-
-void NEVER_RETURNS _fr_exit(char const *file, int line, int status)
-{
-#ifndef NDEBUG
-	fr_perror("EXIT CALLED %s[%u]: %i", file, line, status);
-#endif
-	fflush(stderr);
-
-	fr_debug_break();	/* If running under GDB we'll break here */
-
-	exit(status);
-}
-
-void NEVER_RETURNS _fr_exit_now(char const *file, int line, int status)
-{
-#ifndef NDEBUG
-	fr_perror("_EXIT CALLED %s[%u]: %i", file, line, status);
-#endif
-	fflush(stderr);
-
-	fr_debug_break();	/* If running under GDB we'll break here */
-
-	_exit(status);
 }

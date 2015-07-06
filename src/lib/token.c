@@ -6,7 +6,8 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   License as published by the Free Software Foundation; either
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version. either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -53,6 +54,105 @@ const FR_NAME_NUMBER fr_tokens[] = {
 	{ NULL, 0,		},
 };
 
+const bool fr_assignment_op[] = {
+	false,		/* invalid token */
+	false,		/* end of line */
+	false,		/* { */
+	false,		/* } */
+	false,		/* ( */
+	false,		/* ) 		 5 */
+	false,		/* , */
+	false,		/* ; */
+
+	true,		/* ++ */
+	true,		/* += */
+	true,		/* -=  		10 */
+	true,		/* := */
+	true,		/* = */
+	false,		/* != */
+	true,		/* >= */
+	true,		/* > 		15 */
+	true,		/* <= */
+	true,		/* < */
+	false,		/* =~ */
+	false,		/* !~ */
+	false,		/* =* 		20 */
+	true,		/* !* */
+	false,		/* == */
+	false,				/* # */
+	false,		/* bare word */
+	false,		/* "foo" 	25 */
+	false,		/* 'foo' */
+	false,		/* `foo` */
+	false
+};
+
+const bool fr_equality_op[] = {
+	false,		/* invalid token */
+	false,		/* end of line */
+	false,		/* { */
+	false,		/* } */
+	false,		/* ( */
+	false,		/* ) 		 5 */
+	false,		/* , */
+	false,		/* ; */
+
+	false,		/* ++ */
+	false,		/* += */
+	false,		/* -=  		10 */
+	false,		/* := */
+	false,		/* = */
+	true,		/* != */
+	true,		/* >= */
+	true,		/* > 		15 */
+	true,		/* <= */
+	true,		/* < */
+	true,		/* =~ */
+	true,		/* !~ */
+	true,		/* =* 		20 */
+	true,		/* !* */
+	true,		/* == */
+	false,				/* # */
+	false,		/* bare word */
+	false,		/* "foo" 	25 */
+	false,		/* 'foo' */
+	false,		/* `foo` */
+	false
+};
+
+const bool fr_str_tok[] = {
+	false,		/* invalid token */
+	false,		/* end of line */
+	false,		/* { */
+	false,		/* } */
+	false,		/* ( */
+	false,		/* ) 		 5 */
+	false,		/* , */
+	false,		/* ; */
+
+	false,		/* ++ */
+	false,		/* += */
+	false,		/* -=  		10 */
+	false,		/* := */
+	false,		/* = */
+	false,		/* != */
+	false,		/* >= */
+	false,		/* > 		15 */
+	false,		/* <= */
+	false,		/* < */
+	false,		/* =~ */
+	false,		/* !~ */
+	false,		/* =* 		20 */
+	false,		/* !* */
+	false,		/* == */
+	false,				/* # */
+	true,		/* bare word */
+	true,		/* "foo" 	25 */
+	true,		/* 'foo' */
+	true,		/* `foo` */
+	false
+};
+
 /*
  *	This works only as long as special tokens
  *	are max. 2 characters, but it's fast.
@@ -68,7 +168,7 @@ const FR_NAME_NUMBER fr_tokens[] = {
  *	At end-of-line, buf[0] is set to '\0'.
  *	Returns 0 or special token value.
  */
-static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, int tok,
+static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, bool tok,
 			 FR_NAME_NUMBER const *tokenlist, bool unescape)
 {
 	char			*s;
@@ -120,7 +220,7 @@ static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, int tok,
 		if (unescape && quote && (*p == '\\')) {
 			p++;
 
-			switch(*p) {
+			switch (*p) {
 				case 'r':
 					*s++ = '\r';
 					break;
@@ -146,6 +246,24 @@ static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, int tok,
 			p++;
 			continue;
 		}
+
+		/*
+		 *	Deal with quotes and escapes, but don't mash
+		 *	escaped characters into their non-escaped
+		 *	equivalent.
+		 */
+		if (!unescape && quote && (*p == '\\')) {
+			if (!p[1]) continue; /* force end of string */
+
+			if (p[1] == quote) { /* convert '\'' --> ' */
+				p++;
+			} else {
+				*(s++) = *(p++);
+			}
+			*(s++) = *(p++);
+			continue;
+		}
+
 		if (quote && (*p == quote)) {
 			end = true;
 			p++;
@@ -161,6 +279,7 @@ static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, int tok,
 				if (t->name != NULL)
 					break;
 			}
+			if (*p == ',') break; /* hack */
 		}
 		*s++ = *p++;
 	}
@@ -168,7 +287,7 @@ static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, int tok,
 
 	if (quote && !end) {
 		fr_strerror_printf("Unterminated string");
-		return T_OP_INVALID;
+		return T_INVALID;
 	}
 
 	/* Skip whitespace again. */
@@ -179,20 +298,20 @@ static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, int tok,
 	/* we got SOME form of output string, even if it is empty */
 	switch (quote) {
 	default:
-	  rcode = T_BARE_WORD;
-	  break;
+		rcode = T_BARE_WORD;
+		break;
 
 	case '\'':
-	  rcode = T_SINGLE_QUOTED_STRING;
-	  break;
+		rcode = T_SINGLE_QUOTED_STRING;
+		break;
 
 	case '"':
-	  rcode = T_DOUBLE_QUOTED_STRING;
-	  break;
+		rcode = T_DOUBLE_QUOTED_STRING;
+		break;
 
 	case '`':
-	  rcode = T_BACK_QUOTED_STRING;
-	  break;
+		rcode = T_BACK_QUOTED_STRING;
+		break;
 	}
 
 	return rcode;
@@ -204,7 +323,7 @@ static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, int tok,
  */
 int getword(char const **ptr, char *buf, int buflen, bool unescape)
 {
-	return getthing(ptr, buf, buflen, 0, fr_tokens, unescape) == T_EOL ? 0 : 1;
+	return getthing(ptr, buf, buflen, false, fr_tokens, unescape) == T_EOL ? 0 : 1;
 }
 
 
@@ -213,7 +332,23 @@ int getword(char const **ptr, char *buf, int buflen, bool unescape)
  */
 FR_TOKEN gettoken(char const **ptr, char *buf, int buflen, bool unescape)
 {
-	return getthing(ptr, buf, buflen, 1, fr_tokens, unescape);
+	return getthing(ptr, buf, buflen, true, fr_tokens, unescape);
+}
+
+/*
+ *	Expect an operator.
+ */
+FR_TOKEN getop(char const **ptr)
+{
+	char op[3];
+	FR_TOKEN rcode;
+
+	rcode = getthing(ptr, op, sizeof(op), true, fr_tokens, false);
+	if (!fr_assignment_op[rcode] && !fr_equality_op[rcode]) {
+		fr_strerror_printf("Expected operator");
+		return T_INVALID;
+	}
+	return rcode;
 }
 
 /*
@@ -223,7 +358,7 @@ FR_TOKEN getstring(char const **ptr, char *buf, int buflen, bool unescape)
 {
 	char const *p;
 
-	if (!ptr || !*ptr || !buf) return T_OP_INVALID;
+	if (!ptr || !*ptr || !buf) return T_INVALID;
 
 	p = *ptr;
 

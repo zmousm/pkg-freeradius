@@ -18,13 +18,15 @@ unsigned int sha1_data_problems = 0;
 
 /** Calculate HMAC using SHA1
  *
+ * @param digest Caller digest to be filled in.
  * @param text Pointer to data stream.
  * @param text_len length of data stream.
  * @param key Pointer to authentication key.
  * @param key_len Length of authentication key.
- * @param digest Caller digest to be filled in.
+
  */
-void fr_hmac_sha1(uint8_t const *text, size_t text_len, uint8_t const *key, size_t key_len, uint8_t *digest)
+void fr_hmac_sha1(uint8_t digest[SHA1_DIGEST_LENGTH], uint8_t const *text, size_t text_len,
+		  uint8_t const *key, size_t key_len)
 {
 	fr_SHA1_CTX context;
 	uint8_t k_ipad[65];    /* inner padding - key XORd with ipad */
@@ -36,9 +38,9 @@ void fr_hmac_sha1(uint8_t const *text, size_t text_len, uint8_t const *key, size
 
 		fr_SHA1_CTX      tctx;
 
-		fr_SHA1Init(&tctx);
-		fr_SHA1Update(&tctx, key, key_len);
-		fr_SHA1Final(tk, &tctx);
+		fr_sha1_init(&tctx);
+		fr_sha1_update(&tctx, key, key_len);
+		fr_sha1_final(tk, &tctx);
 
 		key = tk;
 		key_len = 20;
@@ -96,10 +98,10 @@ void fr_hmac_sha1(uint8_t const *text, size_t text_len, uint8_t const *key, size
 	 */
 
 	/* start out by storing key in pads */
-	memset( k_ipad, 0, sizeof(k_ipad));
-	memset( k_opad, 0, sizeof(k_opad));
-	memcpy( k_ipad, key, key_len);
-	memcpy( k_opad, key, key_len);
+	memset(k_ipad, 0, sizeof(k_ipad));
+	memset(k_opad, 0, sizeof(k_opad));
+	memcpy(k_ipad, key, key_len);
+	memcpy(k_opad, key, key_len);
 
 	/* XOR key with ipad and opad values */
 	for (i = 0; i < 64; i++) {
@@ -109,25 +111,21 @@ void fr_hmac_sha1(uint8_t const *text, size_t text_len, uint8_t const *key, size
 	/*
 	 * perform inner SHA1
 	 */
-	fr_SHA1Init(&context);		   /* init context for 1st
-					      * pass */
-	fr_SHA1Update(&context, k_ipad, 64);      /* start with inner pad */
-	fr_SHA1Update(&context, text, text_len); /* then text of datagram */
-	fr_SHA1Final(digest, &context);	  /* finish up 1st pass */
+	fr_sha1_init(&context);				/* init context for 1st pass */
+	fr_sha1_update(&context, k_ipad, 64);		/* start with inner pad */
+	fr_sha1_update(&context, text, text_len);	/* then text of datagram */
+	fr_sha1_final(digest, &context);		/* finish up 1st pass */
 	/*
-	 * perform outer MD5
+	 * perform outer SHA1
 	 */
-	fr_SHA1Init(&context);		   /* init context for 2nd
-					      * pass */
-	fr_SHA1Update(&context, k_opad, 64);     /* start with outer pad */
-	fr_SHA1Update(&context, digest, 20);     /* then results of 1st
-					      * hash */
-	fr_SHA1Final(digest, &context);	  /* finish up 2nd pass */
+	fr_sha1_init(&context);				/* init context for 2nd pass */
+	fr_sha1_update(&context, k_opad, 64);		/* start with outer pad */
+	fr_sha1_update(&context, digest, 20);		/* then results of 1st hash */
+	fr_sha1_final(digest, &context);		/* finish up 2nd pass */
 
 #ifdef HMAC_SHA1_DATA_PROBLEMS
-	if(sha1_data_problems)
-	{
-	  int j;
+	if (sha1_data_problems) {
+		int j;
 
 		printf("\nhmac-sha1 mac(20): ");
 		j=0;
@@ -186,7 +184,7 @@ int main(int argc, char **argv)
   text = argv[2];
   text_len = strlen(text);
 
-  fr_hmac_sha1(text, text_len, key, key_len, digest);
+  fr_hmac_sha1(digest, text, text_len, key, key_len);
 
   for (i = 0; i < 20; i++) {
     printf("%02x", digest[i]);

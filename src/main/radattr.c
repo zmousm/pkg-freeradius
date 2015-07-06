@@ -23,7 +23,11 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/libradius.h>
+
+typedef struct REQUEST REQUEST;
+
 #include <freeradius-devel/parser.h>
+#include <freeradius-devel/xlat.h>
 #include <freeradius-devel/conf.h>
 #include <freeradius-devel/radpaths.h>
 
@@ -35,18 +39,10 @@ RCSID("$Id$")
 
 #include <assert.h>
 
-typedef struct REQUEST REQUEST;
-
 #include <freeradius-devel/log.h>
-log_debug_t debug_flag = 0;
+extern log_lvl_t debug_flag;
+log_lvl_t debug_flag = 0;
 
-/**********************************************************************
- *	Hacks for xlat
- */
-typedef size_t (*RADIUS_ESCAPE_STRING)(REQUEST *, char *out, size_t outlen, char const *in, void *arg);
-typedef ssize_t (*RAD_XLAT_FUNC)(void *instance, REQUEST *, char const *, char *, size_t);
-int            xlat_register(char const *module, RAD_XLAT_FUNC func, RADIUS_ESCAPE_STRING escape,
-			     void *instance);
 #include <sys/wait.h>
 pid_t rad_fork(void);
 pid_t rad_waitpid(pid_t pid, int *status);
@@ -74,7 +70,7 @@ static ssize_t xlat_test(UNUSED void *instance, UNUSED REQUEST *request,
 
 static int encode_tlv(char *buffer, uint8_t *output, size_t outlen);
 
-static char const *hextab = "0123456789abcdef";
+static char const hextab[] = "0123456789abcdef";
 
 static int encode_data_string(char *buffer,
 			      uint8_t *output, size_t outlen)
@@ -658,7 +654,7 @@ static void process_file(const char *root_dir, char const *filename)
 
 		if (strncmp(p, "data ", 5) == 0) {
 			if (strcmp(p + 5, output) != 0) {
-				fprintf(stderr, "Mismatch in line %d of %s, got: %s expected: %s\n",
+				fprintf(stderr, "Mismatch at line %d of %s\n\tgot      : %s\n\texpected : %s\n",
 					lineno, directory, output, p + 5);
 				exit(1);
 			}
@@ -716,8 +712,7 @@ static void process_file(const char *root_dir, char const *filename)
 			my_len = 0;
 			while (len > 0) {
 				vp = NULL;
-				my_len = rad_attr2vp(NULL, NULL, NULL,
-						     attr, len, &vp);
+				my_len = rad_attr2vp(NULL, NULL, NULL, NULL, attr, len, &vp);
 				if (my_len < 0) {
 					pairfree(&head);
 					break;
@@ -822,6 +817,8 @@ int main(int argc, char *argv[])
 	char const *radius_dir = RADDBDIR;
 	char const *dict_dir = DICTDIR;
 
+	cf_new_escape = true;	/* fix the tests */
+
 #ifndef NDEBUG
 	if (fr_fault_setup(getenv("PANIC_ACTION"), argv[0]) < 0) {
 		fr_perror("radattr");
@@ -829,7 +826,7 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-	while ((c = getopt(argc, argv, "d:D:xM")) != EOF) switch(c) {
+	while ((c = getopt(argc, argv, "d:D:xM")) != EOF) switch (c) {
 		case 'd':
 			radius_dir = optarg;
 			break;

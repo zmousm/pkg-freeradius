@@ -41,11 +41,9 @@ typedef struct rlm_eap_gtc_t {
 } rlm_eap_gtc_t;
 
 static CONF_PARSER module_config[] = {
-	{ "challenge", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_gtc_t, challenge), NULL, "Password: " },
+	{ "challenge", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_gtc_t, challenge), "Password: " },
 
-	{ "auth_type", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_gtc_t, auth_type_name), NULL, "PAP" },
+	{ "auth_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_gtc_t, auth_type_name), "PAP" },
 
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
@@ -55,7 +53,7 @@ static CONF_PARSER module_config[] = {
 /*
  *	Attach the module.
  */
-static int gtc_attach(CONF_SECTION *cs, void **instance)
+static int mod_instantiate(CONF_SECTION *cs, void **instance)
 {
 	rlm_eap_gtc_t	*inst;
 	DICT_VALUE	*dval;
@@ -88,7 +86,7 @@ static int gtc_attach(CONF_SECTION *cs, void **instance)
 /*
  *	Initiate the EAP-GTC session by sending a challenge to the peer.
  */
-static int gtc_initiate(void *instance, eap_handler_t *handler)
+static int mod_session_init(void *instance, eap_handler_t *handler)
 {
 	char challenge_str[1024];
 	int length;
@@ -122,7 +120,7 @@ static int gtc_initiate(void *instance, eap_handler_t *handler)
 	 *	stored in 'handler->eap_ds', which will be given back
 	 *	to us...
 	 */
-	handler->stage = AUTHENTICATE;
+	handler->stage = PROCESS;
 
 	return 1;
 }
@@ -131,7 +129,7 @@ static int gtc_initiate(void *instance, eap_handler_t *handler)
 /*
  *	Authenticate a previously sent challenge.
  */
-static int CC_HINT(nonnull) mod_authenticate(void *instance, eap_handler_t *handler)
+static int CC_HINT(nonnull) mod_process(void *instance, eap_handler_t *handler)
 {
 	VALUE_PAIR *vp;
 	EAP_DS *eap_ds = handler->eap_ds;
@@ -141,7 +139,7 @@ static int CC_HINT(nonnull) mod_authenticate(void *instance, eap_handler_t *hand
 	/*
 	 *	Get the Cleartext-Password for this user.
 	 */
-	rad_assert(handler->stage == AUTHENTICATE);
+	rad_assert(handler->stage == PROCESS);
 
 	/*
 	 *	Sanity check the response.  We need at least one byte
@@ -174,21 +172,21 @@ static int CC_HINT(nonnull) mod_authenticate(void *instance, eap_handler_t *hand
 		/*
 		 *	For now, do cleartext password authentication.
 		 */
-		vp = pairfind(request->config_items, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
+		vp = pairfind(request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
 		if (!vp) {
-			REDEBUG2("Cleartext-Password is required for authentication.");
+			REDEBUG2("Cleartext-Password is required for authentication");
 			eap_ds->request->code = PW_EAP_FAILURE;
 			return 0;
 		}
 
-		if (eap_ds->response->type.length != vp->length) {
-			REDEBUG2("Passwords are of different length. %u %u", (unsigned) eap_ds->response->type.length, (unsigned) vp->length);
+		if (eap_ds->response->type.length != vp->vp_length) {
+			REDEBUG2("Passwords are of different length. %u %u", (unsigned) eap_ds->response->type.length, (unsigned) vp->vp_length);
 			eap_ds->request->code = PW_EAP_FAILURE;
 			return 0;
 		}
 
 		if (memcmp(eap_ds->response->type.data,
-			   vp->vp_strvalue, vp->length) != 0) {
+			   vp->vp_strvalue, vp->vp_length) != 0) {
 			REDEBUG2("Passwords are different");
 			eap_ds->request->code = PW_EAP_FAILURE;
 			return 0;
@@ -212,11 +210,11 @@ static int CC_HINT(nonnull) mod_authenticate(void *instance, eap_handler_t *hand
 		if (!vp) {
 			return 0;
 		}
-		vp->length = eap_ds->response->type.length;
-		vp->vp_strvalue = p = talloc_array(vp, char, vp->length + 1);
+		vp->vp_length = eap_ds->response->type.length;
+		vp->vp_strvalue = p = talloc_array(vp, char, vp->vp_length + 1);
 		vp->type = VT_DATA;
-		memcpy(p, eap_ds->response->type.data, vp->length);
-		p[vp->length] = 0;
+		memcpy(p, eap_ds->response->type.data, vp->vp_length);
+		p[vp->vp_length] = 0;
 
 		/*
 		 *	Add the password to the request, and allow
@@ -249,11 +247,10 @@ static int CC_HINT(nonnull) mod_authenticate(void *instance, eap_handler_t *hand
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
+extern rlm_eap_module_t rlm_eap_gtc;
 rlm_eap_module_t rlm_eap_gtc = {
-	"eap_gtc",
-	gtc_attach,	      		/* attach */
-	gtc_initiate,			/* Start the initial request */
-	NULL,				/* authorization */
-	mod_authenticate,		/* authentication */
-	NULL     			/* detach */
+	.name		= "eap_gtc",
+	.instantiate	= mod_instantiate,	/* Create new submodule instance */
+	.session_init	= mod_session_init,	/* Initialise a new EAP session */
+	.process	= mod_process		/* Process next round of EAP method */
 };

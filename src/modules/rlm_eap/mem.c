@@ -98,6 +98,10 @@ static int _eap_handler_free(eap_handler_t *handler)
 	if (inst->handler_tree) {
 		rbtree_deletebydata(inst->handler_tree, handler);
 	}
+	/*
+	 *	Free operations need to be synchronised too.
+	 */
+	talloc_free(handler);
 	PTHREAD_MUTEX_UNLOCK(&(inst->handler_mutex));
 
 	return 0;
@@ -111,15 +115,25 @@ eap_handler_t *eap_handler_alloc(rlm_eap_t *inst)
 	eap_handler_t	*handler;
 
 	PTHREAD_MUTEX_LOCK(&(inst->handler_mutex));
-	handler = talloc_zero(inst, eap_handler_t);
-
-	if (inst->handler_tree) {
-		rbtree_insert(inst->handler_tree, handler);
+	handler = talloc_zero(NULL, eap_handler_t);
+	if (handler == NULL) {
+		PTHREAD_MUTEX_UNLOCK(&(inst->handler_mutex));
+		ERROR("Failed allocating handler");
+		return NULL;
 	}
-
+	if (inst->handler_tree) {
+		if (!rbtree_insert(inst->handler_tree, handler)) {
+			PTHREAD_MUTEX_UNLOCK(&(inst->handler_mutex));
+			ERROR("Failed inserting EAP handler into handler tree");
+			talloc_free(handler);
+			return NULL;
+		}
+	}
 	handler->inst_holder = inst;
-	talloc_set_destructor(handler, _eap_handler_free);
 	PTHREAD_MUTEX_UNLOCK(&(inst->handler_mutex));
+
+	/* Doesn't need to be inside the critical region */
+	talloc_set_destructor(handler, _eap_handler_free);
 
 	return handler;
 }
@@ -130,7 +144,7 @@ typedef struct check_handler_t {
 	int		trips;
 } check_handler_t;
 
-static int check_opaque_free(check_handler_t *check)
+static int _check_opaque_free(check_handler_t *check)
 {
 	bool do_warning = false;
 	uint8_t state[8];
@@ -286,7 +300,7 @@ static void eaplist_expire(rlm_eap_t *inst, REQUEST *request, time_t timestamp)
 		 *	Expire entries from the start of the list.
 		 *	They should be the oldest ones.
 		 */
-		if ((timestamp - handler->timestamp) > inst->timer_limit) {
+		if ((timestamp - handler->timestamp) > (int)inst->timer_limit) {
 			rbnode_t *node;
 			node = rbtree_find(inst->session_tree, handler);
 			rad_assert(node != NULL);
@@ -395,7 +409,7 @@ int eaplist_add(rlm_eap_t *inst, eap_handler_t *handler)
 		check->handler = handler;
 		check->trips = handler->trips;
 
-		talloc_set_destructor(check, check_opaque_free);
+		talloc_set_destructor(check, _check_opaque_free);
 		request_data_add(request, inst, 0, check, true);
 	}
 
@@ -428,7 +442,7 @@ int eaplist_add(rlm_eap_t *inst, eap_handler_t *handler)
 	PTHREAD_MUTEX_UNLOCK(&(inst->session_mutex));
 
 	if (status <= 0) {
-		pairfree(&state);
+		pairdelete(&request->reply->vps, PW_STATE, 0, TAG_ANY);
 
 		if (status < 0) {
 			static time_t last_logged = 0;
@@ -444,7 +458,7 @@ int eaplist_add(rlm_eap_t *inst, eap_handler_t *handler)
 		return 0;
 	}
 
-	RDEBUG("New EAP session, adding 'State' attribute to reply 0x%02x%02x%02x%02x%02x%02x%02x%02x",
+	RDEBUG("EAP session adding &reply:State = 0x%02x%02x%02x%02x%02x%02x%02x%02x",
 	       state->vp_octets[0], state->vp_octets[1], state->vp_octets[2], state->vp_octets[3],
 	       state->vp_octets[4], state->vp_octets[5], state->vp_octets[6], state->vp_octets[7]);
 
@@ -473,7 +487,7 @@ eap_handler_t *eaplist_find(rlm_eap_t *inst, REQUEST *request,
 	 */
 	state = pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY);
 	if (!state ||
-	    (state->length != EAP_STATE_LEN)) {
+	    (state->vp_length != EAP_STATE_LEN)) {
 		return NULL;
 	}
 

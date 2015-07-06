@@ -15,7 +15,7 @@
  */
 #ifndef _RADCLIENT_H
 #define _RADCLIENT_H
-/*
+/**
  * $Id$
  *
  * @file radclient.h
@@ -71,11 +71,10 @@ struct rc_request {
 
 	rc_file_pair_t	*files;		//!< Request and response file names.
 
-	char		password[256];
+	VALUE_PAIR	*password;	//!< Cleartext-Password
 	time_t		timestamp;
 
 	RADIUS_PACKET	*packet;	//!< The outgoing request.
-	PW_CODE		packet_code;	//!< The code in the outgoing request.
 	RADIUS_PACKET	*reply;		//!< The incoming response.
 	VALUE_PAIR	*filter;	//!< If the reply passes the filter, then the request passes.
 	PW_CODE		filter_code;	//!< Expected code of the response packet.
@@ -83,6 +82,8 @@ struct rc_request {
 	int		resend;
 	int		tries;
 	bool		done;		//!< Whether the request is complete.
+
+	char const	*name;		//!< Test name (as specified in the request).
 };
 
 #ifdef __cplusplus

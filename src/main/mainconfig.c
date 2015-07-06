@@ -28,30 +28,21 @@ RCSID("$Id$")
 #include <freeradius-devel/rad_assert.h>
 
 #include <sys/stat.h>
-
-#ifdef HAVE_PWD_H
 #include <pwd.h>
-#endif
-
-#ifdef HAVE_GRP_H
 #include <grp.h>
-#endif
 
 #ifdef HAVE_SYSLOG_H
-#	include <syslog.h>
-#endif
-
-#ifdef HAVE_SYS_STAT_H
-#include <sys/stat.h>
+#  include <syslog.h>
 #endif
 
 #ifdef HAVE_FCNTL_H
-#include <fcntl.h>
+#  include <fcntl.h>
 #endif
 
-struct main_config_t main_config;
-char *debug_condition = NULL;
-extern int log_dates_utc;
+struct main_config_t	main_config;				//!< Main server configuration.
+extern fr_cond_t	*debug_condition;
+fr_cond_t		*debug_condition;			//!< Condition used to mark packets up for checking.
+bool			event_loop_started = false;		//!< Whether the main event loop has been started yet.
 
 typedef struct cached_config_t {
 	struct cached_config_t *next;
@@ -83,10 +74,10 @@ static char const *radlog_dest = NULL;
  */
 static char const	*localstatedir = NULL;
 static char const	*prefix = NULL;
-static char		my_name;
+static char const	*my_name = NULL;
 static char const	*sbindir = NULL;
 static char const	*run_dir = NULL;
-static char		*syslog_facility = NULL;
+static char const	*syslog_facility = NULL;
 static bool		do_colourise = false;
 
 static char const	*radius_dir = NULL;	//!< Path to raddb directory
@@ -96,10 +87,12 @@ static char const	*radius_dir = NULL;	//!< Path to raddb directory
  *  Security configuration for the server.
  */
 static const CONF_PARSER security_config[] = {
-	{ "max_attributes",  PW_TYPE_INTEGER, 0, &fr_max_attributes, STRINGIFY(0) },
-	{ "reject_delay",  PW_TYPE_INTEGER, 0, &main_config.reject_delay, STRINGIFY(0) },
-	{ "status_server", PW_TYPE_BOOLEAN, 0, &main_config.status_server, "no"},
-	{ "allow_vulnerable_openssl", PW_TYPE_STRING_PTR, 0, &main_config.allow_vulnerable_openssl, "no"},
+	{ "max_attributes",  FR_CONF_POINTER(PW_TYPE_INTEGER, &fr_max_attributes), STRINGIFY(0) },
+	{ "reject_delay",  FR_CONF_POINTER(PW_TYPE_TIMEVAL, &main_config.reject_delay), STRINGIFY(0) },
+	{ "status_server", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.status_server), "no"},
+#ifdef ENABLE_OPENSSL_VERSION_CHECK
+	{ "allow_vulnerable_openssl", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.allow_vulnerable_openssl), "no"},
+#endif
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -108,39 +101,50 @@ static const CONF_PARSER security_config[] = {
  *	Logging configuration for the server.
  */
 static const CONF_PARSER logdest_config[] = {
-	{ "destination",  PW_TYPE_STRING_PTR, 0, &radlog_dest, "files" },
-	{ "syslog_facility",  PW_TYPE_STRING_PTR, 0, &syslog_facility, STRINGIFY(0) },
+	{ "destination",  FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dest), "files" },
+	{ "syslog_facility",  FR_CONF_POINTER(PW_TYPE_STRING, &syslog_facility), STRINGIFY(0) },
 
-	{ "file", PW_TYPE_STRING_PTR, 0, &main_config.log_file, "${logdir}/radius.log" },
-	{ "requests", PW_TYPE_STRING_PTR, 0, &default_log.file, NULL },
+	{ "file",  FR_CONF_POINTER(PW_TYPE_STRING, &main_config.log_file), "${logdir}/radius.log" },
+	{ "requests",  FR_CONF_POINTER(PW_TYPE_STRING, &default_log.file), NULL },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
 
 static const CONF_PARSER serverdest_config[] = {
-	{ "log", PW_TYPE_SUBSECTION, 0, NULL, (void const *) logdest_config },
-	{ "log_file", PW_TYPE_STRING_PTR, 0, &main_config.log_file, NULL },
-	{ "log_destination", PW_TYPE_STRING_PTR, 0, &radlog_dest, NULL },
-	{ "use_utc", PW_TYPE_BOOLEAN, 0, &log_dates_utc, NULL },
+	{ "log",  FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) logdest_config },
+	{ "log_file",  FR_CONF_POINTER(PW_TYPE_STRING, &main_config.log_file), NULL },
+	{ "log_destination", FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dest), NULL },
+	{ "use_utc", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_dates_utc), NULL },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
 
 static const CONF_PARSER log_config_nodest[] = {
-	{ "stripped_names", PW_TYPE_BOOLEAN, 0, &log_stripped_names,"no" },
-	{ "auth", PW_TYPE_BOOLEAN, 0, &main_config.log_auth, "no" },
-	{ "auth_badpass", PW_TYPE_BOOLEAN, 0, &main_config.log_auth_badpass, "no" },
-	{ "auth_goodpass", PW_TYPE_BOOLEAN, 0, &main_config.log_auth_goodpass, "no" },
-	{ "msg_badpass", PW_TYPE_STRING_PTR, 0, &main_config.auth_badpass_msg, NULL},
-	{ "msg_goodpass", PW_TYPE_STRING_PTR, 0, &main_config.auth_goodpass_msg, NULL},
-	{ "colourise", PW_TYPE_BOOLEAN, 0, &do_colourise, NULL },
-	{ "use_utc", PW_TYPE_BOOLEAN, 0, &log_dates_utc, NULL },
-	{ "msg_denied", PW_TYPE_STRING_PTR, 0, &main_config.denied_msg,
+	{ "stripped_names", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_stripped_names),"no" },
+	{ "auth", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth), "no" },
+	{ "auth_badpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth_badpass), "no" },
+	{ "auth_goodpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth_goodpass), "no" },
+	{ "msg_badpass", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.auth_badpass_msg), NULL},
+	{ "msg_goodpass", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.auth_goodpass_msg), NULL},
+	{ "colourise",FR_CONF_POINTER(PW_TYPE_BOOLEAN, &do_colourise), NULL },
+	{ "use_utc", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_dates_utc), NULL },
+	{ "msg_denied", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.denied_msg),
 	  "You are already logged in - access denied" },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
 
+
+static const CONF_PARSER resources[] = {
+	/*
+	 *	Don't set a default here.  It's set in the code, below.  This means that
+	 *	the config item will *not* get printed out in debug mode, so that no one knows
+	 *	it exists.
+	 */
+	{ "talloc_pool_size", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.talloc_pool_size), NULL },
+
+	{ NULL, -1, 0, NULL, NULL }
+};
 
 /*
  *  A mapping of configuration file names to internal variables
@@ -153,31 +157,30 @@ static const CONF_PARSER server_config[] = {
 	 *	hard-coded defines for the locations of the various
 	 *	files.
 	 */
-	{ "name",	       PW_TYPE_STRING_PTR, 0, &my_name,	  "radiusd"},
-	{ "prefix",	     PW_TYPE_STRING_PTR, 0, &prefix,	    "/usr/local"},
-	{ "localstatedir",      PW_TYPE_STRING_PTR, 0, &localstatedir,     "${prefix}/var"},
-	{ "sbindir",	    PW_TYPE_STRING_PTR, 0, &sbindir,	    "${prefix}/sbin"},
-	{ "logdir",	     PW_TYPE_STRING_PTR, 0, &radlog_dir,	"${localstatedir}/log"},
-	{ "run_dir",	    PW_TYPE_STRING_PTR, 0, &run_dir,	   "${localstatedir}/run/${name}"},
-	{ "libdir",	     PW_TYPE_STRING_PTR, 0, &radlib_dir,	"${prefix}/lib"},
-	{ "radacctdir",	 PW_TYPE_STRING_PTR, 0, &radacct_dir,       "${logdir}/radacct" },
-	{ "panic_action", PW_TYPE_STRING_PTR, 0, &main_config.panic_action, NULL},
-	{ "hostname_lookups",   PW_TYPE_BOOLEAN,    0, &fr_dns_lookups,      "no" },
-	{ "max_request_time", PW_TYPE_INTEGER, 0, &main_config.max_request_time, STRINGIFY(MAX_REQUEST_TIME) },
-	{ "cleanup_delay", PW_TYPE_INTEGER, 0, &main_config.cleanup_delay, STRINGIFY(CLEANUP_DELAY) },
-	{ "max_requests", PW_TYPE_INTEGER, 0, &main_config.max_requests, STRINGIFY(MAX_REQUESTS) },
-#ifdef DELETE_BLOCKED_REQUESTS
-	{ "delete_blocked_requests", PW_TYPE_INTEGER, 0, &main_config.kill_unresponsive_children, STRINGIFY(false) },
-#endif
-	{ "pidfile", PW_TYPE_STRING_PTR, 0, &main_config.pid_file, "${run_dir}/radiusd.pid"},
-	{ "checkrad", PW_TYPE_STRING_PTR, 0, &main_config.checkrad, "${sbindir}/checkrad" },
+	{ "name", FR_CONF_POINTER(PW_TYPE_STRING, &my_name), "radiusd"},
+	{ "prefix", FR_CONF_POINTER(PW_TYPE_STRING, &prefix), "/usr/local"},
+	{ "localstatedir", FR_CONF_POINTER(PW_TYPE_STRING, &localstatedir), "${prefix}/var"},
+	{ "sbindir", FR_CONF_POINTER(PW_TYPE_STRING, &sbindir), "${prefix}/sbin"},
+	{ "logdir", FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dir), "${localstatedir}/log"},
+	{ "run_dir", FR_CONF_POINTER(PW_TYPE_STRING, &run_dir), "${localstatedir}/run/${name}"},
+	{ "libdir", FR_CONF_POINTER(PW_TYPE_STRING, &radlib_dir), "${prefix}/lib"},
+	{ "radacctdir", FR_CONF_POINTER(PW_TYPE_STRING, &radacct_dir), "${logdir}/radacct" },
+	{ "panic_action", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.panic_action), NULL},
+	{ "hostname_lookups", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &fr_dns_lookups), "no" },
+	{ "max_request_time", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.max_request_time), STRINGIFY(MAX_REQUEST_TIME) },
+	{ "cleanup_delay", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.cleanup_delay), STRINGIFY(CLEANUP_DELAY) },
+	{ "max_requests", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.max_requests), STRINGIFY(MAX_REQUESTS) },
+	{ "pidfile", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.pid_file), "${run_dir}/radiusd.pid"},
+	{ "checkrad", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.checkrad), "${sbindir}/checkrad" },
 
-	{ "debug_level", PW_TYPE_INTEGER, 0, &main_config.debug_level, "0"},
+	{ "debug_level", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.debug_level), "0"},
 
 #ifdef WITH_PROXY
-	{ "proxy_requests", PW_TYPE_BOOLEAN, 0, &main_config.proxy_requests, "yes" },
+	{ "proxy_requests", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.proxy_requests), "yes" },
 #endif
-	{ "log", PW_TYPE_SUBSECTION, 0, NULL, (void const *) log_config_nodest },
+	{ "log", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) log_config_nodest },
+
+	{ "resources", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) resources },
 
 	/*
 	 *	People with old configs will have these.  They are listed
@@ -187,52 +190,47 @@ static const CONF_PARSER server_config[] = {
 	 *	DON'T exist in radiusd.conf, then the previously parsed
 	 *	values for "log { foo = bar}" will be used.
 	 */
-	{ "log_auth", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, 0, &main_config.log_auth, NULL },
-	{ "log_auth_badpass", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, 0, &main_config.log_auth_badpass, NULL },
-	{ "log_auth_goodpass", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, 0, &main_config.log_auth_goodpass, NULL },
-	{ "log_stripped_names", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, 0, &log_stripped_names, NULL },
+	{ "log_auth", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &main_config.log_auth), NULL },
+	{ "log_auth_badpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &main_config.log_auth_badpass), NULL },
+	{ "log_auth_goodpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &main_config.log_auth_goodpass), NULL },
+	{ "log_stripped_names", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &log_stripped_names), NULL },
 
-	{  "security", PW_TYPE_SUBSECTION, 0, NULL, (void const *) security_config },
+	{  "security", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) security_config },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
 
 static const CONF_PARSER bootstrap_security_config[] = {
 #ifdef HAVE_SETUID
-	{ "user",  PW_TYPE_STRING_PTR, 0, &uid_name, NULL },
-	{ "group",  PW_TYPE_STRING_PTR, 0, &gid_name, NULL },
+	{ "user",  FR_CONF_POINTER(PW_TYPE_STRING, &uid_name), NULL },
+	{ "group", FR_CONF_POINTER(PW_TYPE_STRING, &gid_name), NULL },
 #endif
-	{ "chroot",  PW_TYPE_STRING_PTR, 0, &chroot_dir, NULL },
-	{ "allow_core_dumps", PW_TYPE_BOOLEAN, 0, &allow_core_dumps, "no" },
+	{ "chroot",  FR_CONF_POINTER(PW_TYPE_STRING, &chroot_dir), NULL },
+	{ "allow_core_dumps", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &allow_core_dumps), "no" },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
 
 static const CONF_PARSER bootstrap_config[] = {
-	{  "security", PW_TYPE_SUBSECTION, 0, NULL, (void const *) bootstrap_security_config },
+	{  "security", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) bootstrap_security_config },
 
 	/*
 	 *	For backwards compatibility.
 	 */
 #ifdef HAVE_SETUID
-	{ "user",  PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, 0, &uid_name, NULL },
-	{ "group",  PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, 0, &gid_name, NULL },
+	{ "user",  FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_DEPRECATED, &uid_name), NULL },
+	{ "group",  FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_DEPRECATED, &gid_name), NULL },
 #endif
-	{ "chroot",  PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, 0, &chroot_dir, NULL },
-	{ "allow_core_dumps", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, 0, &allow_core_dumps, NULL },
+	{ "chroot",  FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_DEPRECATED, &chroot_dir), NULL },
+	{ "allow_core_dumps", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &allow_core_dumps), NULL },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
 
-
-
-#define MAX_ARGV (256)
-
-
 static size_t config_escape_func(UNUSED REQUEST *request, char *out, size_t outlen, char const *in, UNUSED void *arg)
 {
 	size_t len = 0;
-	static char const *disallowed = "%{}\\'\"`";
+	static char const disallowed[] = "%{}\\'\"`";
 
 	while (in[0]) {
 		/*
@@ -306,7 +304,7 @@ static ssize_t xlat_config(UNUSED void *instance, REQUEST *request, char const *
 		return -1;
 	}
 
-	cp = cf_itemtopair(ci);
+	cp = cf_item_to_pair(ci);
 
 	/*
 	 *  Ensure that we only copy what's necessary.
@@ -351,7 +349,6 @@ static ssize_t xlat_client(UNUSED void *instance, REQUEST *request, char const *
 			strlcpy(out, request->client->shortname, outlen);
 			return strlen(out);
 		}
-		RDEBUG("Client does not contain config item \"%s\"", fmt);
 		*out = '\0';
 		return 0;
 	}
@@ -382,7 +379,7 @@ static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char cons
 	}
 
 	strlcpy(buffer, p, (q + 1) - p);
-	if (ip_ptonx(buffer, &ip) <= 0) {
+	if (fr_pton(&ip, buffer, -1, false) < 0) {
 		REDEBUG("\"%s\" is not a valid IPv4 or IPv6 address", buffer);
 		goto error;
 	}
@@ -402,7 +399,6 @@ static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char cons
 			strlcpy(out, request->client->shortname, outlen);
 			return strlen(out);
 		}
-		RDEBUG("Client does not contain config item \"%s\"", fmt);
 		*out = '\0';
 		return 0;
 	}
@@ -416,107 +412,6 @@ static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char cons
 }
 
 #ifdef HAVE_SETUID
-static bool doing_setuid = false;
-
-#  if defined(HAVE_SETRESUID) && defined (HAVE_GETRESUID)
-void fr_suid_up(void)
-{
-	uid_t ruid, euid, suid;
-
-	if (getresuid(&ruid, &euid, &suid) < 0) {
-		ERROR("Failed getting saved UID's");
-		fr_exit_now(1);
-	}
-
-	if (setresuid(-1, suid, -1) < 0) {
-		ERROR("Failed switching to privileged user");
-		fr_exit_now(1);
-	}
-
-	if (geteuid() != suid) {
-		ERROR("Switched to unknown UID");
-		fr_exit_now(1);
-	}
-}
-
-void fr_suid_down(void)
-{
-	if (!doing_setuid) return;
-
-	if (setresuid(-1, server_uid, geteuid()) < 0) {
-		fprintf(stderr, "%s: Failed switching to uid %s: %s\n",
-			progname, uid_name, fr_syserror(errno));
-		fr_exit_now(1);
-	}
-
-	if (geteuid() != server_uid) {
-		fprintf(stderr, "%s: Failed switching uid: UID is incorrect\n",
-			progname);
-		fr_exit_now(1);
-	}
-
-	fr_set_dumpable(allow_core_dumps);
-}
-
-void fr_suid_down_permanent(void)
-{
-	if (!doing_setuid) return;
-
-	if (setresuid(server_uid, server_uid, server_uid) < 0) {
-		ERROR("Failed in permanent switch to uid %s: %s",
-		       uid_name, fr_syserror(errno));
-		fr_exit_now(1);
-	}
-
-	if (geteuid() != server_uid) {
-		ERROR("Switched to unknown uid");
-		fr_exit_now(1);
-	}
-
-	fr_set_dumpable(allow_core_dumps);
-}
-#  else
-/*
- *	Much less secure...
- */
-void fr_suid_up(void)
-{
-}
-
-void fr_suid_down(void)
-{
-	if (!uid_name) return;
-
-	if (setuid(server_uid) < 0) {
-		fprintf(stderr, "%s: Failed switching to uid %s: %s\n",
-			progname, uid_name, fr_syserror(errno));
-		fr_exit(1);
-	}
-
-	fr_set_dumpable(allow_core_dumps);
-}
-
-void fr_suid_down_permanent(void)
-{
-	fr_set_dumpable(allow_core_dumps);
-}
-#  endif /* HAVE_SETRESUID && HAVE_GETRESUID */
-#else  /* HAVE_SETUID */
-void fr_suid_up(void)
-{
-}
-void fr_suid_down(void)
-{
-	fr_set_dumpable(allow_core_dumps);
-}
-void fr_suid_down_permanent(void)
-{
-	fr_set_dumpable(allow_core_dumps);
-}
-#endif /* HAVE_SETUID */
-
-#ifdef HAVE_SETUID
-
 /*
  *  Do chroot, if requested.
  *
@@ -563,35 +458,34 @@ static int switch_users(CONF_SECTION *cs)
 	}
 #endif
 
-#ifdef HAVE_PWD_H
 	/*  Set UID.  */
 	if (uid_name) {
-		struct passwd *pw;
+		struct passwd *user;
 
-		pw = getpwnam(uid_name);
-		if (pw == NULL) {
+		if (rad_getpwnam(cs, &user, uid_name) < 0) {
 			fprintf(stderr, "%s: Cannot get passwd entry for user %s: %s\n",
-				progname, uid_name, fr_syserror(errno));
+				progname, uid_name, fr_strerror());
 			return 0;
 		}
 
-		if (getuid() == pw->pw_uid) {
+		if (getuid() == user->pw_uid) {
 			uid_name = NULL;
 		} else {
 
-			server_uid = pw->pw_uid;
+			server_uid = user->pw_uid;
 #ifdef HAVE_INITGROUPS
 			if (initgroups(uid_name, server_gid) < 0) {
 				fprintf(stderr, "%s: Cannot initialize supplementary group list for user %s: %s\n",
 					progname, uid_name, fr_syserror(errno));
+				talloc_free(user);
 				return 0;
 			}
 #endif
 		}
+		talloc_free(user);
 	} else {
 		server_uid = getuid();
 	}
-#endif
 
 	if (chroot_dir) {
 		if (chroot(chroot_dir) < 0) {
@@ -626,7 +520,6 @@ static int switch_users(CONF_SECTION *cs)
 	}
 #endif
 
-#ifdef HAVE_SETUID
 	/*
 	 *	Just before losing root permissions, ensure that the
 	 *	log files have the correct owner && group.
@@ -653,11 +546,9 @@ static int switch_users(CONF_SECTION *cs)
 	}
 
 	if (uid_name) {
-		doing_setuid = true;
-
-		fr_suid_down();
+		rad_suid_set_down_uid(server_uid);
+		rad_suid_down();
 	}
-#endif
 
 	/*
 	 *	This also clears the dumpable flag if core dumps
@@ -668,7 +559,7 @@ static int switch_users(CONF_SECTION *cs)
 	}
 
 	if (allow_core_dumps) {
-		INFO("Core dumps are enabled.");
+		INFO("Core dumps are enabled");
 	}
 
 	return 1;
@@ -709,7 +600,7 @@ char const *get_radius_dir(void)
 int main_config_init(void)
 {
 	char const *p = NULL;
-	CONF_SECTION *cs;
+	CONF_SECTION *cs, *subcs;
 	struct stat statbuf;
 	cached_config_t *cc;
 	char buffer[1024];
@@ -728,8 +619,8 @@ int main_config_init(void)
 	}
 #endif
 
-#ifdef S_IROTH
-	if (0 && (statbuf.st_mode & S_IROTH) != 0) {
+#if 0 && defined(S_IROTH)
+	if (statbuf.st_mode & S_IROTH != 0) {
 		ERROR("Configuration directory %s is globally readable.  Refusing to start due to insecure configuration.",
 		       radius_dir);
 		return -1;
@@ -746,6 +637,13 @@ int main_config_init(void)
 	if (!main_config.dictionary_dir) {
 		main_config.dictionary_dir = DICTDIR;
 	}
+
+	/*
+	 *	About sizeof(REQUEST) + sizeof(RADIUS_PACKET) * 2 + sizeof(VALUE_PAIR) * 400
+	 *
+	 *	Which should be enough for many configurations.
+	 */
+	main_config.talloc_pool_size = 32 * 1024; /* default */
 
 	/*
 	 *	Read the distribution dictionaries first, then
@@ -789,11 +687,45 @@ do {\
 	 */
 	DICT_READ_OPTIONAL(radius_dir, RADIUS_DICTIONARY);
 
+	cs = cf_section_alloc(NULL, "main", NULL);
+	if (!cs) return -1;
+
+	/*
+	 *	Add a 'feature' subsection off the main config
+	 *	We check if it's defined first, as the user may
+	 *	have defined their own feature flags, or want
+	 *	to manually override the ones set by modules
+	 *	or the server.
+	 */
+	subcs = cf_section_sub_find(cs, "feature");
+	if (!subcs) {
+		subcs = cf_section_alloc(cs, "feature", NULL);
+		if (!subcs) return -1;
+
+		cf_section_add(cs, subcs);
+	}
+	version_init_features(subcs);
+
+	/*
+	 *	Add a 'version' subsection off the main config
+	 *	We check if it's defined first, this is for
+	 *	backwards compatibility.
+	 */
+	subcs = cf_section_sub_find(cs, "version");
+	if (!subcs) {
+		subcs = cf_section_alloc(cs, "version", NULL);
+		if (!subcs) return -1;
+		cf_section_add(cs, subcs);
+	}
+	version_init_numbers(subcs);
+
 	/* Read the configuration file */
 	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf",
 		 radius_dir, main_config.name);
-	if ((cs = cf_file_read(buffer)) == NULL) {
+	if (cf_file_read(cs, buffer) < 0) {
 		ERROR("Errors reading or parsing %s", buffer);
+		talloc_free(cs);
+
 		return -1;
 	}
 
@@ -833,7 +765,7 @@ do {\
 				cf_file_free(cs);
 				return -1;
 			}
-			main_config.syslog_facility = fr_str2int(syslog_str2fac, syslog_facility, -1);
+			main_config.syslog_facility = fr_str2int(syslog_facility_table, syslog_facility, -1);
 			if (main_config.syslog_facility < 0) {
 				fprintf(stderr, "radiusd: Error: Unknown syslog_facility %s\n",
 					syslog_facility);
@@ -885,9 +817,7 @@ do {\
 	 *	This allows us to figure out where, relative to
 	 *	radiusd.conf, the other configuration files exist.
 	 */
-	if (cf_section_parse(cs, NULL, server_config) < 0) {
-		return -1;
-	}
+	if (cf_section_parse(cs, NULL, server_config) < 0) return -1;
 
 	/*
 	 *	We ignore colourization of output until after the
@@ -911,8 +841,28 @@ do {\
 	fr_debug_flag = debug_flag;
 
 	FR_INTEGER_COND_CHECK("max_request_time", main_config.max_request_time, (main_config.max_request_time != 0), 100);
-	FR_INTEGER_BOUND_CHECK("reject_delay", main_config.reject_delay, <=, 10);
+
+	/*
+	 *	reject_delay can be zero.  OR 1 though 10.
+	 */
+	if ((main_config.reject_delay.tv_sec != 0) || (main_config.reject_delay.tv_usec != 0)) {
+		FR_TIMEVAL_BOUND_CHECK("reject_delay", &main_config.reject_delay, >=, 1, 0);
+	}
+	FR_TIMEVAL_BOUND_CHECK("reject_delay", &main_config.reject_delay, <=, 10, 0);
+
 	FR_INTEGER_BOUND_CHECK("cleanup_delay", main_config.cleanup_delay, <=, 10);
+
+	FR_INTEGER_BOUND_CHECK("resources.talloc_pool_size", main_config.talloc_pool_size, >=, 16*1024);
+	FR_INTEGER_BOUND_CHECK("resources.talloc_pool_size", main_config.talloc_pool_size, <=, 1024*1024);
+
+	/*
+	 * Set default initial request processing delay to 1/3 of a second.
+	 * Will be updated by the lowest response window across all home servers,
+	 * if it is less than this.
+	 */
+	main_config.init_delay.tv_sec = 0;
+	main_config.init_delay.tv_usec = 2* (1000000 / 3);
+
 	/*
 	 *	Free the old configuration items, and replace them
 	 *	with the new ones.
@@ -929,7 +879,7 @@ do {\
 	}
 
 	DEBUG2("%s: #### Loading Clients ####", main_config.name);
-	if (!clients_parse_section(cs, false)) {
+	if (!client_list_parse_section(cs, false)) {
 		return -1;
 	}
 
@@ -949,8 +899,7 @@ do {\
 	 *	Sanity check the configuration for internal
 	 *	consistency.
 	 */
-	FR_INTEGER_BOUND_CHECK("reject_delay", main_config.reject_delay, <=, main_config.cleanup_delay);
-	FR_INTEGER_BOUND_CHECK("reject_delay", main_config.reject_delay, >=, 0);
+	FR_TIMEVAL_BOUND_CHECK("reject_delay", &main_config.reject_delay, <=, main_config.cleanup_delay, 0);
 
 	if (chroot_dir) {
 		if (chdir(radlog_dir) < 0) {
@@ -984,7 +933,7 @@ int main_config_free(void)
 	 *	Clean up the configuration data
 	 *	structures.
 	 */
-	clients_free(NULL);
+	client_list_free(NULL);
 	realms_free();
 	listen_free(&main_config.listen);
 
@@ -999,25 +948,25 @@ int main_config_free(void)
 
 void hup_logfile(void)
 {
-		int fd, old_fd;
+	int fd, old_fd;
 
-		if (default_log.dst != L_DST_FILES) return;
+	if (default_log.dst != L_DST_FILES) return;
 
-		fd = open(main_config.log_file,
-			  O_WRONLY | O_APPEND | O_CREAT, 0640);
-		if (fd >= 0) {
-			/*
-			 *	Atomic swap. We'd like to keep the old
-			 *	FD around so that callers don't
-			 *	suddenly find the FD closed, and the
-			 *	writes go nowhere.  But that's hard to
-			 *	do.  So... we have the case where a
-			 *	log message *might* be lost on HUP.
-			 */
-			old_fd = default_log.fd;
-			default_log.fd = fd;
-			close(old_fd);
-		}
+	fd = open(main_config.log_file,
+		  O_WRONLY | O_APPEND | O_CREAT, 0640);
+	if (fd >= 0) {
+		/*
+		 *	Atomic swap. We'd like to keep the old
+		 *	FD around so that callers don't
+		 *	suddenly find the FD closed, and the
+		 *	writes go nowhere.  But that's hard to
+		 *	do.  So... we have the case where a
+		 *	log message *might* be lost on HUP.
+		 */
+		old_fd = default_log.fd;
+		default_log.fd = fd;
+		close(old_fd);
+	}
 }
 
 void main_config_hup(void)
@@ -1028,11 +977,15 @@ void main_config_hup(void)
 
 	INFO("HUP - Re-reading configuration files");
 
+	cs = cf_section_alloc(NULL, "main", NULL);
+	if (!cs) return;
+
 	/* Read the configuration file */
 	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf",
 		 radius_dir, main_config.name);
-	if ((cs = cf_file_read(buffer)) == NULL) {
+	if (cf_file_read(cs, buffer) < 0) {
 		ERROR("Failed to re-read or parse %s", buffer);
+		talloc_free(cs);
 		return;
 	}
 
@@ -1077,5 +1030,5 @@ void main_config_hup(void)
 	 */
 	virtual_servers_load(cs);
 
-	virtual_servers_free(cc->created - main_config.max_request_time * 4);
+	virtual_servers_free(cc->created - (main_config.max_request_time * 4));
 }

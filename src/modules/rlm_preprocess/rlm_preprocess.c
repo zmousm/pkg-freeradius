@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -30,12 +31,12 @@ RCSID("$Id$")
 #include	<ctype.h>
 
 typedef struct rlm_preprocess_t {
-	char		*huntgroup_file;
-	char		*hints_file;
+	char const	*huntgroup_file;
+	char const	*hints_file;
 	PAIR_LIST	*huntgroups;
 	PAIR_LIST	*hints;
 	bool		with_ascend_hack;
-	int		ascend_channels_per_line;
+	uint32_t	ascend_channels_per_line;
 	bool		with_ntdomain_hack;
 	bool		with_specialix_jetstream_hack;
 	bool		with_cisco_vsa_hack;
@@ -44,27 +45,17 @@ typedef struct rlm_preprocess_t {
 } rlm_preprocess_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "huntgroups",			PW_TYPE_FILE_INPUT,
-	  offsetof(rlm_preprocess_t,huntgroup_file), NULL, NULL },
-	{ "hints",			PW_TYPE_FILE_INPUT,
-	  offsetof(rlm_preprocess_t,hints_file), NULL, NULL },
-	{ "with_ascend_hack",		PW_TYPE_BOOLEAN,
-	  offsetof(rlm_preprocess_t,with_ascend_hack), NULL, "no" },
-	{ "ascend_channels_per_line",   PW_TYPE_INTEGER,
-	  offsetof(rlm_preprocess_t,ascend_channels_per_line), NULL, "23" },
+	{ "huntgroups", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, rlm_preprocess_t, huntgroup_file), NULL },
+	{ "hints", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, rlm_preprocess_t, hints_file), NULL },
+	{ "with_ascend_hack", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_preprocess_t, with_ascend_hack), "no" },
+	{ "ascend_channels_per_line", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_preprocess_t, ascend_channels_per_line), "23" },
 
-	{ "with_ntdomain_hack",		PW_TYPE_BOOLEAN,
-	  offsetof(rlm_preprocess_t,with_ntdomain_hack), NULL, "no" },
-	{ "with_specialix_jetstream_hack",  PW_TYPE_BOOLEAN,
-	  offsetof(rlm_preprocess_t,with_specialix_jetstream_hack), NULL,
-	  "no" },
-	{ "with_cisco_vsa_hack",	PW_TYPE_BOOLEAN,
-	  offsetof(rlm_preprocess_t,with_cisco_vsa_hack), NULL, "no" },
-	{ "with_alvarion_vsa_hack",	PW_TYPE_BOOLEAN,
-	  offsetof(rlm_preprocess_t,with_alvarion_vsa_hack), NULL, "no" },
+	{ "with_ntdomain_hack", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_preprocess_t, with_ntdomain_hack), "no" },
+	{ "with_specialix_jetstream_hack", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_preprocess_t, with_specialix_jetstream_hack), "no"  },
+	{ "with_cisco_vsa_hack", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_preprocess_t, with_cisco_vsa_hack), "no" },
+	{ "with_alvarion_vsa_hack", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_preprocess_t, with_alvarion_vsa_hack), "no" },
 #if 0
-	{ "with_cablelabs_vsa_hack",	PW_TYPE_BOOLEAN,
-	  offsetof(rlm_preprocess_t,with_cablelabs_vsa_hack), NULL, NULL },
+	{ "with_cablelabs_vsa_hack", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_preprocess_t, with_cablelabs_vsa_hack), NULL },
 #endif
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -72,7 +63,7 @@ static const CONF_PARSER module_config[] = {
 /*
  *     See if a VALUE_PAIR list contains Fall-Through = Yes
  */
-static int fallthrough(VALUE_PAIR *vp)
+static int fall_through(VALUE_PAIR *vp)
 {
 	VALUE_PAIR *tmp;
 	tmp = pairfind(vp, PW_FALL_THROUGH, 0, TAG_ANY);
@@ -279,7 +270,7 @@ static void rad_mangle(rlm_preprocess_t *inst, REQUEST *request)
 	 */
 	request_pairs = request->packet->vps;
 	namepair = pairfind(request_pairs, PW_USER_NAME, 0, TAG_ANY);
-	if (!namepair || (namepair->length == 0)) {
+	if (!namepair || (namepair->vp_length == 0)) {
 		return;
 	}
 
@@ -341,8 +332,8 @@ static void rad_mangle(rlm_preprocess_t *inst, REQUEST *request)
 	}
 
 	if (num_proxy_state > 10) {
-		RWDEBUG("There are more than 10 Proxy-State attributes in the request.");
-		RWDEBUG("You have likely configured an infinite proxy loop.");
+		RWDEBUG("There are more than 10 Proxy-State attributes in the request");
+		RWDEBUG("You have likely configured an infinite proxy loop");
 	}
 }
 
@@ -410,14 +401,14 @@ static int hints_setup(PAIR_LIST *hints, REQUEST *request)
 		 */
 		if (((strcmp(i->name, "DEFAULT") == 0) || (strcmp(i->name, name) == 0)) &&
 		    (paircompare(request, request_pairs, i->check, NULL) == 0)) {
-			RDEBUG2("  hints: Matched %s at %d", i->name, i->lineno);
+			RDEBUG2("hints: Matched %s at %d", i->name, i->lineno);
 			/*
 			 *	Now add all attributes to the request list,
 			 *	except PW_STRIP_USER_NAME and PW_FALL_THROUGH
 			 *	and xlat them.
 			 */
 			add = paircopy(request->packet, i->reply);
-			ft = fallthrough(add);
+			ft = fall_through(add);
 
 			pairdelete(&add, PW_STRIP_USER_NAME, 0, TAG_ANY);
 			pairdelete(&add, PW_FALL_THROUGH, 0, TAG_ANY);
@@ -564,6 +555,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	int r;
 	rlm_preprocess_t *inst = instance;
 
+	VALUE_PAIR *vp;
+
 	/*
 	 *	Mangle the username, to get rid of stupid implementation
 	 *	bugs.
@@ -605,6 +598,16 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	}
 
 	/*
+	 *	Add an event timestamp. Means Event-Timestamp can be used
+	 *	consistently instead of one letter expansions.
+	 */
+	vp = pairfind(request->packet->vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY);
+	if (!vp) {
+		vp = radius_paircreate(request->packet, &request->packet->vps, PW_EVENT_TIMESTAMP, 0);
+		vp->vp_date = request->packet->timestamp.tv_sec;
+	}
+
+	/*
 	 *	Note that we add the Request-Src-IP-Address to the request
 	 *	structure BEFORE checking huntgroup access.  This allows
 	 *	the Request-Src-IP-Address to be used for huntgroup
@@ -623,8 +626,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 */
 	if (pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY) &&
 	    pairfind(request->packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY) == NULL) {
-		VALUE_PAIR *vp;
-
 		vp = radius_paircreate(request->packet, &request->packet->vps, PW_CHAP_CHALLENGE, 0);
 		pairmemcpy(vp, request->packet->vector, AUTH_VECTOR_LEN);
 	}
@@ -703,7 +704,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_preaccounting(void *instance, REQUEST *r
 
 		delay = pairfind(request->packet->vps, PW_ACCT_DELAY_TIME, 0, TAG_ANY);
 		if (delay) {
-			vp->vp_date -= delay->vp_integer;
+			if ((delay->vp_integer >= vp->vp_date) || (delay->vp_integer == UINT32_MAX)) {
+				RWARN("Ignoring invalid Acct-Delay-time of %u seconds", delay->vp_integer);
+			} else {
+				vp->vp_date -= delay->vp_integer;
+			}
 		}
 	}
 
@@ -719,6 +724,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_preaccounting(void *instance, REQUEST *r
 }
 
 /* globally exported name */
+extern module_t rlm_preprocess;
 module_t rlm_preprocess = {
 	RLM_MODULE_INIT,
 	"preprocess",

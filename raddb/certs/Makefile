@@ -14,12 +14,7 @@ DH_KEY_SIZE	= 1024
 #
 #  Set the passwords
 #
-PASSWORD_SERVER	= `grep output_password server.cnf | sed 's/.*=//;s/^ *//'`
-PASSWORD_CA	= `grep output_password ca.cnf | sed 's/.*=//;s/^ *//'`
-PASSWORD_CLIENT	= `grep output_password client.cnf | sed 's/.*=//;s/^ *//'`
-
-USER_NAME	= `grep emailAddress client.cnf | grep '@' | sed 's/.*=//;s/^ *//'`
-CA_DEFAULT_DAYS = `grep default_days ca.cnf | sed 's/.*=//;s/^ *//'`
+-include passwords.mk
 
 ######################################################################
 #
@@ -27,7 +22,7 @@ CA_DEFAULT_DAYS = `grep default_days ca.cnf | sed 's/.*=//;s/^ *//'`
 #
 ######################################################################
 .PHONY: all
-all: index.txt serial dh random server ca client
+all: index.txt serial dh server ca client
 
 .PHONY: client
 client: client.pem
@@ -37,6 +32,13 @@ ca: ca.der
 
 .PHONY: server
 server: server.pem server.vrfy
+
+passwords.mk: server.cnf ca.cnf client.cnf
+	@echo "PASSWORD_SERVER	= '$(shell grep output_password server.cnf | sed 's/.*=//;s/^ *//')'"		> $@
+	@echo "PASSWORD_CA	= '$(shell grep output_password ca.cnf | sed 's/.*=//;s/^ *//')'"		>> $@
+	@echo "PASSWORD_CLIENT	= '$(shell grep output_password client.cnf | sed 's/.*=//;s/^ *//')'"		>> $@
+	@echo "USER_NAME	= '$(shell grep emailAddress client.cnf | grep '@' | sed 's/.*=//;s/^ *//')'"	>> $@
+	@echo "CA_DEFAULT_DAYS  = '$(shell grep default_days ca.cnf | sed 's/.*=//;s/^ *//')'"			>> $@
 
 ######################################################################
 #
@@ -116,13 +118,6 @@ index.txt:
 serial:
 	@echo '01' > serial
 
-random:
-	@if [ -c /dev/urandom ] ; then \
-		ln -sf /dev/urandom random; \
-	else \
-		date > ./random; \
-	fi
-
 print:
 	openssl x509 -text -in server.crt
 
@@ -137,4 +132,4 @@ clean:
 #
 destroycerts:
 	rm -f *~ dh *.csr *.crt *.p12 *.der *.pem *.key index.txt* \
-			serial* random *\.0 *\.1
+			serial*  *\.0 *\.1

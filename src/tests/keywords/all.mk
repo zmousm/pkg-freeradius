@@ -9,6 +9,10 @@
 #
 KEYWORD_FILES := $(filter-out %.conf %.md %.attrs %.mk %~ %.rej,$(subst $(DIR)/,,$(wildcard $(DIR)/*)))
 
+ifeq "$(OPENSSL_LIBS)" ""
+KEYWORD_FILES := $(filter-out pap-ssha2,$(KEYWORD_FILES))
+endif
+
 #
 #  Create the output directory
 #
@@ -24,9 +28,6 @@ $(BUILD_DIR)/tests/keywords:
 BOOTSTRAP_EXISTS := $(addprefix $(DIR)/,$(addsuffix .attrs,$(KEYWORD_FILES)))
 BOOTSTRAP_NEEDS	 := $(filter-out $(wildcard $(BOOTSTRAP_EXISTS)),$(BOOTSTRAP_EXISTS))
 BOOTSTRAP	 := $(subst $(DIR),$(BUILD_DIR)/tests/keywords,$(BOOTSTRAP_NEEDS))
-
-BOOTSTRAP_HAS	 := $(filter $(wildcard $(BOOTSTRAP_EXISTS)),$(BOOTSTRAP_EXISTS))
-BOOTSTRAP_COPY	 := $(subst $(DIR),$(BUILD_DIR)/tests/keywords,$(BOOTSTRAP_NEEDS))
 
 #
 #  For each file, look for precursor test.
@@ -65,9 +66,9 @@ $(BUILD_DIR)/tests/keywords/%.attrs: $(DIR)/%.attrs | $(BUILD_DIR)/tests/keyword
 #
 .PRECIOUS: $(BUILD_DIR)/tests/keywords/%.attrs
 
-KEYWORD_MODULES := $(shell grep -- mods-enabled src/tests/keywords/radiusd.conf  | sed 's,.*/,,')
+KEYWORD_MODULES := $(shell grep -- mods-enabled src/tests/keywords/radiusd.conf | sed 's,.*/,,')
 KEYWORD_RADDB	:= $(addprefix raddb/mods-enabled/,$(KEYWORD_MODULES))
-KEYWORD_LIBS	:= $(addsuffix .la,$(addprefix rlm_,$(KEYWORD_MODULES)))
+KEYWORD_LIBS	:= $(addsuffix .la,$(addprefix rlm_,$(KEYWORD_MODULES))) rlm_example.la rlm_cache.la
 
 #
 #  Files in the output dir depend on the unit tests
@@ -85,12 +86,13 @@ KEYWORD_LIBS	:= $(addsuffix .la,$(addprefix rlm_,$(KEYWORD_MODULES)))
 #  Otherwise, check the log file for a parse error which matches the
 #  ERROR line in the input.
 #
-$(BUILD_DIR)/tests/keywords/%: $(DIR)/% $(BUILD_DIR)/tests/keywords/%.attrs $(TESTBINDIR)/unittest | $(BUILD_DIR)/tests/keywords $(KEYWORD_RADDB) $(KEYWORD_LIBS) build.raddb
+$(BUILD_DIR)/tests/keywords/%: $(DIR)/% $(BUILD_DIR)/tests/keywords/%.attrs $(TESTBINDIR)/unittest | $(BUILD_DIR)/tests/keywords $(KEYWORD_RADDB) $(KEYWORD_LIBS) build.raddb rlm_cache_rbtree.la rlm_test.la
 	@echo UNIT-TEST $(notdir $@)
 	@if ! KEYWORD=$(notdir $@) $(TESTBIN)/unittest -D share -d src/tests/keywords/ -i $@.attrs -f $@.attrs -xx > $@.log 2>&1; then \
 		if ! grep ERROR $< 2>&1 > /dev/null; then \
 			cat $@.log; \
 			echo "# $@.log"; \
+			echo KEYWORD=$(notdir $@) $(TESTBIN)/unittest -D share -d src/tests/keywords/ -i $@.attrs -f $@.attrs -xx; \
 			exit 1; \
 		fi; \
 		FOUND=$$(grep ^$< $@.log | head -1 | sed 's/:.*//;s/.*\[//;s/\].*//'); \
@@ -98,6 +100,7 @@ $(BUILD_DIR)/tests/keywords/%: $(DIR)/% $(BUILD_DIR)/tests/keywords/%.attrs $(TE
 		if [ "$$EXPECTED" != "$$FOUND" ]; then \
 			cat $@.log; \
 			echo "# $@.log"; \
+			echo KEYWORD=$(notdir $@) $(TESTBIN)/unittest -D share -d src/tests/keywords/ -i $@.attrs -f $@.attrs -xx; \
 			exit 1; \
 		fi \
 	fi
@@ -113,7 +116,7 @@ TESTS.KEYWORDS_FILES := $(addprefix $(BUILD_DIR)/tests/keywords/,$(KEYWORD_FILES
 #
 tests.keywords: $(TESTS.KEYWORDS_FILES)
 
-$(TESTS.KEYWORDS_FILES): $(TESTS.UNIT_FILES)
+$(TESTS.KEYWORDS_FILES): $(TESTS.XLAT_FILES)
 
 .PHONY: clean.tests.keywords
 clean.tests.keywords:
