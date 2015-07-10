@@ -65,15 +65,22 @@ static const CONF_PARSER driver_config[] = {
 	{NULL, -1, 0, NULL, NULL}
 };
 
-static sql_rcode_t sql_check_error(sqlite3 *db)
+/** Convert an sqlite status code to an sql_rcode_t
+ *
+ * @param status to convert.
+ * @return
+ *	- RLM_SQL_OK - If no errors found.
+ *	- RLM_SQL_ERROR - If a known, non-fatal, error occurred.
+ *	- RLM_SQL_ALT_QUERY - If a constraints violation occurred.
+ *	- RLM_SQL_RECONNECT - Anything else, we assume the connection can no longer be used.
+ */
+static sql_rcode_t sql_error_to_rcode(int status)
 {
-	int error = sqlite3_errcode(db);
-
 	/*
 	 *	Lowest byte is error category, other byte may contain
 	 *	the extended error, depending on version.
 	 */
-	switch (error & 0xff) {
+	switch (status & 0xff) {
 	/*
 	 *	Not errors
 	 */
@@ -99,20 +106,137 @@ static sql_rcode_t sql_check_error(sqlite3 *db)
 	 *	Errors with the handle, that probably require reinitialisation
 	 */
 	default:
-		ERROR("rlm_sql_sqlite: Handle is unusable, error (%d): %s", error, sqlite3_errmsg(db));
 		return RLM_SQL_RECONNECT;
 	}
+}
+
+/** Determine if an error occurred, and what type of error it was
+ *
+ * @param db handle to extract error from (may be NULL).
+ * @param status to check (if unused, set to SQLITE_OK).
+ * @return
+ *	- RLM_SQL_OK - If no errors found.
+ *	- RLM_SQL_ERROR - If a known, non-fatal, error occurred.
+ *	- RLM_SQL_ALT_QUERY - If a constraints violation occurred.
+ *	- RLM_SQL_RECONNECT - Anything else. We assume the connection can no longer be used.
+ */
+static sql_rcode_t sql_check_error(sqlite3 *db, int status)
+{
+	int hstatus = SQLITE_OK;
+
+	if (db) {
+		hstatus = sqlite3_errcode(db);
+		switch (hstatus & 0xff) {
+		case SQLITE_OK:
+		case SQLITE_DONE:
+		case SQLITE_ROW:
+			hstatus = SQLITE_OK;
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	switch (status & 0xff) {
+	case SQLITE_OK:
+	case SQLITE_DONE:
+	case SQLITE_ROW:
+		status = SQLITE_OK;
+		break;
+
+	default:
+		break;
+	}
+
+	if (status != SQLITE_OK) return sql_error_to_rcode(status);
+	if (hstatus != SQLITE_OK) return sql_error_to_rcode(status);
+
+	return RLM_SQL_OK;
+}
+
+/** Print an error to the global debug log
+ *
+ * If status does not indicate success, write an error to the global error log.
+ *
+ * @note The error code will be appended to the fmt string in the format ": code 0x<hex> (<int>)[: <string>]".
+ *
+ * @param db handle to extract error from (may be NULL).
+ * @param status to check (if unused, set to SQLITE_OK).
+ * @param fmt to preprend.
+ * @param ... arguments to fmt.
+ */
+static void sql_print_error(sqlite3 *db, int status, char const *fmt, ...)
+	CC_HINT(format (printf, 3, 4)) CC_HINT(nonnull (3));
+static void sql_print_error(sqlite3 *db, int status, char const *fmt, ...)
+{
+	va_list ap;
+	char *p;
+	int hstatus = SQLITE_OK;
+
+	if (db) {
+		hstatus = sqlite3_errcode(db);
+		switch (hstatus & 0xff) {
+		case SQLITE_OK:
+		case SQLITE_DONE:
+		case SQLITE_ROW:
+			hstatus = SQLITE_OK;
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	switch (status & 0xff) {
+	case SQLITE_OK:
+	case SQLITE_DONE:
+	case SQLITE_ROW:
+		status = SQLITE_OK;
+		break;
+
+	default:
+		break;
+	}
+
+	/*
+	 *	No errors!
+	 */
+	if ((hstatus == SQLITE_OK) && (status == SQLITE_OK)) return;
+
+	/*
+	 *	At least one error...
+	 */
+	va_start(ap, fmt);
+	MEM(p = talloc_vasprintf(NULL, fmt, ap));
+	va_end(ap);
+
+	/*
+	 *	Disagreement between handle, and function return code,
+	 *	print them both.
+	 */
+	if ((status != SQLITE_OK) && (status != hstatus)) {
+#ifdef HAVE_SQLITE3_ERRSTR
+		ERROR("rlm_sql_sqlite: %s: Code 0x%04x (%i): %s", p, status, status, sqlite3_errstr(status));
+#else
+		ERROR("rlm_sql_sqlite: %s: Code 0x%04x (%i)", p, status, status);
+#endif
+	}
+
+	if (hstatus != SQLITE_OK) ERROR("rlm_sql_sqlite: %s: Code 0x%04x (%i): %s",
+					p, hstatus, hstatus, sqlite3_errmsg(db));
 }
 
 #ifdef HAVE_SQLITE3_OPEN_V2
 static int sql_loadfile(TALLOC_CTX *ctx, sqlite3 *db, char const *filename)
 {
-	ssize_t len;
-	char *buffer;
-	char *p, *q, *s;
-	int cl;
-	FILE *f;
-	struct stat finfo;
+	ssize_t		len;
+	int		statement_cnt = 0;
+	char		*buffer;
+	char		*p, *q, *s;
+	int		cl;
+	FILE		*f;
+	struct stat	finfo;
 
 	int status;
 	sqlite3_stmt *statement;
@@ -201,30 +325,40 @@ static int sql_loadfile(TALLOC_CTX *ctx, sqlite3 *db, char const *filename)
 	while ((q = strchr(p, ';'))) {
 		if (q[1] != '\n') {
 			p = q + 1;
+			statement_cnt++;
 			continue;
 		}
 
 		*q = '\0';
 
 #ifdef HAVE_SQLITE3_PREPARE_V2
-		(void) sqlite3_prepare_v2(db, s, len, &statement, &z_tail);
+		status = sqlite3_prepare_v2(db, s, len, &statement, &z_tail);
 #else
-		(void) sqlite3_prepare(db, s, len, &>statement, &z_tail);
+		status = sqlite3_prepare(db, s, len, &statement, &z_tail);
 #endif
-		if (sql_check_error(db) != RLM_SQL_OK) {
+
+		if (sql_check_error(db, status) != RLM_SQL_OK) {
+			sql_print_error(db, status, "Failed preparing statement %i", statement_cnt);
 			talloc_free(buffer);
 			return -1;
 		}
 
-		(void) sqlite3_step(statement);
-		status = sql_check_error(db);
-
-		(void) sqlite3_finalize(statement);
-		if ((status != RLM_SQL_OK) || sql_check_error(db)) {
+		status = sqlite3_step(statement);
+		if (sql_check_error(db, status) != RLM_SQL_OK) {
+			sql_print_error(db, status, "Failed executing statement %i", statement_cnt);
+			sqlite3_finalize(statement);
 			talloc_free(buffer);
 			return -1;
 		}
 
+		status = sqlite3_finalize(statement);
+		if (sql_check_error(db, status) != RLM_SQL_OK) {
+			sql_print_error(db, status, "Failed finalizing statement %i", statement_cnt);
+			talloc_free(buffer);
+			return -1;
+		}
+
+		statement_cnt++;
 		p = s = q + 1;
 	}
 
@@ -270,12 +404,12 @@ static int mod_instantiate(CONF_SECTION *conf, rlm_sql_config_t *config)
 
 	if (cf_pair_find(conf, "bootstrap") && !exists) {
 #  ifdef HAVE_SQLITE3_OPEN_V2
-		int status;
-		int ret;
-		char const *p;
-		char *buff;
-		sqlite3 *db = NULL;
-		CONF_PAIR *cp;
+		int		status;
+		int		ret;
+		char const	*p;
+		char		*buff;
+		sqlite3		*db = NULL;
+		CONF_PAIR	*cp;
 
 		INFO("rlm_sql_sqlite: Database doesn't exist, creating it and loading schema");
 
@@ -310,7 +444,7 @@ static int mod_instantiate(CONF_SECTION *conf, rlm_sql_config_t *config)
 			goto unlink;
 		}
 
-		if (sql_check_error(db) != RLM_SQL_OK) {
+		if (sql_check_error(db, status) != RLM_SQL_OK) {
 			(void) sqlite3_close(db);
 
 			goto unlink;
@@ -368,9 +502,7 @@ static int _sql_socket_destructor(rlm_sql_sqlite_conn_t *conn)
 
 	if (conn->db) {
 		status = sqlite3_close(conn->db);
-		if (status != SQLITE_OK) {
-			WARN("rlm_sql_sqlite: Got SQLite error code (%u) when closing socket", status);
-		}
+		if (status != SQLITE_OK) WARN("rlm_sql_sqlite: Got SQLite error code (%u) when closing socket", status);
 	}
 
 	return 0;
@@ -407,28 +539,27 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 #else
 	status = sqlite3_open(driver->filename, &(conn->db));
 #endif
-	if (!conn->db) {
-#ifdef HAVE_SQLITE3_ERRSTR
-		ERROR("rlm_sql_sqlite: Failed creating opening/creating SQLite: %s", sqlite3_errstr(status));
-#else
-		ERROR("rlm_sql_sqlite: Failed creating opening/creating SQLite database error code (%i)",
-		      status);
-#endif
 
+	if (!conn->db || (sql_check_error(conn->db, status) != RLM_SQL_OK)) {
+		sql_print_error(conn->db, status, "Error opening SQLite database \"%s\"", driver->filename);
 		return RLM_SQL_ERROR;
 	}
-	if (sql_check_error(conn->db) != RLM_SQL_OK) return RLM_SQL_ERROR;
-
 	status = sqlite3_busy_timeout(conn->db, driver->busy_timeout);
-	if (status != SQLITE_OK) ERROR("rlm_sql_sqlite: Failed setting busy timeout");
+	if (sql_check_error(conn->db, status) != RLM_SQL_OK) {
+		sql_print_error(conn->db, status, "Error setting busy timeout");
+		return RLM_SQL_ERROR;
+	}
 
 	/*
 	 *	Enable extended return codes for extra debugging info.
 	 */
 #ifdef HAVE_SQLITE3_EXTENDED_RESULT_CODES
-	(void) sqlite3_extended_result_codes(conn->db, 1);
+	status = sqlite3_extended_result_codes(conn->db, 1);
+	if (sql_check_error(conn->db, status) != RLM_SQL_OK) {
+		sql_print_error(conn->db, status, "Error enabling extended result codes");
+		return RLM_SQL_ERROR;
+	}
 #endif
-	if (sql_check_error(conn->db) != RLM_SQL_OK) return RLM_SQL_ERROR;
 
 #ifdef HAVE_SQLITE3_CREATE_FUNCTION_V2
 	status = sqlite3_create_function_v2(conn->db, "GREATEST", -1, SQLITE_ANY, NULL,
@@ -437,8 +568,9 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 	status = sqlite3_create_function(conn->db, "GREATEST", -1, SQLITE_ANY, NULL,
 					 _sql_greatest, NULL, NULL);
 #endif
-	if (status != SQLITE_OK) {
-		ERROR("rlm_sql_sqlite: Failed registering 'GREATEST' sql function: %s", sqlite3_errmsg(conn->db));
+	if (sql_check_error(conn->db, status) != RLM_SQL_OK) {
+		sql_print_error(conn->db, status, "Failed registering 'GREATEST' sql function");
+		return RLM_SQL_ERROR;
 	}
 
 	return RLM_SQL_OK;
@@ -446,45 +578,43 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 
 static sql_rcode_t sql_select_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config, char const *query)
 {
-	rlm_sql_sqlite_conn_t *conn = handle->conn;
-	char const *z_tail;
-
-#ifdef HAVE_SQLITE3_PREPARE_V2
-	(void) sqlite3_prepare_v2(conn->db, query, strlen(query), &conn->statement, &z_tail);
-#else
-	(void) sqlite3_prepare(conn->db, query, strlen(query), &conn->statement, &z_tail);
-#endif
-
-	conn->col_count = 0;
-
-	return sql_check_error(conn->db);
-}
-
-
-static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config, char const *query)
-{
-	int status;
-	rlm_sql_sqlite_conn_t *conn = handle->conn;
-	char const *z_tail;
+	rlm_sql_sqlite_conn_t	*conn = handle->conn;
+	char const		*z_tail;
+	int			status;
 
 #ifdef HAVE_SQLITE3_PREPARE_V2
 	status = sqlite3_prepare_v2(conn->db, query, strlen(query), &conn->statement, &z_tail);
 #else
 	status = sqlite3_prepare(conn->db, query, strlen(query), &conn->statement, &z_tail);
 #endif
-	if (status != SQLITE_OK) return sql_check_error(conn->db);
 
-	(void) sqlite3_step(conn->statement);
+	conn->col_count = 0;
 
-	return sql_check_error(conn->db);
+	return sql_check_error(conn->db, status);
 }
 
-static sql_rcode_t sql_store_result(UNUSED rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+
+static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config, char const *query)
 {
-	return 0;
+
+	sql_rcode_t		rcode;
+	rlm_sql_sqlite_conn_t	*conn = handle->conn;
+	char const		*z_tail;
+	int			status;
+
+#ifdef HAVE_SQLITE3_PREPARE_V2
+	status = sqlite3_prepare_v2(conn->db, query, strlen(query), &conn->statement, &z_tail);
+#else
+	status = sqlite3_prepare(conn->db, query, strlen(query), &conn->statement, &z_tail);
+#endif
+	rcode = sql_check_error(conn->db, status);
+	if (rcode != RLM_SQL_OK) return rcode;
+
+	status = sqlite3_step(conn->statement);
+	return sql_check_error(conn->db, status);
 }
 
-static int sql_num_fields(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t *config)
+static int sql_num_fields(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	rlm_sql_sqlite_conn_t *conn = handle->conn;
 
@@ -506,6 +636,24 @@ static int sql_num_rows(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *confi
 	return 0;
 }
 
+static sql_rcode_t sql_fields(char const **out[], rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
+	rlm_sql_sqlite_conn_t *conn = handle->conn;
+
+	int		fields, i;
+	char const	**names;
+
+	fields = sqlite3_column_count(conn->statement);
+	if (fields <= 0) return RLM_SQL_ERROR;
+
+	MEM(names = talloc_zero_array(handle, char const *, fields + 1));
+
+	for (i = 0; i < fields; i++) names[i] = sqlite3_column_name(conn->statement, i);
+	*out = names;
+
+	return RLM_SQL_OK;
+}
+
 static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 {
 	int status;
@@ -523,7 +671,7 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 	/*
 	 *	Error getting next row
 	 */
-	if (sql_check_error(conn->db) != RLM_SQL_OK) return RLM_SQL_ERROR;
+	if (sql_check_error(conn->db, status) != RLM_SQL_OK) return RLM_SQL_ERROR;
 
 	/*
 	 *	No more rows to process (were done)
@@ -559,29 +707,27 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 			break;
 
 		case SQLITE_TEXT:
-			{
-				char const *p;
-				p = (char const *) sqlite3_column_text(conn->statement, i);
+		{
+			char const *p;
+			p = (char const *) sqlite3_column_text(conn->statement, i);
 
-				if (p) {
-					MEM(row[i] = talloc_typed_strdup(row, p));
-				}
-			}
+			if (p) MEM(row[i] = talloc_typed_strdup(row, p));
+		}
 			break;
 
 		case SQLITE_BLOB:
-			{
-				uint8_t const *p;
-				size_t len;
+		{
+			uint8_t const *p;
+			size_t len;
 
-				p = sqlite3_column_blob(conn->statement, i);
-				if (p) {
-					len = sqlite3_column_bytes(conn->statement, i);
+			p = sqlite3_column_blob(conn->statement, i);
+			if (p) {
+				len = sqlite3_column_bytes(conn->statement, i);
 
-					MEM(row[i] = talloc_zero_array(row, char, len + 1));
-					memcpy(row[i], p, len);
-				}
+				MEM(row[i] = talloc_zero_array(row, char, len + 1));
+				memcpy(row[i], p, len);
 			}
+		}
 			break;
 
 		default:
@@ -592,8 +738,7 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 	return 0;
 }
 
-static sql_rcode_t sql_free_result(rlm_sql_handle_t *handle,
-			   UNUSED rlm_sql_config_t *config)
+static sql_rcode_t sql_free_result(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	rlm_sql_sqlite_conn_t *conn = handle->conn;
 
@@ -670,11 +815,11 @@ rlm_sql_module_t rlm_sql_sqlite = {
 	.sql_socket_init		= sql_socket_init,
 	.sql_query			= sql_query,
 	.sql_select_query		= sql_select_query,
-	.sql_store_result		= sql_store_result,
 	.sql_num_fields			= sql_num_fields,
 	.sql_num_rows			= sql_num_rows,
 	.sql_affected_rows		= sql_affected_rows,
 	.sql_fetch_row			= sql_fetch_row,
+	.sql_fields			= sql_fields,
 	.sql_free_result		= sql_free_result,
 	.sql_error			= sql_error,
 	.sql_finish_query		= sql_finish_query,

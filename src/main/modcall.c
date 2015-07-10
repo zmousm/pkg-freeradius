@@ -73,7 +73,7 @@ typedef struct {
 	modcallable		*children;
 	modcallable		*tail;		/* of the children list */
 	CONF_SECTION		*cs;
-	value_pair_map_t	*map;		/* update */
+	vp_map_t	*map;		/* update */
 	vp_tmpl_t	*vpt;		/* switch */
 	fr_cond_t		*cond;		/* if/elsif */
 	bool			done_pass2;
@@ -321,7 +321,7 @@ static rlm_rcode_t CC_HINT(nonnull) call_modsingle(rlm_components_t component, m
 	return request->rcode;
 }
 
-static int default_component_results[RLM_COMPONENT_COUNT] = {
+static int default_component_results[MOD_COUNT] = {
 	RLM_MODULE_REJECT,	/* AUTH */
 	RLM_MODULE_NOTFOUND,	/* AUTZ */
 	RLM_MODULE_NOOP,	/* PREACCT */
@@ -584,7 +584,7 @@ redo:
 	if (c->type == MOD_UPDATE) {
 		int rcode;
 		modgroup *g = mod_callabletogroup(c);
-		value_pair_map_t *map;
+		vp_map_t *map;
 
 		MOD_LOG_OPEN_BRACE;
 		RINDENT();
@@ -659,7 +659,7 @@ redo:
 		     vp != NULL;
 		     vp = fr_cursor_next(&copy)) {
 #ifndef NDEBUG
-			if (fr_debug_flag >= 2) {
+			if (fr_debug_lvl >= 2) {
 				char buffer[1024];
 
 				vp_prints_value(buffer, sizeof(buffer), vp, '"');
@@ -687,10 +687,12 @@ redo:
 			}
 
 			/*
-			 *	We've unwound to the enclosing
-			 *	"foreach".  Stop the unwinding.
+			 *	We've been asked to unwind to the
+			 *	enclosing "foreach".  We're here, so
+			 *	we can stop unwinding.
 			 */
-			if (next->unwind == MOD_FOREACH) {
+			if (next->unwind == MOD_BREAK) {
+				entry->unwind = 0;
 				break;
 			}
 
@@ -788,7 +790,7 @@ redo:
 		modgroup *g, *h;
 		fr_cond_t cond;
 		value_data_t data;
-		value_pair_map_t map;
+		vp_map_t map;
 		vp_tmpl_t vpt;
 
 		MOD_LOG_OPEN_BRACE;
@@ -1003,7 +1005,7 @@ redo:
 			radius_xlat(buffer, sizeof(buffer), request, mx->xlat_name, NULL, NULL);
 		} else {
 			RDEBUG("`%s`", mx->xlat_name);
-			radius_exec_program(NULL, 0, NULL, request, mx->xlat_name, request->packet->vps,
+			radius_exec_program(request, NULL, 0, NULL, request, mx->xlat_name, request->packet->vps,
 					    false, true, EXEC_TIMEOUT);
 		}
 
@@ -1075,7 +1077,6 @@ calculate_result:
 	 */
 	if (entry->unwind == MOD_BREAK) {
 		RDEBUG2("# unwind to enclosing foreach");
-		entry->unwind = 0;
 		goto finish;
 	}
 
@@ -1186,7 +1187,7 @@ static void dump_tree(rlm_components_t comp, modcallable *c)
  * behaves like the code from the old module_*() function. redundant{}
  * are based on my guesses of what they will be used for. --Pac. */
 static const int
-defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
+defaultactions[MOD_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 {
 	/* authenticate */
 	{
@@ -1497,7 +1498,7 @@ static const int authtype_actions[GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
  * @param ctx data to pass to fixup function (currently unused).
  * @return 0 if valid else -1.
  */
-int modcall_fixup_update(value_pair_map_t *map, UNUSED void *ctx)
+int modcall_fixup_update(vp_map_t *map, UNUSED void *ctx)
 {
 	CONF_PAIR *cp = cf_item_to_pair(map->ci);
 
@@ -1550,22 +1551,11 @@ int modcall_fixup_update(value_pair_map_t *map, UNUSED void *ctx)
 	/*
 	 *	Depending on the attribute type, some operators are disallowed.
 	 */
-	if (map->lhs->type == TMPL_TYPE_ATTR) {
-		switch (map->op) {
-		default:
-			cf_log_err(map->ci, "Invalid operator for attribute");
-			return -1;
-
-		case T_OP_EQ:
-		case T_OP_CMP_EQ:
-		case T_OP_ADD:
-		case T_OP_SUB:
-		case T_OP_LE:
-		case T_OP_GE:
-		case T_OP_CMP_FALSE:
-		case T_OP_SET:
-			break;
-		}
+	if ((map->lhs->type == TMPL_TYPE_ATTR) && (!fr_assignment_op[map->op] && !fr_equality_op[map->op])) {
+		cf_log_err(map->ci, "Invalid operator \"%s\" in update section.  "
+			   "Only assignment or filter operators are allowed",
+			   fr_int2str(fr_tokens, map->op, "<INVALID>"));
+		return -1;
 	}
 
 	if (map->lhs->type == TMPL_TYPE_LIST) {
@@ -1706,7 +1696,7 @@ static modcallable *do_compile_modupdate(modcallable *parent, rlm_components_t c
 	modgroup *g;
 	modcallable *csingle;
 
-	value_pair_map_t *head;
+	vp_map_t *head;
 
 	/*
 	 *	This looks at cs->name2 to determine which list to update
@@ -2547,7 +2537,7 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 		 *	which isn't loaded into the "modules" section.
 		 */
 		if (cf_section_sub_find_name2(modules, NULL, realname)) {
-			this = find_module_instance(modules, realname, true);
+			this = module_instantiate(modules, realname);
 			if (this) goto allocate_csingle;
 
 			/*
@@ -2581,8 +2571,8 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 		/*
 		 *	Find the component.
 		 */
-		for (i = RLM_COMPONENT_AUTH;
-		     i < RLM_COMPONENT_COUNT;
+		for (i = MOD_AUTHENTICATE;
+		     i < MOD_COUNT;
 		     i++) {
 			if (strcmp(p, comp2str[i]) == 0) {
 				char buffer[256];
@@ -2591,7 +2581,7 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 				buffer[p - modrefname - 1] = '\0';
 				component = i;
 
-				this = find_module_instance(modules, buffer, true);
+				this = module_instantiate(modules, buffer);
 				if (this) {
 					method = i;
 					goto allocate_csingle;
@@ -2635,7 +2625,7 @@ allocate_csingle:
 	csingle = mod_singletocallable(single);
 	csingle->parent = parent;
 	csingle->next = NULL;
-	if (!parent || (component != RLM_COMPONENT_AUTH)) {
+	if (!parent || (component != MOD_AUTHENTICATE)) {
 		memcpy(csingle->actions, defaultactions[component][grouptype],
 		       sizeof csingle->actions);
 	} else { /* inside Auth-Type has different rules */
@@ -2924,7 +2914,7 @@ set_codes:
 	 */
 	for (i = 0; i < RLM_MODULE_NUMCODES; i++) {
 		if (!c->actions[i]) {
-			if (!parent || (component != RLM_COMPONENT_AUTH)) {
+			if (!parent || (component != MOD_AUTHENTICATE)) {
 				c->actions[i] = defaultactions[component][parentgrouptype][i];
 			} else { /* inside Auth-Type has different rules */
 				c->actions[i] = authtype_actions[parentgrouptype][i];
@@ -2963,7 +2953,7 @@ modcallable *compile_modgroup(modcallable *parent,
 					       GROUPTYPE_SIMPLE,
 					       GROUPTYPE_SIMPLE, MOD_GROUP);
 
-	if (debug_flag > 3) {
+	if (rad_debug_lvl > 3) {
 		modcall_debug(ret, 2);
 	}
 
@@ -3136,7 +3126,8 @@ static bool pass2_fixup_undefined(CONF_ITEM const *ci, vp_tmpl_t *vpt)
 
 static bool pass2_callback(UNUSED void *ctx, fr_cond_t *c)
 {
-	value_pair_map_t *map;
+	vp_map_t *map;
+	vp_tmpl_t *vpt;
 
 	if (c->type == COND_TYPE_EXISTS) {
 		if (c->data.vpt->type == TMPL_TYPE_XLAT) {
@@ -3261,7 +3252,6 @@ check_paircmp:
 	    (strncmp(map->lhs->name, "Foreach-Variable-", 17) == 0)) {
 		char *fmt;
 		ssize_t slen;
-		vp_tmpl_t *vpt;
 
 		fmt = talloc_asprintf(map->lhs, "%%{%s}", map->lhs->name);
 		slen = tmpl_afrom_str(map, &vpt, fmt, talloc_array_length(fmt) - 1,
@@ -3293,6 +3283,23 @@ check_paircmp:
 	}
 	rad_assert(map->lhs->type != TMPL_TYPE_REGEX);
 #endif
+
+	/*
+	 *	Convert &Packet-Type to "%{Packet-Type}", because
+	 *	these attributes don't really exist.  The code to
+	 *	find an attribute reference doesn't work, but the
+	 *	xlat code does.
+	 */
+	vpt = c->data.map->lhs;
+	if ((vpt->type == TMPL_TYPE_ATTR) && vpt->tmpl_da->flags.virtual) {
+		if (!c->cast) c->cast = vpt->tmpl_da;
+		vpt->tmpl_xlat = xlat_from_tmpl_attr(vpt, vpt);
+		vpt->type = TMPL_TYPE_XLAT_STRUCT;
+	}
+
+	/*
+	 *	@todo v3.1: do the same thing for the RHS...
+	 */
 
 	/*
 	 *	Only attributes can have a paircompare registered, and
@@ -3346,7 +3353,7 @@ check_paircmp:
  */
 static bool modcall_pass2_update(modgroup *g)
 {
-	value_pair_map_t *map;
+	vp_map_t *map;
 
 	for (map = g->map; map != NULL; map = map->next) {
 		if (map->rhs->type == TMPL_TYPE_XLAT) {
@@ -3725,7 +3732,7 @@ void modcall_debug(modcallable *mc, int depth)
 {
 	modcallable *this;
 	modgroup *g;
-	value_pair_map_t *map;
+	vp_map_t *map;
 	char buffer[1024];
 
 	for (this = mc; this != NULL; this = this->next) {

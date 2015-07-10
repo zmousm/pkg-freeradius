@@ -731,7 +731,7 @@ static int command_hup(rad_listen_t *listener, int argc, char *argv[])
 	cs = cf_section_find("modules");
 	if (!cs) return CMD_FAIL;
 
-	mi = find_module_instance(cs, argv[0], false);
+	mi = module_find(cs, argv[0]);
 	if (!mi) {
 		cprintf_error(listener, "No such module \"%s\"\n", argv[0]);
 		return CMD_FAIL;
@@ -911,7 +911,7 @@ static int command_show_module_config(rad_listen_t *listener, int argc, char *ar
 	cs = cf_section_find("modules");
 	if (!cs) return CMD_FAIL;
 
-	mi = find_module_instance(cs, argv[0], false);
+	mi = module_find(cs, argv[0]);
 	if (!mi) {
 		cprintf_error(listener, "No such module \"%s\"\n", argv[0]);
 		return CMD_FAIL;
@@ -922,7 +922,7 @@ static int command_show_module_config(rad_listen_t *listener, int argc, char *ar
 	return CMD_OK;
 }
 
-static char const *method_names[RLM_COMPONENT_COUNT] = {
+static char const *method_names[MOD_COUNT] = {
 	"authenticate",
 	"authorize",
 	"preacct",
@@ -949,7 +949,7 @@ static int command_show_module_methods(rad_listen_t *listener, int argc, char *a
 	cs = cf_section_find("modules");
 	if (!cs) return CMD_FAIL;
 
-	mi = find_module_instance(cs, argv[0], false);
+	mi = module_find(cs, argv[0]);
 	if (!mi) {
 		cprintf_error(listener, "No such module \"%s\"\n", argv[0]);
 		return CMD_FAIL;
@@ -957,7 +957,7 @@ static int command_show_module_methods(rad_listen_t *listener, int argc, char *a
 
 	mod = mi->entry->module;
 
-	for (i = 0; i < RLM_COMPONENT_COUNT; i++) {
+	for (i = 0; i < MOD_COUNT; i++) {
 		if (mod->methods[i]) cprintf(listener, "%s\n", method_names[i]);
 	}
 
@@ -979,7 +979,7 @@ static int command_show_module_flags(rad_listen_t *listener, int argc, char *arg
 	cs = cf_section_find("modules");
 	if (!cs) return CMD_FAIL;
 
-	mi = find_module_instance(cs, argv[0], false);
+	mi = module_find(cs, argv[0]);
 	if (!mi) {
 		cprintf_error(listener, "No such module \"%s\"\n", argv[0]);
 		return CMD_FAIL;
@@ -989,11 +989,6 @@ static int command_show_module_flags(rad_listen_t *listener, int argc, char *arg
 
 	if ((mod->type & RLM_TYPE_THREAD_UNSAFE) != 0)
 		cprintf(listener, "thread-unsafe\n");
-
-
-	if ((mod->type & RLM_TYPE_CHECK_CONFIG_UNSAFE) != 0)
-		cprintf(listener, "no-check-config\n");
-
 
 	if ((mod->type & RLM_TYPE_HUP_SAFE) != 0)
 		cprintf(listener, "reload-on-hup\n");
@@ -1014,7 +1009,7 @@ static int command_show_module_status(rad_listen_t *listener, int argc, char *ar
 	cs = cf_section_find("modules");
 	if (!cs) return CMD_FAIL;
 
-	mi = find_module_instance(cs, argv[0], false);
+	mi = module_find(cs, argv[0]);
 	if (!mi) {
 		cprintf_error(listener, "No such module \"%s\"\n", argv[0]);
 		return CMD_FAIL;
@@ -1049,12 +1044,12 @@ static int command_show_modules(rad_listen_t *listener, UNUSED int argc, UNUSED 
 		module_instance_t *mi;
 
 		if (name2) {
-			mi = find_module_instance(cs, name2, false);
+			mi = module_find(cs, name2);
 			if (!mi) continue;
 
 			cprintf(listener, "%s (%s)\n", name2, name1);
 		} else {
-			mi = find_module_instance(cs, name1, false);
+			mi = module_find(cs, name1);
 			if (!mi) continue;
 
 			cprintf(listener, "%s\n", name1);
@@ -1196,7 +1191,7 @@ static int command_debug_level(rad_listen_t *listener, int argc, char *argv[])
 		return -1;
 	}
 
-	fr_debug_flag = debug_flag = number;
+	fr_debug_lvl = rad_debug_lvl = number;
 
 	return CMD_OK;
 }
@@ -1205,7 +1200,7 @@ static char debug_log_file_buffer[1024];
 
 static int command_debug_file(rad_listen_t *listener, int argc, char *argv[])
 {
-	if (debug_flag && default_log.dst == L_DST_STDOUT) {
+	if (rad_debug_lvl && default_log.dst == L_DST_STDOUT) {
 		cprintf_error(listener, "Cannot redirect debug logs to a file when already in debugging mode.\n");
 		return -1;
 	}
@@ -1248,7 +1243,7 @@ static int command_debug_condition(rad_listen_t *listener, int argc, char *argv[
 	 *	Disable it.
 	 */
 	if (argc == 0) {
-		talloc_free(debug_condition);
+		TALLOC_FREE(debug_condition);
 		debug_condition = NULL;
 		return CMD_OK;
 	}
@@ -1322,7 +1317,7 @@ static int command_debug_condition(rad_listen_t *listener, int argc, char *argv[
 		ERROR("%s", p);
 		ERROR("%s^ %s", spaces, error);
 
-		cprintf(listener, "Parse error in condition \"%s\": %s\n", p, error);
+		cprintf_error(listener, "Parse error in condition \"%s\": %s\n", p, error);
 
 		talloc_free(spaces);
 		talloc_free(text);
@@ -1335,7 +1330,7 @@ static int command_debug_condition(rad_listen_t *listener, int argc, char *argv[
 	 *	This is thread-safe because the condition is evaluated
 	 *	in the main server thread, along with this code.
 	 */
-	talloc_free(debug_condition);
+	TALLOC_FREE(debug_condition);
 	debug_condition = new_condition;
 
 	return CMD_OK;
@@ -1346,7 +1341,7 @@ static int command_show_debug_condition(rad_listen_t *listener,
 {
 	char buffer[1024];
 
-	if (debug_condition) {
+	if (!debug_condition) {
 		cprintf(listener, "\n");
 		return CMD_OK;
 	}
@@ -1371,7 +1366,7 @@ static int command_show_debug_file(rad_listen_t *listener,
 static int command_show_debug_level(rad_listen_t *listener,
 					UNUSED int argc, UNUSED char *argv[])
 {
-	cprintf(listener, "%d\n", debug_flag);
+	cprintf(listener, "%d\n", rad_debug_lvl);
 	return CMD_OK;
 }
 
@@ -1612,7 +1607,7 @@ static int null_socket_send(UNUSED rad_listen_t *listener, REQUEST *request)
 
 		fprintf(fp, "%s\n", what);
 
-		if (debug_flag) {
+		if (rad_debug_lvl) {
 			RDEBUG("Injected %s packet to host %s port 0 code=%d, id=%d", what,
 			       inet_ntop(request->reply->src_ipaddr.af,
 					 &request->reply->src_ipaddr.ipaddr,
@@ -1816,7 +1811,7 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 #endif
 	}
 
-	if (debug_flag) {
+	if (rad_debug_lvl) {
 		DEBUG("Injecting %s packet from host %s port 0 code=%d, id=%d",
 				fr_packet_codes[packet->code],
 				inet_ntop(packet->src_ipaddr.af,
@@ -1990,7 +1985,7 @@ static int command_set_module_config(rad_listen_t *listener, int argc, char *arg
 	cs = cf_section_find("modules");
 	if (!cs) return 0;
 
-	mi = find_module_instance(cs, argv[0], false);
+	mi = module_find(cs, argv[0]);
 	if (!mi) {
 		cprintf_error(listener, "No such module \"%s\"\n", argv[0]);
 		return 0;
@@ -2073,7 +2068,7 @@ static int command_set_module_status(rad_listen_t *listener, int argc, char *arg
 	cs = cf_section_find("modules");
 	if (!cs) return 0;
 
-	mi = find_module_instance(cs, argv[0], false);
+	mi = module_find(cs, argv[0]);
 	if (!mi) {
 		cprintf_error(listener, "No such module \"%s\"\n", argv[0]);
 		return 0;
@@ -2181,6 +2176,38 @@ static int command_stats_queue(rad_listen_t *listener, UNUSED int argc, UNUSED c
 }
 #endif
 
+#ifndef NDEBUG
+static int command_stats_memory(rad_listen_t *listener, int argc, char *argv[])
+{
+
+	if (!main_config.debug_memory || !main_config.memory_report) {
+		cprintf(listener, "No memory debugging was enabled.\n");
+		return CMD_OK;
+	}
+
+	if (argc == 0) goto fail;
+
+	if (strcmp(argv[0], "total") == 0) {
+		cprintf(listener, "%zd\n", talloc_total_size(NULL));
+		return CMD_OK;
+	}
+
+	if (strcmp(argv[0], "blocks") == 0) {
+		cprintf(listener, "%zd\n", talloc_total_blocks(NULL));
+		return CMD_OK;
+	}
+
+	if (strcmp(argv[0], "full") == 0) {
+		cprintf(listener, "see stdout of the server for the full report.\n");
+		fr_log_talloc_report(NULL);
+		return CMD_OK;
+	}
+
+fail:
+	cprintf_error(listener, "Must use 'stats memory [blocks|full|total]'\n");
+	return CMD_FAIL;
+}
+#endif
 
 #ifdef WITH_DETAIL
 static FR_NAME_NUMBER state_names[] = {
@@ -2544,6 +2571,12 @@ static fr_command_table_t command_table_stats[] = {
 	  "stats socket <ipaddr> <port> [udp|tcp] "
 	  "- show statistics for given socket",
 	  command_stats_socket, NULL },
+
+#ifndef NDEBUG
+	{ "memory", FR_READ,
+	  "stats memory [blocks|full|total] - show statistics on used memory",
+	  command_stats_memory, NULL },
+#endif
 
 	{ NULL, 0, NULL, NULL, NULL }
 };

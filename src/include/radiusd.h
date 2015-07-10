@@ -101,6 +101,74 @@ typedef enum rlm_rcodes {
 } rlm_rcode_t;
 extern const FR_NAME_NUMBER modreturn_table[];
 
+/** Main server configuration
+ *
+ * The parsed version of the main server config.
+ */
+typedef struct main_config {
+	struct main_config *next;			//!< Next version of the main_config.
+
+	char const	*name;				//!< Name of the daemon, usually 'radiusd'.
+	CONF_SECTION	*config;			//!< Root of the server config.
+
+	fr_ipaddr_t	myip;				//!< IP to bind to. Set on command line.
+	uint16_t	port;				//!< Port to bind to. Set on command line.
+
+	bool		log_auth;			//!< Log authentication attempts.
+	bool		log_auth_badpass;		//!< Log successful authentications.
+	bool		log_auth_goodpass;		//!< Log failed authentications.
+	char const	*auth_badpass_msg;		//!< Additional text to append to successful auth messages.
+	char const	*auth_goodpass_msg;		//!< Additional text to append to failed auth messages.
+
+	char const	*denied_msg;			//!< Additional text to append if the user is already logged
+							//!< in (simultaneous use check failed).
+
+	bool		daemonize;			//!< Should the server daemonize on startup.
+	char const      *pid_file;			//!< Path to write out PID file.
+
+#ifdef WITH_PROXY
+	bool		proxy_requests;			//!< Toggle to enable/disable proxying globally.
+#endif
+	struct timeval	reject_delay;			//!< How long to wait before sending an Access-Reject.
+	bool		status_server;			//!< Whether to respond to status-server messages.
+
+
+	uint32_t	max_request_time;		//!< How long a request can be processed for before
+							//!< timing out.
+	uint32_t	cleanup_delay;			//!< How long before cleaning up cached responses.
+	uint32_t	max_requests;
+
+	uint32_t	debug_level;
+	char const	*log_file;
+	int		syslog_facility;
+
+	char const	*dictionary_dir;		//!< Where to load dictionaries from.
+
+	char const	*checkrad;			//!< Script to use to determine if a user is already
+							//!< connected.
+
+	rad_listen_t	*listen;			//!< Head of a linked list of listeners.
+
+
+	char const	*panic_action;			//!< Command to execute if the server receives a fatal
+							//!< signal.
+
+	struct timeval	init_delay;			//!< Initial request processing delay.
+
+	uint32_t       	talloc_pool_size;		//!< Size of pool to allocate to hold each #REQUEST.
+	bool		debug_memory;			//!< Cleanup the server properly on exit, freeing
+							//!< up any memory we allocated.
+	bool		memory_report;			//!< Print a memory report on what's left unfreed.
+							//!< Can only be used when the server is running in single
+							//!< threaded mode.
+
+	bool		allow_core_dumps;		//!< Whether the server is allowed to drop a core when
+							//!< receiving a fatal signal.
+
+#ifdef ENABLE_OPENSSL_VERSION_CHECK
+	char const	*allow_vulnerable_openssl;	//!< The CVE number of the last security issue acknowledged.
+#endif
+} main_config_t;
 
 #if defined(WITH_VERIFY_PTR)
 #  define VERIFY_REQUEST(_x) verify_request(__FILE__, __LINE__, _x)
@@ -186,7 +254,7 @@ struct rad_request {
 	pthread_t    		child_pid;	//!< Current thread handling the request.
 #endif
 
-	struct main_config_t	*root;		//!< Pointer to the main config hack to try and deal with hup.
+	main_config_t		*root;		//!< Pointer to the main config hack to try and deal with hup.
 
 
 	int			simul_max;	//!< Maximum number of concurrent sessions for this user.
@@ -240,46 +308,6 @@ struct rad_request {
 #define RAD_REQUEST_OPTION_COA	(1 << 0)
 #define RAD_REQUEST_OPTION_CTX	(1 << 1)
 
-typedef struct main_config_t {
-	struct main_config *next;
-	fr_ipaddr_t	myip;	/* from the command-line only */
-	uint16_t	port;	/* from the command-line only */
-	bool		log_auth;
-	bool		log_auth_badpass;
-	bool		log_auth_goodpass;
-	bool		allow_core_dumps;
-	uint32_t	debug_level;
-	bool		daemonize;
-#ifdef WITH_PROXY
-	bool		proxy_requests;
-#endif
-	struct timeval	reject_delay;
-	bool		status_server;
-#ifdef ENABLE_OPENSSL_VERSION_CHECK
-	char const	*allow_vulnerable_openssl;
-#endif
-
-	uint32_t	max_request_time;
-	uint32_t	cleanup_delay;
-	uint32_t	max_requests;
-	char const	*log_file;
-	char const	*dictionary_dir;
-	char const	*checkrad;
-	char const      *pid_file;
-	rad_listen_t	*listen;
-	int		syslog_facility;
-	CONF_SECTION	*config;
-	char const	*name;
-	char const	*auth_badpass_msg;
-	char const	*auth_goodpass_msg;
-	bool		debug_memory;
-	bool		memory_report;
-	char const	*panic_action;
-	char const	*denied_msg;
-	uint32_t       	talloc_pool_size;
-	struct timeval	init_delay; /* initial request processing delay */
-} MAIN_CONFIG_T;
-
 #define SECONDS_PER_DAY		86400
 #define MAX_REQUEST_TIME	30
 #define CLEANUP_DELAY		5
@@ -312,7 +340,7 @@ typedef enum request_fail {
  *	We really shouldn't have this many.
  */
 extern char const	*progname;
-extern log_lvl_t	debug_flag;
+extern log_lvl_t	rad_debug_lvl;
 extern char const	*radacct_dir;
 extern char const	*radlog_dir;
 extern char const	*radlib_dir;
@@ -380,7 +408,7 @@ int		rad_copy_string_bare(char *dst, char const *src);
 int		rad_copy_variable(char *dst, char const *from);
 uint32_t	rad_pps(uint32_t *past, uint32_t *present, time_t *then, struct timeval *now);
 int		rad_expand_xlat(REQUEST *request, char const *cmd,
-				int max_argc, char *argv[], bool can_fail,
+				int max_argc, char const *argv[], bool can_fail,
 				size_t argv_buflen, char *argv_buf);
 
 void		verify_request(char const *file, int line, REQUEST *request);	/* only for special debug builds */
@@ -451,15 +479,17 @@ pid_t radius_start_program(char const *cmd, REQUEST *request, bool exec_wait,
 			   VALUE_PAIR *input_pairs, bool shell_escape);
 int radius_readfrom_program(int fd, pid_t pid, int timeout,
 			    char *answer, int left);
-int radius_exec_program(char *out, size_t outlen, VALUE_PAIR **output_pairs,
+int radius_exec_program(TALLOC_CTX *ctx, char *out, size_t outlen, VALUE_PAIR **output_pairs,
 			REQUEST *request, char const *cmd, VALUE_PAIR *input_pairs,
-			bool exec_wait, bool shell_escape, int timeout) CC_HINT(nonnull (4, 5));
+			bool exec_wait, bool shell_escape, int timeout) CC_HINT(nonnull (5, 6));
 void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quench)
      CC_HINT(nonnull (3));
 
 /* valuepair.c */
+int paircompare_register_byname(char const *name, DICT_ATTR const *from,
+				bool first_only, RAD_COMPARE_FUNC func, void *instance);
 int paircompare_register(DICT_ATTR const *attribute, DICT_ATTR const *from,
-	  bool first_only, RAD_COMPARE_FUNC func, void *instance);
+			 bool first_only, RAD_COMPARE_FUNC func, void *instance);
 void		paircompare_unregister(DICT_ATTR const *attr, RAD_COMPARE_FUNC func);
 void		paircompare_unregister_instance(void *instance);
 int		paircompare(REQUEST *request, VALUE_PAIR *req_list,
@@ -512,7 +542,7 @@ void	thread_pool_queue_stats(int array[RAD_LISTEN_MAX], int pps[2]);
 /* Define a global config structure */
 extern bool			log_dates_utc;
 extern bool 			check_config;
-extern struct main_config_t	main_config;
+extern main_config_t		main_config;
 extern bool			event_loop_started;
 
 void set_radius_dir(TALLOC_CTX *ctx, char const *path);

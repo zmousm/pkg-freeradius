@@ -71,7 +71,7 @@ void client_free(RADCLIENT *client)
 		time_t now;
 
 		if (!deleted_clients) {
-			deleted_clients = fr_fifo_create(1024, (void (*)(void *))client_free);
+			deleted_clients = fr_fifo_create(NULL, 1024, (void (*)(void *))client_free);
 			if (!deleted_clients) return; /* MEMLEAK */
 		}
 
@@ -231,12 +231,20 @@ bool client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 	if (!clients) {
 		if (client->server != NULL) {
 			CONF_SECTION *cs;
+			CONF_SECTION *subcs;
 
 			cs = cf_section_sub_find_name2(main_config.config, "server", client->server);
 			if (!cs) {
 				ERROR("Failed to find virtual server %s", client->server);
 				return false;
 			}
+
+			/*
+			 *	If this server has no "listen" section, add the clients
+			 *	to the global client list.
+			 */
+			subcs = cf_section_sub_find(cs, "listen");
+			if (!subcs) goto global_clients;
 
 			/*
 			 *	If the client list already exists, use that.
@@ -258,6 +266,7 @@ bool client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 			}
 
 		} else {
+		global_clients:
 			/*
 			 *	Initialize the global list, if not done already.
 			 */
@@ -1197,6 +1206,7 @@ RADCLIENT *client_afrom_query(TALLOC_CTX *ctx, char const *identifier, char cons
  */
 RADCLIENT *client_afrom_request(RADCLIENT_LIST *clients, REQUEST *request)
 {
+	static int	cnt;
 	int		i, *pi;
 	char		**p;
 	RADCLIENT	*c;
@@ -1208,8 +1218,11 @@ RADCLIENT *client_afrom_request(RADCLIENT_LIST *clients, REQUEST *request)
 
 	if (!clients || !request) return NULL;
 
+	snprintf(buffer, sizeof(buffer), "dynamic%i", cnt++);
+
 	c = talloc_zero(clients, RADCLIENT);
-	c->cs = request->client->cs;
+	c->cs = cf_section_alloc(NULL, "client", buffer);
+	talloc_steal(c, c->cs);
 	c->ipaddr.af = AF_UNSPEC;
 	c->src_ipaddr.af = AF_UNSPEC;
 
@@ -1250,7 +1263,7 @@ RADCLIENT *client_afrom_request(RADCLIENT_LIST *clients, REQUEST *request)
 		/*
 		 *	Freed at the same time as the vp.
 		 */
-		if (RDEBUG_ENABLED2) strvalue = vp_aprints_value(vp, vp, '\'');
+		strvalue = vp_aprints_value(vp, vp, '\'');
 
 		switch (dynamic_config[i].type) {
 		case PW_TYPE_IPV4_ADDR:

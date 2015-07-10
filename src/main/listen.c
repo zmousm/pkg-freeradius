@@ -48,6 +48,9 @@ RCSID("$Id$")
 #include <fcntl.h>
 #endif
 
+#ifdef HAVE_SYS_STAT_H
+#include <sys/stat.h>
+#endif
 
 #ifdef DEBUG_PRINT_PACKET
 static void print_packet(RADIUS_PACKET *packet)
@@ -144,7 +147,7 @@ RADCLIENT *client_listener_find(rad_listen_t *listener,
 		 *	If they're running in debug mode, show them
 		 *	every packet.
 		 */
-		if (debug_flag == 0) {
+		if (rad_debug_lvl == 0) {
 			static time_t last_printed = 0;
 
 			now = time(NULL);
@@ -183,6 +186,10 @@ RADCLIENT *client_listener_find(rad_listen_t *listener,
 	 *	It's a dynamically generated client, check it.
 	 */
 	if (client->dynamic && (src_port != 0)) {
+#ifdef HAVE_SYS_STAT_H
+		char const *filename;
+#endif
+
 		/*
 		 *	Lives forever.  Return it.
 		 */
@@ -200,6 +207,26 @@ RADCLIENT *client_listener_find(rad_listen_t *listener,
 		 *	It's not dead yet.  Return it.
 		 */
 		if ((client->created + client->lifetime) > now) return client;
+
+#ifdef HAVE_SYS_STAT_H
+		/*
+		 *	The client was read from a file, and the file
+		 *	hasn't changed since the client was created.
+		 *	Just renew the creation time, and continue.
+		 *	We don't need to re-load the same information.
+		 */
+		if (client->cs &&
+		    (filename = cf_section_filename(client->cs)) != NULL) {
+			struct stat buf;
+
+			if ((stat(filename, &buf) >= 0) &&
+			    (buf.st_mtime < client->created)) {
+				client->created = now;
+				return client;
+			}
+		}
+#endif
+
 
 		/*
 		 *	This really puts them onto a queue for later
@@ -245,6 +272,7 @@ RADCLIENT *client_listener_find(rad_listen_t *listener,
 	request->packet = rad_recv(NULL, listener->fd, 0x02); /* MSG_PEEK */
 	if (!request->packet) {				/* badly formed, etc */
 		talloc_free(request);
+		ERROR("Receive - %s", fr_strerror());
 		goto unknown;
 	}
 	(void) talloc_steal(request, request->packet);
@@ -987,7 +1015,7 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 		rcode = cf_item_parse(cs, "proto", FR_ITEM_POINTER(PW_TYPE_STRING, &proto), "udp");
 		if (rcode < 0) return -1;
 
-		if (strcmp(proto, "udp") == 0) {
+		if (!proto || strcmp(proto, "udp") == 0) {
 			sock->proto = IPPROTO_UDP;
 
 		} else if (strcmp(proto, "tcp") == 0) {
@@ -1414,6 +1442,7 @@ static int stats_socket_recv(rad_listen_t *listener)
 	FR_STATS_INC(auth, total_requests);
 
 	if (rcode < 20) {	/* RADIUS_HDR_LEN */
+		ERROR("Receive - %s", fr_strerror());
 		FR_STATS_INC(auth, total_malformed_requests);
 		return 0;
 	}
@@ -1445,7 +1474,7 @@ static int stats_socket_recv(rad_listen_t *listener)
 	packet = rad_recv(NULL, listener->fd, 1); /* require message authenticator */
 	if (!packet) {
 		FR_STATS_INC(auth, total_malformed_requests);
-		DEBUG("%s", fr_strerror());
+		ERROR("Receive - %s", fr_strerror());
 		return 0;
 	}
 
@@ -1483,6 +1512,7 @@ static int auth_socket_recv(rad_listen_t *listener)
 	FR_STATS_INC(auth, total_requests);
 
 	if (rcode < 20) {	/* RADIUS_HDR_LEN */
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
 		FR_STATS_INC(auth, total_malformed_requests);
 		return 0;
 	}
@@ -1518,8 +1548,8 @@ static int auth_socket_recv(rad_listen_t *listener)
 		rad_recv_discard(listener->fd);
 		FR_STATS_INC(auth, total_unknown_types);
 
-		DEBUG("Invalid packet code %d sent to authentication port from client %s port %d : IGNORED",
-		      code, client->shortname, src_port);
+		if (DEBUG_ENABLED) ERROR("Receive - Invalid packet code %d sent to authentication port from "
+					 "client %s port %d", code, client->shortname, src_port);
 		return 0;
 	} /* switch over packet types */
 
@@ -1529,6 +1559,7 @@ static int auth_socket_recv(rad_listen_t *listener)
 		FR_STATS_INC(auth, total_packets_dropped);
 		return 0;
 	}
+	talloc_set_name_const(ctx, "auth_listener_pool");
 
 	/*
 	 *	Now that we've sanity checked everything, receive the
@@ -1536,9 +1567,9 @@ static int auth_socket_recv(rad_listen_t *listener)
 	 */
 	packet = rad_recv(ctx, listener->fd, client->message_authenticator);
 	if (!packet) {
-		talloc_free(ctx);
 		FR_STATS_INC(auth, total_malformed_requests);
-		DEBUG("%s", fr_strerror());
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
+		talloc_free(ctx);
 		return 0;
 	}
 
@@ -1597,6 +1628,7 @@ static int acct_socket_recv(rad_listen_t *listener)
 	FR_STATS_INC(acct, total_requests);
 
 	if (rcode < 20) {	/* RADIUS_HDR_LEN */
+		ERROR("Receive - %s", fr_strerror());
 		FR_STATS_INC(acct, total_malformed_requests);
 		return 0;
 	}
@@ -1644,6 +1676,7 @@ static int acct_socket_recv(rad_listen_t *listener)
 		FR_STATS_INC(acct, total_packets_dropped);
 		return 0;
 	}
+	talloc_set_name_const(ctx, "acct_listener_pool");
 
 	/*
 	 *	Now that we've sanity checked everything, receive the
@@ -1652,7 +1685,8 @@ static int acct_socket_recv(rad_listen_t *listener)
 	packet = rad_recv(ctx, listener->fd, 0);
 	if (!packet) {
 		FR_STATS_INC(acct, total_malformed_requests);
-		ERROR("%s", fr_strerror());
+		ERROR("Receive - %s", fr_strerror());
+		talloc_free(ctx);
 		return 0;
 	}
 
@@ -1662,6 +1696,7 @@ static int acct_socket_recv(rad_listen_t *listener)
 	if (!request_receive(ctx, listener, packet, client, fun)) {
 		FR_STATS_INC(acct, total_packets_dropped);
 		rad_free(&packet);
+		talloc_free(ctx);
 		return 0;
 	}
 
@@ -1782,13 +1817,18 @@ int rad_coa_recv(REQUEST *request)
 			request->reply->code = ack;
 			break;
 		}
-	} else if (request->proxy_reply) {
+
+	}
+
+#ifdef WITH_PROXY
+	else if (request->proxy_reply) {
 		/*
 		 *	Start the reply code with the proxy reply
 		 *	code.
 		 */
 		request->reply->code = request->proxy_reply->code;
 	}
+#endif
 
 	/*
 	 *	Copy State from the request to the reply.
@@ -1864,7 +1904,7 @@ static int coa_socket_recv(rad_listen_t *listener)
 	if (rcode < 0) return 0;
 
 	if (rcode < 20) {	/* RADIUS_HDR_LEN */
-		FR_STATS_INC(coa, total_requests);
+		ERROR("Receive - %s", fr_strerror());
 		FR_STATS_INC(coa, total_malformed_requests);
 		return 0;
 	}
@@ -1905,6 +1945,7 @@ static int coa_socket_recv(rad_listen_t *listener)
 		FR_STATS_INC(coa, total_packets_dropped);
 		return 0;
 	}
+	talloc_set_name_const(ctx, "coa_socket_recv_pool");
 
 	/*
 	 *	Now that we've sanity checked everything, receive the
@@ -1913,13 +1954,15 @@ static int coa_socket_recv(rad_listen_t *listener)
 	packet = rad_recv(ctx, listener->fd, client->message_authenticator);
 	if (!packet) {
 		FR_STATS_INC(coa, total_malformed_requests);
-		DEBUG("%s", fr_strerror());
+		ERROR("Receive - %s", fr_strerror());
+		talloc_free(ctx);
 		return 0;
 	}
 
 	if (!request_receive(ctx, listener, packet, client, fun)) {
 		FR_STATS_INC(coa, total_packets_dropped);
 		rad_free(&packet);
+		talloc_free(ctx);
 		return 0;
 	}
 
@@ -1938,7 +1981,7 @@ static int proxy_socket_recv(rad_listen_t *listener)
 
 	packet = rad_recv(NULL, listener->fd, 0);
 	if (!packet) {
-		ERROR("%s", fr_strerror());
+		ERROR("Receive - %s", fr_strerror());
 		return 0;
 	}
 
@@ -2647,8 +2690,6 @@ static int _listener_free(rad_listen_t *this)
 		rad_assert(talloc_parent(sock) == this);
 		rad_assert(sock->ev == NULL);
 
-		rad_assert(!sock->packet || (talloc_parent(sock->packet) == sock));
-
 		/*
 		 *	Remove the child from the parent tree.
 		 */
@@ -2754,7 +2795,7 @@ rad_listen_t *proxy_new_listener(TALLOC_CTX *ctx, home_server_t *home, uint16_t 
 	 */
 	this->print(this, buffer, sizeof(buffer));
 
-	if (debug_flag >= 2) {
+	if (rad_debug_lvl >= 2) {
 		DEBUG("Opening new proxy socket '%s'", buffer);
 	}
 

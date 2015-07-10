@@ -583,7 +583,7 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 			case PW_USER_PASSWORD:
 			case PW_MS_CHAP_PASSWORD:
 				request->password = pairmake(request->packet, &request->packet->vps, "Cleartext-Password",
-							     vp->vp_strvalue, T_OP_EQ);				
+							     vp->vp_strvalue, T_OP_EQ);
 				break;
 
 			case PW_RADCLIENT_TEST_NAME:
@@ -977,7 +977,7 @@ static int send_one_packet(rc_request_t *request)
 	}
 
 	fr_packet_header_print(fr_log_fp, request->packet, false);
-	if (fr_debug_flag > 0) vp_printlist(fr_log_fp, request->packet->vps);
+	if (fr_debug_lvl > 0) vp_printlist(fr_log_fp, request->packet->vps);
 
 	return 0;
 }
@@ -1087,7 +1087,7 @@ static int recv_one_packet(int wait_time)
 	}
 
 	fr_packet_header_print(fr_log_fp, request->reply, true);
-	if (fr_debug_flag > 0) vp_printlist(fr_log_fp, request->reply->vps);
+	if (fr_debug_lvl > 0) vp_printlist(fr_log_fp, request->reply->vps);
 
 	/*
 	 *	Increment counters...
@@ -1168,7 +1168,7 @@ int main(int argc, char **argv)
 	 *	verbosity of library calls and the verbosity of
 	 *	radclient.
 	 */
-	fr_debug_flag = 0;
+	fr_debug_lvl = 0;
 	fr_log_fp = stdout;
 
 #ifndef NDEBUG
@@ -1333,11 +1333,12 @@ int main(int argc, char **argv)
 			break;
 
 		case 'v':
+			fr_debug_lvl = 1;
 			DEBUG("%s", radclient_version);
 			exit(0);
 
 		case 'x':
-			fr_debug_flag++;
+			fr_debug_lvl++;
 			break;
 
 		case 'h':

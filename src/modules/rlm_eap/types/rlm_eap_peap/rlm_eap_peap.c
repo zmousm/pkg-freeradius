@@ -50,7 +50,7 @@ typedef struct rlm_eap_peap_t {
 static CONF_PARSER module_config[] = {
 	{ "tls", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, tls_conf_name), NULL },
 
-	{ "default_method", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, default_method_name), "mschapv2" },
+	{ "default_eap_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, default_method_name), "mschapv2" },
 
 	{ "copy_request_to_tunnel", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_peap_t, copy_request_to_tunnel), "no" },
 
@@ -152,7 +152,6 @@ static int mod_session_init(void *type_arg, eap_handler_t *handler)
 	inst = type_arg;
 
 	handler->tls = true;
-	handler->finished = false;
 
 	/*
 	 *	Check if we need a client certificate.
@@ -197,17 +196,19 @@ static int mod_session_init(void *type_arg, eap_handler_t *handler)
 	 *	so rather than hoping the user figures it out,
 	 *	we force it here.
 	 */
-	ssn->length_flag = 0;
+	ssn->length_flag = false;
 
 	/*
 	 *	TLS session initialization is over.  Now handle TLS
 	 *	related handshaking or application data.
 	 */
 	status = eaptls_start(handler->eap_ds, ssn->peap_flag);
-	RDEBUG2("Start returned %d", status);
-	if (status == 0) {
-		return 0;
+	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
+		REDEBUG("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	} else {
+		RDEBUG2("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
 	}
+	if (status == 0) return 0;
 
 	/*
 	 *	The next stage to process the packet.
@@ -238,47 +239,48 @@ static int mod_process(void *arg, eap_handler_t *handler)
 	}
 
 	status = eaptls_process(handler);
-	RDEBUG2("eaptls_process returned %d\n", status);
+	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
+		REDEBUG("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	} else {
+		RDEBUG2("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	}
+
 	switch (status) {
-		/*
-		 *	EAP-TLS handshake was successful, tell the
-		 *	client to keep talking.
-		 *
-		 *	If this was EAP-TLS, we would just return
-		 *	an EAP-TLS-Success packet here.
-		 */
+	/*
+	 *	EAP-TLS handshake was successful, tell the
+	 *	client to keep talking.
+	 *
+	 *	If this was EAP-TLS, we would just return
+	 *	an EAP-TLS-Success packet here.
+	 */
 	case FR_TLS_SUCCESS:
-		RDEBUG2("FR_TLS_SUCCESS");
 		peap->status = PEAP_STATUS_TUNNEL_ESTABLISHED;
 		break;
 
-		/*
-		 *	The TLS code is still working on the TLS
-		 *	exchange, and it's a valid TLS request.
-		 *	do nothing.
-		 */
+	/*
+	 *	The TLS code is still working on the TLS
+	 *	exchange, and it's a valid TLS request.
+	 *	do nothing.
+	 */
 	case FR_TLS_HANDLED:
-	  /*
-	   *	FIXME: If the SSL session is established, grab the state
-	   *	and EAP id from the inner tunnel, and update it with
-	   *	the expected EAP id!
-	   */
-		RDEBUG2("FR_TLS_HANDLED");
+		/*
+		 *	FIXME: If the SSL session is established, grab the state
+		 *	and EAP id from the inner tunnel, and update it with
+		 *	the expected EAP id!
+		 */
 		return 1;
 
-		/*
-		 *	Handshake is done, proceed with decoding tunneled
-		 *	data.
-		 */
+	/*
+	 *	Handshake is done, proceed with decoding tunneled
+	 *	data.
+	 */
 	case FR_TLS_OK:
-		RDEBUG2("FR_TLS_OK");
 		break;
 
 		/*
 		 *	Anything else: fail.
 		 */
 	default:
-		RDEBUG2("FR_TLS_OTHERS");
 		return 0;
 	}
 

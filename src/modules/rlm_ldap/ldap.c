@@ -98,7 +98,9 @@ size_t rlm_ldap_escape_func(UNUSED REQUEST *request, char *out, size_t outlen, c
  *
  * @param[in] in Str to check.
  * @param[in] inlen Length of string to check.
- * @return true if string looks like a DN, else false.
+ * @return
+ *	- true if string looks like a DN.
+ *	- false if string does not look like DN.
  */
 bool rlm_ldap_is_dn(char const *in, size_t inlen)
 {
@@ -303,7 +305,9 @@ size_t rlm_ldap_normalise_dn(char *out, char const *in)
  *
  * @param full DN.
  * @param part Partial DN as returned by ldap_parse_result.
- * @return the length of the portion of full which wasn't matched or -1 on error.
+ * @return
+ *	- Length of the portion of full which wasn't matched
+ *	- -1 on failure.
  */
 static size_t rlm_ldap_common_dn(char const *full, char const *part)
 {
@@ -439,16 +443,16 @@ char const *rlm_ldap_error_str(ldap_handle_t const *conn)
  *
  * @param[in] inst of LDAP module.
  * @param[in] conn Current connection.
- * @param[in] msgid returned from last operation.
+ * @param[in] msgid returned from last operation. May be -1 if no result processing is required.
  * @param[in] dn Last search or bind DN.
  * @param[out] result Where to write result, if NULL result will be freed.
  * @param[out] error Where to write the error string, may be NULL, must not be freed.
  * @param[out] extra Where to write additional error string to, may be NULL (faster) or must be freed
  *	(with talloc_free).
- * @return One of the LDAP_PROC_* codes.
+ * @return One of the LDAP_PROC_* (#ldap_rcode_t) values.
  */
-static ldap_rcode_t rlm_ldap_result(ldap_instance_t const *inst, ldap_handle_t const *conn, int msgid, char const *dn,
-				    LDAPMessage **result, char const **error, char **extra)
+ldap_rcode_t rlm_ldap_result(rlm_ldap_t const *inst, ldap_handle_t const *conn, int msgid, char const *dn,
+			     LDAPMessage **result, char const **error, char **extra)
 {
 	ldap_rcode_t status = LDAP_PROC_SUCCESS;
 
@@ -465,18 +469,15 @@ static ldap_rcode_t rlm_ldap_result(ldap_instance_t const *inst, ldap_handle_t c
 
 	struct timeval tv;		// Holds timeout values.
 
-	LDAPMessage *tmp_msg;		// Temporary message pointer storage if we weren't provided with one.
+	LDAPMessage *tmp_msg = NULL;	// Temporary message pointer storage if we weren't provided with one.
 
 	char const *tmp_err;		// Temporary error pointer storage if we weren't provided with one.
 
-	if (!error) {
-		error = &tmp_err;
-	}
+	if (!error) error = &tmp_err;
 	*error = NULL;
 
-	if (extra) {
-		*extra = NULL;
-	}
+	if (extra) *extra = NULL;
+	if (result) *result = NULL;
 
 	/*
 	 *	We always need the result, but our caller may not
@@ -486,20 +487,19 @@ static ldap_rcode_t rlm_ldap_result(ldap_instance_t const *inst, ldap_handle_t c
 		freeit = true;
 	}
 
-	*result = NULL;
-
 	/*
 	 *	Check if there was an error sending the request
 	 */
 	ldap_get_option(conn->handle, LDAP_OPT_ERROR_NUMBER, &lib_errno);
 	if (lib_errno != LDAP_SUCCESS) goto process_error;
+	if (msgid < 0) return LDAP_SUCCESS;	/* No msgid and no error, return now */
 
 	memset(&tv, 0, sizeof(tv));
 	tv.tv_sec = inst->res_timeout;
 
 	/*
 	 *	Now retrieve the result and check for errors
-	 *	ldap_result returns -1 on error, and 0 on timeout
+	 *	ldap_result returns -1 on failure, and 0 on timeout
 	 */
 	lib_errno = ldap_result(conn->handle, msgid, 1, &tv, result);
 	if (lib_errno == 0) {
@@ -539,6 +539,11 @@ process_error:
 	switch (lib_errno) {
 	case LDAP_SUCCESS:
 		*error = "Success";
+		break;
+
+	case LDAP_SASL_BIND_IN_PROGRESS:
+		*error = "Continuing";
+		status = LDAP_PROC_CONTINUE;
 		break;
 
 	case LDAP_NO_SUCH_OBJECT:
@@ -656,7 +661,7 @@ process_error:
 
 	talloc_free(our_err);
 
-	if ((lib_errno || srv_errno) && *result) {
+	if ((status < 0) && *result) {
 		ldap_msgfree(*result);
 		*result = NULL;
 	}
@@ -673,24 +678,28 @@ process_error:
  * @param[in,out] pconn to use. May change as this function calls functions which auto re-connect.
  * @param[in] dn of the user, may be NULL to bind anonymously.
  * @param[in] password of the user, may be NULL if no password is specified.
- * @param[in] sasl_mech SASL mechanism to use for bind.
+ * @param[in] sasl mechanism to use for bind, and additional parameters.
  * @param[in] retry if the server is down.
- * @return one of the LDAP_PROC_* values.
+ * @return One of the LDAP_PROC_* (#ldap_rcode_t) values.
  */
-ldap_rcode_t rlm_ldap_bind(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t **pconn, char const *dn,
-			   char const *password, char const *sasl_mech, bool retry)
+ldap_rcode_t rlm_ldap_bind(rlm_ldap_t const *inst, REQUEST *request, ldap_handle_t **pconn, char const *dn,
+			   char const *password, ldap_sasl *sasl, bool retry)
 {
-	ldap_rcode_t	status = LDAP_PROC_ERROR;
+	ldap_rcode_t		status = LDAP_PROC_ERROR;
 
-	int		msgid = -1;
+	int			msgid = -1;
 
-	char const	*error = NULL;
-	char 		*extra = NULL;
+	char const		*error = NULL;
+	char 			*extra = NULL;
 
-	int 		i, num;
+	int 			i, num;
 
 	rad_assert(*pconn && (*pconn)->handle);
 	rad_assert(!retry || inst->pool);
+
+#ifndef HAVE_LDAP_SASL_INTERACTIVE_BIND
+	rad_assert(!sasl->mech);
+#endif
 
 	/*
 	 *	Bind as anonymous user
@@ -701,33 +710,28 @@ ldap_rcode_t rlm_ldap_bind(ldap_instance_t const *inst, REQUEST *request, ldap_h
 	 *	For sanity, for when no connections are viable,
 	 *	and we can't make a new one.
 	 */
-	num = retry ? fr_connection_get_num(inst->pool) : 0;
+	num = retry ? fr_connection_pool_get_num(inst->pool) : 0;
 	for (i = num; i >= 0; i--) {
-#ifdef HAVE_LDAP_SASL_BIND
-		if (sasl_mech) {
-			struct berval cred;
-
-			if (password) {
-				memcpy(&cred.bv_val, &password, sizeof(cred.bv_val));
-				cred.bv_len = talloc_array_length(password) - 1;
-			} else {
-				memset(&cred, 0, sizeof(cred));
-			}
-			ldap_sasl_bind((*pconn)->handle, dn, sasl_mech, &cred, NULL, NULL, &msgid);
+#ifdef HAVE_LDAP_SASL_INTERACTIVE_BIND
+		if (sasl && sasl->mech) {
+			status = rlm_ldap_sasl_interactive(inst, request, *pconn, dn, password, sasl,
+							   &error, &extra);
 		} else
 #endif
-		msgid = ldap_bind((*pconn)->handle, dn, password, LDAP_AUTH_SIMPLE);
+		{
+			msgid = ldap_bind((*pconn)->handle, dn, password, LDAP_AUTH_SIMPLE);
 
-		/* We got a valid message ID */
-		if (msgid >= 0) {
-			if (request) {
-				RDEBUG2("Waiting for bind result...");
-			} else {
-				DEBUG2("rlm_ldap (%s): Waiting for bind result...", inst->name);
+			/* We got a valid message ID */
+			if (msgid >= 0) {
+				if (request) {
+					RDEBUG2("Waiting for bind result...");
+				} else {
+					DEBUG2("rlm_ldap (%s): Waiting for bind result...", inst->name);
+				}
 			}
-		}
 
-		status = rlm_ldap_result(inst, *pconn, msgid, dn, NULL, &error, &extra);
+			status = rlm_ldap_result(inst, *pconn, msgid, dn, NULL, &error, &extra);
+		}
 
 		switch (status) {
 		case LDAP_PROC_SUCCESS:
@@ -801,9 +805,9 @@ ldap_rcode_t rlm_ldap_bind(ldap_instance_t const *inst, REQUEST *request, ldap_h
  * @param[in] attrs to retrieve.
  * @param[in] serverctrls Search controls to pass to the server.  May be NULL.
  * @param[in] clientctrls Search controls for ldap_search.  May be NULL.
- * @return One of the LDAP_PROC_* values.
+ * @return One of the LDAP_PROC_* (#ldap_rcode_t) values.
  */
-ldap_rcode_t rlm_ldap_search(LDAPMessage **result, ldap_instance_t const *inst, REQUEST *request,
+ldap_rcode_t rlm_ldap_search(LDAPMessage **result, rlm_ldap_t const *inst, REQUEST *request,
 			     ldap_handle_t **pconn,
 			     char const *dn, int scope, char const *filter, char const * const *attrs,
 			     LDAPControl **serverctrls, LDAPControl **clientctrls)
@@ -823,7 +827,6 @@ ldap_rcode_t rlm_ldap_search(LDAPMessage **result, ldap_instance_t const *inst, 
 
 	int 		i;
 
-
 	rad_assert(*pconn && (*pconn)->handle);
 
 	/*
@@ -837,8 +840,8 @@ ldap_rcode_t rlm_ldap_search(LDAPMessage **result, ldap_instance_t const *inst, 
 	 *	Do all searches as the admin user.
 	 */
 	if ((*pconn)->rebound) {
-		status = rlm_ldap_bind(inst, request, pconn, (*pconn)->inst->admin_dn, (*pconn)->inst->password,
-				       (*pconn)->inst->admin_sasl_mech, true);
+		status = rlm_ldap_bind(inst, request, pconn, (*pconn)->inst->admin_identity,
+				       (*pconn)->inst->admin_password, &(*pconn)->inst->admin_sasl, true);
 		if (status != LDAP_PROC_SUCCESS) {
 			return LDAP_PROC_ERROR;
 		}
@@ -867,7 +870,7 @@ ldap_rcode_t rlm_ldap_search(LDAPMessage **result, ldap_instance_t const *inst, 
 	 *	For sanity, for when no connections are viable,
 	 *	and we can't make a new one.
 	 */
-	for (i = fr_connection_get_num(inst->pool); i >= 0; i--) {
+	for (i = fr_connection_pool_get_num(inst->pool); i >= 0; i--) {
 		(void) ldap_search_ext((*pconn)->handle, dn, scope, filter, search_attrs,
 				       0, serverctrls, clientctrls, &tv, 0, &msgid);
 
@@ -942,9 +945,7 @@ finish:
 	 *	it to where our caller said.
 	 */
 	if (!result) {
-		if (our_result) {
-			ldap_msgfree(our_result);
-		}
+		if (our_result) ldap_msgfree(our_result);
 	} else {
 		*result = our_result;
 	}
@@ -961,9 +962,9 @@ finish:
  * @param[in,out] pconn to use. May change as this function calls functions which auto re-connect.
  * @param[in] dn of the object to modify.
  * @param[in] mods to make, see 'man ldap_modify' for more information.
- * @return One of the LDAP_PROC_* values.
+ * @return One of the LDAP_PROC_* (#ldap_rcode_t) values.
  */
-ldap_rcode_t rlm_ldap_modify(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t **pconn,
+ldap_rcode_t rlm_ldap_modify(rlm_ldap_t const *inst, REQUEST *request, ldap_handle_t **pconn,
 			     char const *dn, LDAPMod *mods[])
 {
 	ldap_rcode_t	status = LDAP_PROC_ERROR;
@@ -981,8 +982,8 @@ ldap_rcode_t rlm_ldap_modify(ldap_instance_t const *inst, REQUEST *request, ldap
 	 *	Perform all modifications as the admin user.
 	 */
 	if ((*pconn)->rebound) {
-		status = rlm_ldap_bind(inst, request, pconn, (*pconn)->inst->admin_dn, (*pconn)->inst->password,
-				       (*pconn)->inst->admin_sasl_mech, true);
+		status = rlm_ldap_bind(inst, request, pconn, (*pconn)->inst->admin_identity,
+				       (*pconn)->inst->admin_password, &(*pconn)->inst->admin_sasl, true);
 		if (status != LDAP_PROC_SUCCESS) {
 			return LDAP_PROC_ERROR;
 		}
@@ -996,7 +997,7 @@ ldap_rcode_t rlm_ldap_modify(ldap_instance_t const *inst, REQUEST *request, ldap
 	 *	For sanity, for when no connections are viable,
 	 *	and we can't make a new one.
 	 */
-	for (i = fr_connection_get_num(inst->pool); i >= 0; i--) {
+	for (i = fr_connection_pool_get_num(inst->pool); i >= 0; i--) {
 		RDEBUG2("Modifying object with DN \"%s\"", dn);
 		(void) ldap_modify_ext((*pconn)->handle, dn, mods, NULL, NULL, &msgid);
 
@@ -1012,7 +1013,6 @@ ldap_rcode_t rlm_ldap_modify(ldap_instance_t const *inst, REQUEST *request, ldap
 				RWDEBUG("Modify failed: %s. Got new socket, retrying...", error);
 
 				talloc_free(extra); /* don't leak debug info */
-
 				continue;
 			}
 
@@ -1042,11 +1042,12 @@ finish:
 
 /** Retrieve the DN of a user object
  *
- * Retrieves the DN of a user and adds it to the control list as LDAP-UserDN. Will also retrieve any attributes
- * passed and return the result in *result.
+ * Retrieves the DN of a user and adds it to the control list as LDAP-UserDN. Will also retrieve any
+ * attributes passed and return the result in *result.
  *
- * This potentially allows for all authorization and authentication checks to be performed in one ldap search
- * operation, which is a big bonus given the number of crappy, slow *cough*AD*cough* LDAP directory servers out there.
+ * This potentially allows for all authorization and authentication checks to be performed in one
+ * ldap search operation, which is a big bonus given the number of crappy, slow *cough*AD*cough*
+ * LDAP directory servers out there.
  *
  * @param[in] inst rlm_ldap configuration.
  * @param[in] request Current request.
@@ -1057,7 +1058,7 @@ finish:
  * @param[out] rcode The status of the operation, one of the RLM_MODULE_* codes.
  * @return The user's DN or NULL on error.
  */
-char const *rlm_ldap_find_user(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t **pconn,
+char const *rlm_ldap_find_user(rlm_ldap_t const *inst, REQUEST *request, ldap_handle_t **pconn,
 			       char const *attrs[], bool force, LDAPMessage **result, rlm_rcode_t *rcode)
 {
 	static char const *tmp_attrs[] = { NULL };
@@ -1066,6 +1067,7 @@ char const *rlm_ldap_find_user(ldap_instance_t const *inst, REQUEST *request, ld
 	VALUE_PAIR	*vp = NULL;
 	LDAPMessage	*tmp_msg = NULL, *entry = NULL;
 	int		ldap_errno;
+	int		cnt;
 	char		*dn = NULL;
 	char const	*filter = NULL;
 	char	    	filter_buff[LDAP_MAX_FILTER_STR_LEN];
@@ -1104,8 +1106,8 @@ char const *rlm_ldap_find_user(ldap_instance_t const *inst, REQUEST *request, ld
 	 *	Perform all searches as the admin user.
 	 */
 	if ((*pconn)->rebound) {
-		status = rlm_ldap_bind(inst, request, pconn, (*pconn)->inst->admin_dn, (*pconn)->inst->password,
-				       (*pconn)->inst->admin_sasl_mech, true);
+		status = rlm_ldap_bind(inst, request, pconn, (*pconn)->inst->admin_identity,
+				       (*pconn)->inst->admin_password, &(*pconn)->inst->admin_sasl, true);
 		if (status != LDAP_PROC_SUCCESS) {
 			*rcode = RLM_MODULE_FAIL;
 			return NULL;
@@ -1151,6 +1153,31 @@ char const *rlm_ldap_find_user(ldap_instance_t const *inst, REQUEST *request, ld
 	}
 
 	rad_assert(*pconn);
+
+	/*
+	 *	Forbid the use of unsorted search results that
+	 *	contain multiple entries, as it's a potential
+	 *	security issue, and likely non deterministic.
+	 */
+	if (!inst->userobj_sort_ctrl) {
+		cnt = ldap_count_entries((*pconn)->handle, *result);
+		if (cnt > 1) {
+			REDEBUG("Ambiguous search result, returned %i unsorted entries (should return 1 or 0).  "
+				"Enable sorting, or specify a more restrictive base_dn, filter or scope", cnt);
+			REDEBUG("The following entries were returned:");
+			RINDENT();
+			for (entry = ldap_first_entry((*pconn)->handle, *result);
+			     entry;
+			     entry = ldap_next_entry((*pconn)->handle, NULL)) {
+				dn = ldap_get_dn((*pconn)->handle, entry);
+				REDEBUG("%s", dn);
+				ldap_memfree(dn);
+			}
+			REXDENT();
+			*rcode = RLM_MODULE_FAIL;
+			goto finish;
+		}
+	}
 
 	entry = ldap_first_entry((*pconn)->handle, *result);
 	if (!entry) {
@@ -1202,9 +1229,11 @@ finish:
  * @param[in] request Current request.
  * @param[in] conn used to retrieve access attributes.
  * @param[in] entry retrieved by rlm_ldap_find_user or rlm_ldap_search.
- * @return RLM_MODULE_USERLOCK if the user was denied access, else RLM_MODULE_OK.
+ * @return
+ *	- #RLM_MODULE_USERLOCK if the user was denied access.
+ *	- #RLM_MODULE_OK otherwise.
  */
-rlm_rcode_t rlm_ldap_check_access(ldap_instance_t const *inst, REQUEST *request,
+rlm_rcode_t rlm_ldap_check_access(rlm_ldap_t const *inst, REQUEST *request,
 				  ldap_handle_t const *conn, LDAPMessage *entry)
 {
 	rlm_rcode_t rcode = RLM_MODULE_OK;
@@ -1239,7 +1268,7 @@ rlm_rcode_t rlm_ldap_check_access(ldap_instance_t const *inst, REQUEST *request,
  * @param inst rlm_ldap configuration.
  * @param request Current request.
  */
-void rlm_ldap_check_reply(ldap_instance_t const *inst, REQUEST *request)
+void rlm_ldap_check_reply(rlm_ldap_t const *inst, REQUEST *request)
 {
        /*
 	*	More warning messages for people who can't be bothered to read the documentation.
@@ -1247,7 +1276,7 @@ void rlm_ldap_check_reply(ldap_instance_t const *inst, REQUEST *request)
 	*	Expect_password is set when we process the mapping, and is only true if there was a mapping between
 	*	an LDAP attribute and a password reference attribute in the control list.
 	*/
-	if (inst->expect_password && (debug_flag > 1)) {
+	if (inst->expect_password && (rad_debug_lvl > 1)) {
 		if (!pairfind(request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY) &&
 		    !pairfind(request->config, PW_NT_PASSWORD, 0, TAG_ANY) &&
 		    !pairfind(request->config, PW_USER_PASSWORD, 0, TAG_ANY) &&
@@ -1286,8 +1315,8 @@ static int rlm_ldap_rebind(LDAP *handle, LDAP_CONST char *url, UNUSED ber_tag_t 
 
 	DEBUG("rlm_ldap (%s): Rebinding to URL %s", conn->inst->name, url);
 
-	status = rlm_ldap_bind(conn->inst, NULL, &conn, conn->inst->admin_dn, conn->inst->password,
-			       conn->inst->admin_sasl_mech, false);
+	status = rlm_ldap_bind(conn->inst, NULL, &conn, conn->inst->admin_identity, conn->inst->admin_password,
+			       &(conn->inst->admin_sasl), false);
 	if (status != LDAP_PROC_SUCCESS) {
 		ldap_get_option(handle, LDAP_OPT_ERROR_NUMBER, &ldap_errno);
 
@@ -1332,7 +1361,7 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 	int ldap_errno, ldap_version;
 	struct timeval tv;
 
-	ldap_instance_t *inst = instance;
+	rlm_ldap_t *inst = instance;
 	ldap_handle_t *conn;
 
 	/*
@@ -1496,8 +1525,8 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 	}
 #endif /* HAVE_LDAP_START_TLS_S */
 
-	status = rlm_ldap_bind(inst, NULL, &conn, conn->inst->admin_dn, conn->inst->password,
-			       conn->inst->admin_sasl_mech, false);
+	status = rlm_ldap_bind(inst, NULL, &conn, conn->inst->admin_identity, conn->inst->admin_password,
+			       &(conn->inst->admin_sasl), false);
 	if (status != LDAP_PROC_SUCCESS) {
 		goto error;
 	}
@@ -1517,7 +1546,7 @@ error:
  * @param inst rlm_ldap configuration.
  * @param request Current request (may be NULL).
  */
-ldap_handle_t *mod_conn_get(ldap_instance_t const *inst, UNUSED REQUEST *request)
+ldap_handle_t *mod_conn_get(rlm_ldap_t const *inst, UNUSED REQUEST *request)
 {
 	return fr_connection_get(inst->pool);
 }
@@ -1530,7 +1559,7 @@ ldap_handle_t *mod_conn_get(ldap_instance_t const *inst, UNUSED REQUEST *request
  * @param inst rlm_ldap configuration.
  * @param conn to release.
  */
-void mod_conn_release(ldap_instance_t const *inst, ldap_handle_t *conn)
+void mod_conn_release(rlm_ldap_t const *inst, ldap_handle_t *conn)
 {
 	/*
 	 *	Could have already been free'd due to a previous error.
@@ -1548,7 +1577,7 @@ void mod_conn_release(ldap_instance_t const *inst, ldap_handle_t *conn)
 	 *	Instead, we let the next caller do the rebind.
 	 */
 	if (conn->referred) {
-		fr_connection_del(inst->pool, conn);
+		fr_connection_close(inst->pool, conn);
 		return;
 	}
 

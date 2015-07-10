@@ -93,6 +93,7 @@ static ssize_t dhcp_options_xlat(UNUSED void *instance, REQUEST *request,
 		for (vp = fr_cursor_init(&cursor, &head);
 		     vp;
 		     vp = fr_cursor_next(&cursor)) {
+			rdebug_pair(L_DBG_LVL_2, request, vp, "dhcp_options: ");
 			decoded++;
 		}
 
@@ -144,7 +145,7 @@ static ssize_t dhcp_xlat(UNUSED void *instance, REQUEST *request, char const *fm
 /*
  *	Instantiate the module.
  */
-static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
+static int mod_bootstrap(UNUSED CONF_SECTION *conf, void *instance)
 {
 	rlm_dhcp_t *inst = instance;
 	DICT_ATTR const *da;
@@ -191,21 +192,8 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
  */
 extern module_t rlm_dhcp;
 module_t rlm_dhcp = {
-	RLM_MODULE_INIT,
-	"dhcp",
-	0,				/* type */
-	sizeof(rlm_dhcp_t),
-	NULL,				/* CONF_PARSER */
-	mod_instantiate,		/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		NULL,			/* authorization */
-		NULL,			/* preaccounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,		 	/* post-proxy */
-		NULL,			/* post-auth */
-	},
+	.magic		= RLM_MODULE_INIT,
+	.name		= "dhcp",
+	.inst_size	= sizeof(rlm_dhcp_t),
+	.bootstrap	= mod_bootstrap,
 };

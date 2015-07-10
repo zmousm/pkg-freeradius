@@ -90,7 +90,6 @@ static int mod_session_init(void *type_arg, eap_handler_t *handler)
 	inst = type_arg;
 
 	handler->tls = true;
-	handler->finished = false;
 
 	/*
 	 *	EAP-TLS always requires a client certificate.
@@ -112,10 +111,12 @@ static int mod_session_init(void *type_arg, eap_handler_t *handler)
 	 *	related handshaking or application data.
 	 */
 	status = eaptls_start(handler->eap_ds, ssn->peap_flag);
-	RDEBUG2("Start returned %d", status);
-	if (status == 0) {
-		return 0;
+	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
+		REDEBUG("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	} else {
+		RDEBUG2("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
 	}
+	if (status == 0) return 0;
 
 	/*
 	 *	The next stage to process the packet.
@@ -137,18 +138,21 @@ static int CC_HINT(nonnull) mod_process(void *type_arg, eap_handler_t *handler)
 
 	inst = type_arg;
 
-	RDEBUG2("Authenticate");
-
 	status = eaptls_process(handler);
-	RDEBUG2("eaptls_process returned %d\n", status);
+	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
+		REDEBUG("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	} else {
+		RDEBUG2("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	}
+
 	switch (status) {
-		/*
-		 *	EAP-TLS handshake was successful, return an
-		 *	EAP-TLS-Success packet here.
-		 *
-		 *	If a virtual server was configured, check that
-		 *	it accepts the certificates, too.
-		 */
+	/*
+	 *	EAP-TLS handshake was successful, return an
+	 *	EAP-TLS-Success packet here.
+	 *
+	 *	If a virtual server was configured, check that
+	 *	it accepts the certificates, too.
+	 */
 	case FR_TLS_SUCCESS:
 		if (inst->virtual_server) {
 			VALUE_PAIR *vp;
@@ -167,7 +171,7 @@ static int CC_HINT(nonnull) mod_process(void *type_arg, eap_handler_t *handler)
 				fake->server = inst->virtual_server;
 			}
 
-			RDEBUG("Processing EAP-TLS Certificate check:");
+			RDEBUG2("Validating certificate");
 			rad_virtual_server(fake);
 
 			/* copy the reply vps back to our reply */
@@ -176,7 +180,7 @@ static int CC_HINT(nonnull) mod_process(void *type_arg, eap_handler_t *handler)
 
 			/* reject if virtual server didn't return accept */
 			if (fake->reply->code != PW_CODE_ACCESS_ACCEPT) {
-				RDEBUG2("Certificates were rejected by the virtual server");
+				RDEBUG2("Certificate rejected by the virtual server");
 				talloc_free(fake);
 				eaptls_fail(handler, 0);
 				return 0;
@@ -202,7 +206,7 @@ static int CC_HINT(nonnull) mod_process(void *type_arg, eap_handler_t *handler)
 	case FR_TLS_OK:
 		RDEBUG2("Received unexpected tunneled data after successful handshake");
 #ifndef NDEBUG
-		if ((debug_flag > 2) && fr_log_fp) {
+		if ((rad_debug_lvl > 2) && fr_log_fp) {
 			unsigned int i;
 			unsigned int data_len;
 			unsigned char buffer[1024];

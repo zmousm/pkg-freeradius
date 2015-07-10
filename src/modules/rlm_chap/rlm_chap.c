@@ -33,7 +33,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
 		return RLM_MODULE_NOOP;
 	}
 
-	if (pairfind(request->config, PW_AUTHTYPE, 0, TAG_ANY) != NULL) {
+	if (pairfind(request->config, PW_AUTH_TYPE, 0, TAG_ANY) != NULL) {
 		RWDEBUG2("&control:Auth-Type already set.  Not setting to CHAP");
 		return RLM_MODULE_NOOP;
 	}
@@ -153,21 +153,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, REQU
  */
 extern module_t rlm_chap;
 module_t rlm_chap = {
-	RLM_MODULE_INIT,
-	"CHAP",
-	0,   	/* type */
-	0,
-	NULL,				/* CONF_PARSER */
-	NULL,				/* instantiation */
-	NULL,				/* detach */
-	{
-		mod_authenticate,	/* authentication */
-		mod_authorize,	 	/* authorization */
-		NULL,			/* preaccounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "chap",
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize,
 	},
 };

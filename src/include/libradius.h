@@ -1,8 +1,7 @@
 /*
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -136,10 +135,10 @@ typedef void (*sig_t)(int);
 #  define VENDORPEC_USR		429
 #  define VENDORPEC_LUCENT	4846
 #  define VENDORPEC_STARENT	8164
-#  define DEBUG			if (fr_debug_flag && fr_log_fp) fr_printf_log
+#  define DEBUG			if (fr_debug_lvl && fr_log_fp) fr_printf_log
 #endif
 
-#  define debug_pair(vp)	do { if (fr_debug_flag && fr_log_fp) { \
+#  define debug_pair(vp)	do { if (fr_debug_lvl && fr_log_fp) { \
 					vp_print(fr_log_fp, vp); \
 				     } \
 				} while(0)
@@ -187,6 +186,8 @@ typedef struct attr_flags {
 	unsigned int	is_pointer : 1;				//!< data is a pointer
 
 	unsigned int	virtual : 1;				//!< for dynamic expansion
+
+	unsigned int	compare : 1;				//!< has a paircompare registered
 
 	uint8_t		encrypt;      				//!< Ecryption method.
 	uint8_t		length;
@@ -268,7 +269,6 @@ typedef union value_data {
 
 	uint8_t			ipv4prefix[6];			//!< IPv4 prefix (should be struct?).
 
-	uint8_t			*tlv;				//!< Nested TLV (should go away).
 	void			*ptr;				//!< generic pointer.
 } value_data_t;
 
@@ -363,7 +363,6 @@ typedef struct value_pair_raw {
 #define vp_signed	data.sinteger
 #define vp_integer64	data.integer64
 #define vp_ipv4prefix	data.ipv4prefix
-#define vp_tlv		data.tlv
 #define vp_length	length
 
 typedef struct fr_ipaddr_t {
@@ -438,14 +437,9 @@ char		*fr_aprints(TALLOC_CTX *ctx, char const *in, ssize_t inlen, char quote);
 
 #define		is_truncated(_ret, _max) ((_ret) >= (_max))
 #define		truncate_len(_ret, _max) (((_ret) >= (_max)) ? ((_max) - 1) : _ret)
-size_t		vp_data_prints_value(char *out, size_t outlen,
-				     PW_TYPE type, DICT_ATTR const *enumv,
-				     value_data_t const *data, ssize_t inlen, char quote);
 size_t   	vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, char quote);
 
-char		*vp_data_aprints_value(TALLOC_CTX *ctx,
-				       PW_TYPE type, DICT_ATTR const *enumv, value_data_t const *data,
-				       size_t inlen, char quote);
+
 char     	*vp_aprints_value(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote);
 
 size_t    	vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp);
@@ -559,6 +553,12 @@ ssize_t		rad_attr2vp(TALLOC_CTX *ctx,
 			    uint8_t const *data, size_t length,
 			    VALUE_PAIR **pvp);
 
+ssize_t rad_data2vp_tlvs(TALLOC_CTX *ctx,
+			 RADIUS_PACKET *packet, RADIUS_PACKET const *original,
+			 char const *secret, DICT_ATTR const *da,
+			 uint8_t const *start, size_t length,
+			 VALUE_PAIR **pvp);
+
 ssize_t		rad_vp2data(uint8_t const **out, VALUE_PAIR const *vp);
 
 int		rad_vp2extended(RADIUS_PACKET const *packet,
@@ -591,8 +591,7 @@ void		pairfree(VALUE_PAIR **);
 VALUE_PAIR	*pairfind(VALUE_PAIR *, unsigned int attr, unsigned int vendor, int8_t tag);
 VALUE_PAIR	*pair_find_by_da(VALUE_PAIR *, DICT_ATTR const *da, int8_t tag);
 
-#define		fr_cursor_init(_x, _y)	_fr_cursor_init(_x,(VALUE_PAIR const * const *) _y)
-VALUE_PAIR	*_fr_cursor_init(vp_cursor_t *cursor, VALUE_PAIR const * const *node);
+VALUE_PAIR	*fr_cursor_init(vp_cursor_t *cursor, VALUE_PAIR * const *node);
 void		fr_cursor_copy(vp_cursor_t *out, vp_cursor_t *in);
 VALUE_PAIR	*fr_cursor_first(vp_cursor_t *cursor);
 VALUE_PAIR	*fr_cursor_last(vp_cursor_t *cursor);
@@ -614,7 +613,7 @@ void		pairreplace(VALUE_PAIR **first, VALUE_PAIR *add);
 int		paircmp(VALUE_PAIR *a, VALUE_PAIR *b);
 int		pairlistcmp(VALUE_PAIR *a, VALUE_PAIR *b);
 
-typedef int8_t (*fr_cmp_t)(void const *a, void const *b);
+typedef		int8_t (*fr_cmp_t)(void const *a, void const *b);
 int8_t		attrcmp(void const *a, void const *b);
 int8_t		attrtagcmp(void const *a, void const *b);
 void		pairsort(VALUE_PAIR **vps, fr_cmp_t cmp);
@@ -629,7 +628,7 @@ void		pairmemcpy(VALUE_PAIR *vp, uint8_t const * src, size_t len);
 void		pairmemsteal(VALUE_PAIR *vp, uint8_t const *src);
 void		pairstrsteal(VALUE_PAIR *vp, char const *src);
 void		pairstrcpy(VALUE_PAIR *vp, char const * src);
-void		pairbstrncpy(VALUE_PAIR *vp, char const * src, size_t len);
+void		pairbstrncpy(VALUE_PAIR *vp, void const * src, size_t len);
 void		pairsprintf(VALUE_PAIR *vp, char const * fmt, ...) CC_HINT(format (printf, 2, 3));
 void		pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from);
 void		pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from,
@@ -670,6 +669,14 @@ ssize_t		value_data_cast(TALLOC_CTX *ctx, value_data_t *dst,
 ssize_t		value_data_copy(TALLOC_CTX *ctx, value_data_t *dst, PW_TYPE type,
 				const value_data_t *src, size_t src_len);
 
+size_t		value_data_prints(char *out, size_t outlen,
+				  PW_TYPE type, DICT_ATTR const *enumv,
+				  value_data_t const *data, ssize_t inlen, char quote);
+
+char		*value_data_aprints(TALLOC_CTX *ctx,
+				    PW_TYPE type, DICT_ATTR const *enumv, value_data_t const *data,
+				    size_t inlen, char quote);
+
 /*
  *	Error functions.
  */
@@ -681,7 +688,7 @@ char const	*fr_strerror(void);
 char const	*fr_syserror(int num);
 extern bool	fr_dns_lookups;	/* do IP -> hostname lookups? */
 extern bool	fr_hostname_lookups; /* do hostname -> IP lookups? */
-extern int	fr_debug_flag;	/* 0 = no debugging information */
+extern int	fr_debug_lvl;	/* 0 = no debugging information */
 extern uint32_t	fr_max_attributes; /* per incoming packet */
 #define	FR_MAX_PACKET_CODE (52)
 extern char const *fr_packet_codes[FR_MAX_PACKET_CODE];
@@ -711,6 +718,7 @@ size_t		fr_bin2hex(char *hex, uint8_t const *bin, size_t inlen);
 size_t		fr_hex2bin(uint8_t *bin, size_t outlen, char const *hex, size_t inlen);
 uint32_t	fr_strtoul(char const *value, char **end);
 bool		is_whitespace(char const *value);
+bool		is_printable(void const *value, size_t len);
 bool		is_integer(char const *value);
 bool		is_zero(char const *value);
 
@@ -894,7 +902,7 @@ int		rbtree_walk(rbtree_t *tree, rb_order_t order, rb_walker_t compare, void *co
  */
 typedef struct	fr_fifo_t fr_fifo_t;
 typedef void (*fr_fifo_free_t)(void *);
-fr_fifo_t	*fr_fifo_create(int max_entries, fr_fifo_free_t freeNode);
+fr_fifo_t	*fr_fifo_create(TALLOC_CTX *ctx, int max_entries, fr_fifo_free_t freeNode);
 void		fr_fifo_free(fr_fifo_t *fi);
 int		fr_fifo_push(fr_fifo_t *fi, void *data);
 void		*fr_fifo_pop(fr_fifo_t *fi);

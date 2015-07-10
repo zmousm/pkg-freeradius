@@ -30,7 +30,7 @@ RCSID("$Id$")
 typedef struct rlm_sql_unixodbc_conn {
 	SQLHENV env;
 	SQLHDBC dbc;
-	SQLHSTMT statement;
+	SQLHSTMT stmt;
 	rlm_sql_row_t row;
 	void *conn;
 } rlm_sql_unixodbc_conn_t;
@@ -49,21 +49,14 @@ static int _sql_socket_destructor(rlm_sql_unixodbc_conn_t *conn)
 {
 	DEBUG2("rlm_sql_unixodbc: Socket destructor called, closing socket");
 
-	if (conn->statement) {
-		SQLFreeStmt(conn->statement, SQL_DROP);
-		conn->statement = NULL;
-	}
+	if (conn->stmt) SQLFreeStmt(conn->stmt, SQL_DROP);
 
 	if (conn->dbc) {
 		SQLDisconnect(conn->dbc);
 		SQLFreeConnect(conn->dbc);
-		conn->dbc = NULL;
 	}
 
-	if (conn->env) {
-		SQLFreeEnv(conn->env);
-		conn->env = NULL;
-	}
+	if (conn->env) SQLFreeEnv(conn->env);
 
 	return 0;
 }
@@ -114,10 +107,10 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 		return RLM_SQL_ERROR;
 	}
 
-	/* 4. Allocate the statement */
-	err_handle = SQLAllocHandle(SQL_HANDLE_STMT, conn->dbc, &conn->statement);
+	/* 4. Allocate the stmt */
+	err_handle = SQLAllocHandle(SQL_HANDLE_STMT, conn->dbc, &conn->stmt);
 	if (sql_check_error(err_handle, handle, config)) {
-		ERROR("rlm_sql_unixodbc: Can't allocate the statement");
+		ERROR("rlm_sql_unixodbc: Can't allocate the stmt");
 		return RLM_SQL_ERROR;
 	}
 
@@ -135,7 +128,7 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, rlm_sql_config_t *config,
 		SQLCHAR *odbc_query;
 
 		memcpy(&odbc_query, &query, sizeof(odbc_query));
-		err_handle = SQLExecDirect(conn->statement, odbc_query, strlen(query));
+		err_handle = SQLExecDirect(conn->stmt, odbc_query, strlen(query));
 	}
 	if ((state = sql_check_error(err_handle, handle, config))) {
 		if(state == RLM_SQL_RECONNECT) {
@@ -168,18 +161,12 @@ static sql_rcode_t sql_select_query(rlm_sql_handle_t *handle, rlm_sql_config_t *
 	conn->row = talloc_zero_array(conn, char *, colcount + 1); /* Space for pointers */
 
 	for (i = 1; i <= colcount; i++) {
-		SQLColAttributes(conn->statement, ((SQLUSMALLINT) i), SQL_COLUMN_LENGTH, NULL, 0, NULL, &len);
+		SQLColAttributes(conn->stmt, ((SQLUSMALLINT) i), SQL_COLUMN_LENGTH, NULL, 0, NULL, &len);
 		conn->row[i - 1] = talloc_array(conn->row, char, ++len);
-		SQLBindCol(conn->statement, i, SQL_C_CHAR, (SQLCHAR *)conn->row[i - 1], len, NULL);
+		SQLBindCol(conn->stmt, i, SQL_C_CHAR, (SQLCHAR *)conn->row[i - 1], len, NULL);
 	}
 
 	return RLM_SQL_OK;
-}
-
-static sql_rcode_t sql_store_result(UNUSED rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
-{
-	/* Not used */
-	return 0;
 }
 
 static int sql_num_fields(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
@@ -188,15 +175,48 @@ static int sql_num_fields(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 	long err_handle;
 	SQLSMALLINT num_fields = 0;
 
-	err_handle = SQLNumResultCols(conn->statement,&num_fields);
+	err_handle = SQLNumResultCols(conn->stmt,&num_fields);
 	if (sql_check_error(err_handle, handle, config)) return -1;
 
 	return num_fields;
 }
 
-static int sql_num_rows(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
+static sql_rcode_t sql_fields(char const **out[], rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
-	return sql_affected_rows(handle, config);
+	rlm_sql_unixodbc_conn_t *conn = handle->conn;
+
+	SQLSMALLINT	fields, len, i;
+
+	char const	**names;
+	char		field[128];
+
+	SQLNumResultCols(conn->stmt, &fields);
+	if (fields == 0) return RLM_SQL_ERROR;
+
+	MEM(names = talloc_array(handle, char const *, fields));
+
+	for (i = 0; i < fields; i++) {
+		char *p;
+
+		switch (SQLColAttribute(conn->stmt, i, SQL_DESC_BASE_COLUMN_NAME,
+					field, sizeof(field), &len, NULL)) {
+		case SQL_INVALID_HANDLE:
+		case SQL_ERROR:
+			ERROR("Failed retrieving field name at index %i", i);
+			talloc_free(names);
+			return RLM_SQL_ERROR;
+
+		default:
+			break;
+		}
+
+		MEM(p = talloc_array(names, char, (size_t)len + 1));
+		strlcpy(p, field, (size_t)len + 1);
+		names[i] = p;
+	}
+	*out = names;
+
+	return RLM_SQL_OK;
 }
 
 static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
@@ -207,7 +227,7 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 
 	handle->row = NULL;
 
-	err_handle = SQLFetch(conn->statement);
+	err_handle = SQLFetch(conn->stmt);
 	if(err_handle == SQL_NO_DATA_FOUND) {
 		return 0;
 	}
@@ -236,7 +256,7 @@ static sql_rcode_t sql_finish_select_query(rlm_sql_handle_t * handle, rlm_sql_co
 	 *	So, this call does NOT free the statement at all, it merely
 	 *	resets it for the next call. This is terrible terrible naming.
 	 */
-	SQLFreeStmt(conn->statement, SQL_CLOSE);
+	SQLFreeStmt(conn->stmt, SQL_CLOSE);
 
 	return 0;
 }
@@ -245,7 +265,7 @@ static sql_rcode_t sql_finish_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_con
 {
 	rlm_sql_unixodbc_conn_t *conn = handle->conn;
 
-	SQLFreeStmt(conn->statement, SQL_CLOSE);
+	SQLFreeStmt(conn->stmt, SQL_CLOSE);
 
 	return 0;
 }
@@ -282,7 +302,7 @@ static size_t sql_error(TALLOC_CTX *ctx, sql_log_entry_t out[], size_t outlen,
 	rad_assert(outlen > 0);
 
 	errbuff[0] = state[0] = '\0';
-	SQLError(conn->env, conn->dbc, conn->statement, state, &errnum,
+	SQLError(conn->env, conn->dbc, conn->stmt, state, &errnum,
 		 errbuff, sizeof(errbuff), &length);
 	if (errnum == 0) return 0;
 
@@ -313,7 +333,7 @@ static sql_rcode_t sql_check_error(long error_handle, rlm_sql_handle_t *handle, 
 
 	error[0] = state[0] = '\0';
 
-	SQLError(conn->env, conn->dbc, conn->statement, state, &errornum,
+	SQLError(conn->env, conn->dbc, conn->stmt, state, &errornum,
 		 error, sizeof(error), &length);
 
 	if (state[0] == '0') {
@@ -359,7 +379,7 @@ static int sql_affected_rows(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 	long error_handle;
 	SQLLEN affected_rows;
 
-	error_handle = SQLRowCount(conn->statement, &affected_rows);
+	error_handle = SQLRowCount(conn->stmt, &affected_rows);
 	if (sql_check_error(error_handle, handle, config)) return -1;
 
 	return affected_rows;
@@ -373,10 +393,9 @@ rlm_sql_module_t rlm_sql_unixodbc = {
 	.sql_socket_init		= sql_socket_init,
 	.sql_query			= sql_query,
 	.sql_select_query		= sql_select_query,
-	.sql_store_result		= sql_store_result,
 	.sql_num_fields			= sql_num_fields,
-	.sql_num_rows			= sql_num_rows,
 	.sql_affected_rows		= sql_affected_rows,
+	.sql_fields			= sql_fields,
 	.sql_fetch_row			= sql_fetch_row,
 	.sql_free_result		= sql_free_result,
 	.sql_error			= sql_error,

@@ -82,7 +82,7 @@ static const CONF_PARSER postauth_config[] = {
 static const CONF_PARSER module_config[] = {
 	{ "driver", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_driver_name), "rlm_sql_null" },
 	{ "server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_server), "localhost" },
-	{ "port", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_port), "" },
+	{ "port", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sql_config_t, sql_port), "0" },
 	{ "login", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_login), "" },
 	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, rlm_sql_config_t, sql_password), "" },
 	{ "radius_db", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_config_t, sql_db), "radius" },
@@ -669,9 +669,9 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm
 	 *	Add the Sql-Group attribute to the request list so we know
 	 *	which group we're retrieving attributes for
 	 */
-	sql_group = pairmake_packet("Sql-Group", NULL, T_OP_EQ);
+	sql_group = pairmake_packet(inst->group_da->name, NULL, T_OP_EQ);
 	if (!sql_group) {
-		REDEBUG("Error creating Sql-Group attribute");
+		REDEBUG("Error creating %s attribute", inst->group_da->name);
 		rcode = RLM_MODULE_FAIL;
 		goto finish;
 	}
@@ -776,7 +776,7 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm
 
 finish:
 	talloc_free(head);
-	pairdelete(&request->packet->vps, PW_SQL_GROUP, 0, TAG_ANY);
+	pairdelete(&request->packet->vps, inst->group_da->attr, 0, TAG_ANY);
 
 	return rcode;
 }
@@ -807,7 +807,7 @@ static int mod_detach(void *instance)
 	return 0;
 }
 
-static int mod_instantiate(CONF_SECTION *conf, void *instance)
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 {
 	rlm_sql_t *inst = instance;
 
@@ -818,44 +818,69 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	inst->cs = conf;
 
 	inst->name = cf_section_name2(conf);
-	if (!inst->name) {
-		inst->name = cf_section_name1(conf);
-	} else {
-		char *group_name;
-		DICT_ATTR const *da;
-		ATTR_FLAGS flags;
+	if (!inst->name) inst->name = cf_section_name1(conf);
 
-		/*
-		 *	Allocate room for <instance>-SQL-Group
-		 */
-		group_name = talloc_typed_asprintf(inst, "%s-SQL-Group", inst->name);
-		DEBUG("rlm_sql (%s): Creating new attribute %s",
-		      inst->name, group_name);
+	/*
+	 *	Load the appropriate driver for our database.
+	 *
+	 *	We need this to check if the sql_fields callback is provided.
+	 */
+	inst->handle = lt_dlopenext(inst->config->sql_driver_name);
+	if (!inst->handle) {
+		ERROR("Could not link driver %s: %s", inst->config->sql_driver_name, fr_strerror());
+		ERROR("Make sure it (and all its dependent libraries!) are in the search path of your system's ld");
+		return -1;
+	}
 
-		memset(&flags, 0, sizeof(flags));
-		if (dict_addattr(group_name, -1, 0, PW_TYPE_STRING, flags) < 0) {
-			ERROR("rlm_sql (%s): Failed to create "
-			       "attribute %s: %s", inst->name, group_name,
-			       fr_strerror());
-			return -1;
-		}
+	inst->module = (rlm_sql_module_t *) dlsym(inst->handle,  inst->config->sql_driver_name);
+	if (!inst->module) {
+		ERROR("Could not link symbol %s: %s", inst->config->sql_driver_name, dlerror());
+		return -1;
+	}
 
-		da = dict_attrbyname(group_name);
-		if (!da) {
-			ERROR("rlm_sql (%s): Failed to create "
-			       "attribute %s", inst->name, group_name);
-			return -1;
-		}
+	INFO("rlm_sql (%s): Driver %s (module %s) loaded and linked", inst->name,
+	     inst->config->sql_driver_name, inst->module->name);
 
-		if (inst->config->groupmemb_query) {
-			DEBUG("rlm_sql (%s): Registering sql_groupcmp for %s",
-			      inst->name, group_name);
-			paircompare_register(da, dict_attrbyvalue(PW_USER_NAME, 0),
-					     false, sql_groupcmp, inst);
+	if (inst->config->groupmemb_query) {
+		if (cf_section_name2(conf)) {
+			char buffer[256];
+
+			snprintf(buffer, sizeof(buffer), "%s-SQL-Group", inst->name);
+
+			if (paircompare_register_byname(buffer, dict_attrbyvalue(PW_USER_NAME, 0),
+							false, sql_groupcmp, inst) < 0) {
+				ERROR("Error registering group comparison: %s", fr_strerror());
+				return -1;
+			}
+
+			inst->group_da = dict_attrbyname(buffer);
+
+			/*
+			 *	We're the default instance
+			 */
+		} else {
+			if (paircompare_register_byname("SQL-Group", dict_attrbyvalue(PW_USER_NAME, 0),
+							false, sql_groupcmp, inst) < 0) {
+				ERROR("Error registering group comparison: %s", fr_strerror());
+				return -1;
+			}
+
+			inst->group_da = dict_attrbyname("SQL-Group");
 		}
 	}
 
-	rad_assert(inst->name);
+	/*
+	 *	Register the SQL xlat function
+	 */
+	xlat_register(inst->name, sql_xlat, sql_escape_func, inst);
+
+	return 0;
+}
+
+
+static int mod_instantiate(CONF_SECTION *conf, void *instance)
+{
+	rlm_sql_t *inst = instance;
 
 	/*
 	 *	Complain if the strings exist, but are empty.
@@ -930,28 +955,6 @@ do { \
 	inst->sql_select_query		= rlm_sql_select_query;
 	inst->sql_fetch_row		= rlm_sql_fetch_row;
 
-	/*
-	 *	Register the SQL xlat function
-	 */
-	xlat_register(inst->name, sql_xlat, sql_escape_func, inst);
-
-	/*
-	 *	Load the appropriate driver for our database
-	 */
-	inst->handle = lt_dlopenext(inst->config->sql_driver_name);
-	if (!inst->handle) {
-		ERROR("Could not link driver %s: %s", inst->config->sql_driver_name, dlerror());
-		ERROR("Make sure it (and all its dependent libraries!) are in the search path of your system's ld");
-		return -1;
-	}
-
-	inst->module = (rlm_sql_module_t *) dlsym(inst->handle,
-						  inst->config->sql_driver_name);
-	if (!inst->module) {
-		ERROR("Could not link symbol %s: %s", inst->config->sql_driver_name, dlerror());
-		return -1;
-	}
-
 	if (inst->module->mod_instantiate) {
 		CONF_SECTION *cs;
 		char const *name;
@@ -979,14 +982,11 @@ do { \
 		}
 	}
 
-	inst->ef = exfile_init(inst, 64, 30);
+	inst->ef = exfile_init(inst, 64, 30, true);
 	if (!inst->ef) {
 		cf_log_err_cs(conf, "Failed creating log file context");
 		return -1;
 	}
-
-	INFO("rlm_sql (%s): Driver %s (module %s) loaded and linked", inst->name,
-	     inst->config->sql_driver_name, inst->module->name);
 
 	/*
 	 *	Initialise the connection pool for this instance
@@ -995,11 +995,6 @@ do { \
 
 	inst->pool = fr_connection_pool_module_init(inst->cs, inst, mod_conn_create, NULL, NULL);
 	if (!inst->pool) return -1;
-
-	if (inst->config->groupmemb_query) {
-		paircompare_register(dict_attrbyvalue(PW_SQL_GROUP, 0),
-				dict_attrbyvalue(PW_USER_NAME, 0), false, sql_groupcmp, inst);
-	}
 
 	if (inst->config->do_clients) {
 		if (generate_sql_clients(inst) == -1){
@@ -1683,29 +1678,22 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 /* globally exported name */
 extern module_t rlm_sql;
 module_t rlm_sql = {
-	RLM_MODULE_INIT,
-	"SQL",
-	RLM_TYPE_THREAD_SAFE,	/* type: reserved */
-	sizeof(rlm_sql_t),
-	module_config,
-	mod_instantiate,	/* instantiation */
-	mod_detach,		/* detach */
-	{
-		NULL,		/* authentication */
-		mod_authorize,	/* authorization */
-		NULL,		/* preaccounting */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "sql",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_sql_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_authorize,
 #ifdef WITH_ACCOUNTING
-		mod_accounting,	/* accounting */
-#else
-		NULL,
+		[MOD_ACCOUNTING]	= mod_accounting,
 #endif
 #ifdef WITH_SESSION_MGMT
-		mod_checksimul,	/* checksimul */
-#else
-		NULL,
+		[MOD_SESSION]		= mod_checksimul,
 #endif
-		NULL,		/* pre-proxy */
-		NULL,		/* post-proxy */
-		mod_post_auth	/* post-auth */
+		[MOD_POST_AUTH]		= mod_post_auth
 	},
 };

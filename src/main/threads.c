@@ -1008,7 +1008,7 @@ int thread_pool_init(CONF_SECTION *cs, bool *spawn_flag)
 	 *	Allocate multiple fifos.
 	 */
 	for (i = 0; i < RAD_LISTEN_MAX; i++) {
-		thread_pool.fifo[i] = fr_fifo_create(thread_pool.max_queue_size, NULL);
+		thread_pool.fifo[i] = fr_fifo_create(NULL, thread_pool.max_queue_size, NULL);
 		if (!thread_pool.fifo[i]) {
 			ERROR("FATAL: Failed to set up request fifo");
 			return -1;
@@ -1167,7 +1167,7 @@ static void thread_pool_manage(time_t now)
 	 */
 	active_threads = thread_pool.active_threads;
 	spare = thread_pool.total_threads - active_threads;
-	if (debug_flag) {
+	if (rad_debug_lvl) {
 		static uint32_t old_total = 0;
 		static uint32_t old_active = 0;
 
@@ -1514,7 +1514,7 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 
 	DEBUG("Trigger %s -> %s", name, value);
 
-	radius_exec_program(NULL, 0, NULL, request, value, vp, false, true, EXEC_TIMEOUT);
+	radius_exec_program(request, NULL, 0, NULL, request, value, vp, false, true, EXEC_TIMEOUT);
 
 	if (alloc) talloc_free(request);
 }

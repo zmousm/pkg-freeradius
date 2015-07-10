@@ -361,14 +361,13 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
 	uuid_clear(guid_sacl);
 
 	if (rad_getgid(request, &gid, kRadiusSACLName) < 0) {
+		RDEBUG("The SACL group \"%s\" does not exist on this system.", kRadiusSACLName);
+	} else {
 		err = mbr_gid_to_uuid(gid, guid_sacl);
 		if (err != 0) {
 			ERROR("rlm_opendirectory: The group \"%s\" does not have a GUID.", kRadiusSACLName);
 			return RLM_MODULE_FAIL;
 		}
-	}
-	else {
-		RDEBUG("The SACL group \"%s\" does not exist on this system.", kRadiusSACLName);
 	}
 
 	/* resolve client access list */
@@ -474,21 +473,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
 /* globally exported name */
 extern module_t rlm_opendirectory;
 module_t rlm_opendirectory = {
-	RLM_MODULE_INIT,
-	"opendirectory",
-	RLM_TYPE_THREAD_SAFE,	/* type */
-	0,
-	NULL,			/* CONF_PARSER */
-	NULL,			/* instantiation */
-	NULL,			   	/* detach */
-	{
-		mod_authenticate, /* authentication */
-		mod_authorize,	/* authorization */
-		NULL,		/* preaccounting */
-		NULL,		/* accounting */
-		NULL,		/* checksimul */
-		NULL,		/* pre-proxy */
-		NULL,		/* post-proxy */
-		NULL		/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "opendirectory",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize
 	},
 };

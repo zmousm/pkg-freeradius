@@ -87,14 +87,17 @@ if test x$with_[]modname != xno; then
 
 	if test "x$fail" = "x"; then
 		AC_CHECK_FUNCS(
-			ldap_sasl_bind \
+			ldap_sasl_interactive_bind \
 			ldap_unbind_ext_s \
 			ldap_start_tls_s \
 			ldap_initialize \
 			ldap_set_rebind_proc \
 			ldap_create_sort_control \
 			ldap_create_sort_keylist \
-			ldap_free_sort_keylist
+			ldap_free_sort_keylist \
+			ldap_url_parse \
+			ldap_is_ldap_url \
+			ldap_url_desc2str
 		)
 		AC_CACHE_CHECK(whether ldap_set_rebind_proc takes 3 arguments, ac_cv_ldap_set_rebind_proc, [
 			AC_TRY_COMPILE([
@@ -132,8 +135,16 @@ AC_DEFINE_UNQUOTED(LDAP_SET_REBIND_PROC_ARGS, ${ac_cv_ldap_set_rebind_proc}, [Nu
 
 mod_ldflags=$SMART_LIBS
 mod_cflags="$SMART_CPPFLAGS"
+
+if test x"$ac_cv_func_ldap_sasl_interactive_bind" = "xyes"; then
+	SASL=sasl.c
+else
+	SASL=
+fi
+
 AC_SUBST(mod_ldflags)
 AC_SUBST(mod_cflags)
+AC_SUBST(SASL)
 AC_SUBST(targetname)
 AC_CONFIG_HEADER(config.h)
 AC_OUTPUT(all.mk)

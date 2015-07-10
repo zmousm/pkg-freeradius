@@ -42,8 +42,8 @@ typedef struct virtual_server_t {
 	int		can_free;
 	CONF_SECTION	*cs;
 	rbtree_t	*components;
-	modcallable	*mc[RLM_COMPONENT_COUNT];
-	CONF_SECTION	*subcs[RLM_COMPONENT_COUNT];
+	modcallable	*mc[MOD_COUNT];
+	CONF_SECTION	*subcs[MOD_COUNT];
 	struct virtual_server_t *next;
 } virtual_server_t;
 
@@ -67,7 +67,7 @@ struct fr_module_hup_t {
 /*
  *	Ordered by component
  */
-const section_type_value_t section_type_value[RLM_COMPONENT_COUNT] = {
+const section_type_value_t section_type_value[MOD_COUNT] = {
 	{ "authenticate", "Auth-Type",       PW_AUTH_TYPE },
 	{ "authorize",    "Autz-Type",       PW_AUTZ_TYPE },
 	{ "preacct",      "Pre-Acct-Type",   PW_PRE_ACCT_TYPE },
@@ -109,7 +109,15 @@ const section_type_value_t section_type_value[RLM_COMPONENT_COUNT] = {
  */
 static int check_module_magic(CONF_SECTION *cs, module_t const *module)
 {
+#ifdef HAVE_DLADDR
+	Dl_info dl_info;
+	dladdr(module, &dl_info);
+#endif
+
 	if (MAGIC_PREFIX(module->magic) != MAGIC_PREFIX(RADIUSD_MAGIC_NUMBER)) {
+#ifdef HAVE_DLADDR
+		cf_log_err_cs(cs, "Failed loading module rlm_%s from file %s", module->name, dl_info.dli_fname);
+#endif
 		cf_log_err_cs(cs, "Application and rlm_%s magic number (prefix) mismatch."
 			      "  application: %x module: %x", module->name,
 			      MAGIC_PREFIX(RADIUSD_MAGIC_NUMBER),
@@ -118,6 +126,9 @@ static int check_module_magic(CONF_SECTION *cs, module_t const *module)
 	}
 
 	if (MAGIC_VERSION(module->magic) != MAGIC_VERSION(RADIUSD_MAGIC_NUMBER)) {
+#ifdef HAVE_DLADDR
+		cf_log_err_cs(cs, "Failed loading module rlm_%s from file %s", module->name, dl_info.dli_fname);
+#endif
 		cf_log_err_cs(cs, "Application and rlm_%s magic number (version) mismatch."
 			      "  application: %lx module: %lx", module->name,
 			      (unsigned long) MAGIC_VERSION(RADIUSD_MAGIC_NUMBER),
@@ -126,6 +137,9 @@ static int check_module_magic(CONF_SECTION *cs, module_t const *module)
 	}
 
 	if (MAGIC_COMMIT(module->magic) != MAGIC_COMMIT(RADIUSD_MAGIC_NUMBER)) {
+#ifdef HAVE_DLADDR
+		cf_log_err_cs(cs, "Failed loading module rlm_%s from file %s", module->name, dl_info.dli_fname);
+#endif
 		cf_log_err_cs(cs, "Application and rlm_%s magic number (commit) mismatch."
 			      "  application: %lx module: %lx", module->name,
 			      (unsigned long) MAGIC_COMMIT(RADIUSD_MAGIC_NUMBER),
@@ -138,10 +152,10 @@ static int check_module_magic(CONF_SECTION *cs, module_t const *module)
 
 lt_dlhandle lt_dlopenext(char const *name)
 {
-	int flags = RTLD_NOW;
-	void *handle;
-	char buffer[2048];
-	char *env;
+	int	flags = RTLD_NOW;
+	void	*handle;
+	char	buffer[2048];
+	char	*env;
 
 #ifdef RTLD_GLOBAL
 	if (strcmp(name, "rlm_perl") == 0) {
@@ -159,31 +173,42 @@ lt_dlhandle lt_dlopenext(char const *name)
 	/*
 	 *	Prefer loading our libraries by absolute path.
 	 */
-	snprintf(buffer, sizeof(buffer), "%s/%s%s", radlib_dir, name, LT_SHREXT);
+	if (radlib_dir) {
+		char *error;
 
-	DEBUG4("Loading library using absolute path \"%s\"", name);
+		snprintf(buffer, sizeof(buffer), "%s/%s%s", radlib_dir, name, LT_SHREXT);
 
-	handle = dlopen(buffer, flags);
-	if (handle) return handle;
+		DEBUG4("Loading library using absolute path \"%s\"", buffer);
 
-	/*
-	 *	Because dlopen produces really shitty and inaccurate error messages
-	 */
-	if (access(name, R_OK) < 0) switch (errno) {
-	case EACCES:
-		WARN("Library file found, but we don't have permission to read it");
-		break;
+		handle = dlopen(buffer, flags);
+		if (handle) return handle;
+		error = dlerror();
 
-	case ENOENT:
-		DEBUG4("Library file not found");
-		break;
+		fr_strerror_printf("%s", error);
+		DEBUG4("Failed with error: %s", error);
 
-	default:
-		DEBUG4("Issue accessing library file: %s", fr_syserror(errno));
-		break;
+		/*
+		 *	Because dlopen (on OSX at least) produces really
+		 *	shitty and inaccurate error messages
+		 */
+		if (access(buffer, R_OK) < 0) {
+			switch (errno) {
+			case EACCES:
+				WARN("Library file found, but we don't have permission to read it");
+				break;
+
+			case ENOENT:
+				DEBUG4("Library file not found");
+				break;
+
+			default:
+				DEBUG4("Issue accessing library file: %s", fr_syserror(errno));
+				break;
+			}
+		}
 	}
 
-	DEBUG4("Falling back to linker search path(s)");
+	DEBUG4("Loading library using linker search path(s)");
 	if (DEBUG_ENABLED4) {
 #ifdef __APPLE__
 		env = getenv("LD_LIBRARY_PATH");
@@ -217,7 +242,21 @@ lt_dlhandle lt_dlopenext(char const *name)
 	 */
 	strlcat(buffer, LT_SHREXT, sizeof(buffer));
 
-	return dlopen(buffer, flags);
+	handle = dlopen(buffer, flags);
+	if (!handle) {
+		char *error = dlerror();
+
+		DEBUG4("Failed with error: %s", error);
+		/*
+		 *	Don't overwrite the previous message
+		 *	It's likely to contain a better error.
+		 */
+		if (!radlib_dir) {
+			fr_strerror_printf("%s", dlerror());
+		}
+		return NULL;
+	}
+	return handle;
 }
 
 void *lt_dlsym(lt_dlhandle handle, char const *symbol)
@@ -434,9 +473,9 @@ int modules_free(void)
 
 
 /*
- *	Find a module on disk or in memory, and link to it.
+ *	dlopen() a module.
  */
-static module_entry_t *linkto_module(char const *module_name, CONF_SECTION *cs)
+static module_entry_t *module_dlopen(CONF_SECTION *cs, char const *module_name)
 {
 	module_entry_t myentry;
 	module_entry_t *node;
@@ -462,7 +501,7 @@ static module_entry_t *linkto_module(char const *module_name, CONF_SECTION *cs)
 	 */
 	handle = lt_dlopenext(module_name);
 	if (!handle) {
-		cf_log_err_cs(cs, "Failed to link to module '%s': %s", module_name, dlerror());
+		cf_log_err_cs(cs, "Failed to link to module '%s': %s", module_name, fr_strerror());
 		return NULL;
 	}
 
@@ -521,15 +560,11 @@ static int module_conf_parse(module_instance_t *node, void **handle)
 	 *	Also parse the configuration data, if required.
 	 */
 	if (node->entry->module->inst_size) {
-		/* FIXME: make this rlm_config_t ?? */
 		*handle = talloc_zero_array(node, uint8_t, node->entry->module->inst_size);
 		rad_assert(handle);
 
-		/*
-		 *	So we can see where this configuration is from
-		 *	FIXME: set it to rlm_NAME_t, or some such thing
-		 */
-		talloc_set_name(*handle, "rlm_config_t");
+		talloc_set_name(*handle, "rlm_%s_t",
+				node->entry->module->name ? node->entry->module->name : "config");
 
 		if (node->entry->module->config &&
 		    (cf_section_parse(node->cs, *handle, node->entry->module->config) < 0)) {
@@ -550,17 +585,101 @@ static int module_conf_parse(module_instance_t *node, void **handle)
 	return 0;
 }
 
-/*
- *	Find a module instance.
+/** Bootstrap a module.
+ *
+ *  Load the module shared library, allocate instance memory for it,
+ *  parse the module configuration, and call the modules "bootstrap" method.
  */
-module_instance_t *find_module_instance(CONF_SECTION *modules,
-					char const *askedname, bool do_link)
+static module_instance_t *module_bootstrap(CONF_SECTION *cs)
 {
-	bool check_config_safe = false;
-	CONF_SECTION *cs;
-	char const *name1, *instname;
+	char const *name1, *name2;
 	module_instance_t *node, myNode;
 	char module_name[256];
+
+	/*
+	 *	Figure out which module we want to load.
+	 */
+	name1 = cf_section_name1(cs);
+	name2 = cf_section_name2(cs);
+	if (!name2) name2 = name1;
+
+	strlcpy(myNode.name, name2, sizeof(myNode.name));
+
+	/*
+	 *	See if the module already exists.
+	 */
+	node = rbtree_finddata(instance_tree, &myNode);
+	if (node) {
+		ERROR("Duplicate module \"%s %s\", in file %s:%d and file %s:%d",
+		      name1, name2,
+		      cf_section_filename(cs),
+		      cf_section_lineno(cs),
+		      cf_section_filename(node->cs),
+		      cf_section_lineno(node->cs));
+		return NULL;
+	}
+
+	/*
+	 *	Hang the node struct off of the configuration
+	 *	section. If the CS is free'd the instance will be
+	 *	free'd, too.
+	 */
+	node = talloc_zero(cs, module_instance_t);
+	node->cs = cs;
+	strlcpy(node->name, name2, sizeof(node->name));
+
+	/*
+	 *	Names in the "modules" section aren't prefixed
+	 *	with "rlm_", so we add it here.
+	 */
+	snprintf(module_name, sizeof(module_name), "rlm_%s", name1);
+
+	/*
+	 *	Load the module shared library.
+	 */
+	node->entry = module_dlopen(cs, module_name);
+	if (!node->entry) {
+		talloc_free(node);
+		return NULL;
+	}
+	
+	cf_log_module(cs, "Loading module \"%s\" from file %s", node->name,
+		      cf_section_filename(cs));
+
+	/*
+	 *	Parse the modules configuration.
+	 */
+	if (module_conf_parse(node, &node->insthandle) < 0) {
+		talloc_free(node);
+		return NULL;
+	}
+
+	/*
+	 *	Bootstrap the module.
+	 */
+	if (node->entry->module->bootstrap &&
+	    ((node->entry->module->bootstrap)(cs, node->insthandle) < 0)) {
+		cf_log_err_cs(cs, "Instantiation failed for module \"%s\"", node->name);
+		talloc_free(node);
+		return NULL;
+	}
+
+	/*
+	 *	Remember the module for later.
+	 */
+	rbtree_insert(instance_tree, node);
+
+	return node;
+}
+
+
+/** Find an existing module instance.
+ *
+ */
+module_instance_t *module_find(CONF_SECTION *modules, char const *askedname)
+{
+	char const *instname;
+	module_instance_t myNode;
 
 	if (!modules) return NULL;
 
@@ -570,105 +689,61 @@ module_instance_t *find_module_instance(CONF_SECTION *modules,
 	 *	exist."
 	 */
 	instname = askedname;
-	if (instname[0] == '-') {
-		instname++;
-	}
+	if (instname[0] == '-') instname++;
 
-	/*
-	 *	Module instances are declared in the modules{} block
-	 *	and referenced later by their name, which is the
-	 *	name2 from the config section, or name1 if there was
-	 *	no name2.
-	 */
-	cs = cf_section_sub_find_name2(modules, NULL, instname);
-	if (!cs) {
-		ERROR("Cannot find a configuration entry for module \"%s\"", instname);
-		return NULL;
-	}
-
-	/*
-	 *	If there's already a module instance, return it.
-	 */
 	strlcpy(myNode.name, instname, sizeof(myNode.name));
 
-	node = rbtree_finddata(instance_tree, &myNode);
-	if (node) {
-		return node;
-	}
+	return rbtree_finddata(instance_tree, &myNode);
+}
 
-	if (!do_link) {
+
+/** Load a module, and instantiate it.
+ *
+ */
+module_instance_t *module_instantiate(CONF_SECTION *modules, char const *askedname)
+
+{
+	module_instance_t *node;
+
+	/*
+	 *	Find the module.  If it's not there, do nothing.
+	 */
+	node = module_find(modules, askedname);
+	if (!node) {
+		ERROR("Cannot find a configuration entry for module \"%s\"", askedname);
 		return NULL;
 	}
 
-	name1 = cf_section_name1(cs);
+	/*
+	 *	The module is already instantiated.  Return it.
+	 */
+	if (node->instantiated) return node;
 
 	/*
-	 *	Found the configuration entry, hang the node struct off of the
-	 *	configuration section. If the CS is free'd the instance will
-	 *	be too.
+	 *	Now that ALL modules are instantiated, and ALL xlats
+	 *	are defined, go compile the config items marked as XLAT.
 	 */
-	node = talloc_zero(cs, module_instance_t);
-	node->cs = cs;
-
-	/*
-	 *	Names in the "modules" section aren't prefixed
-	 *	with "rlm_", so we add it here.
-	 */
-	snprintf(module_name, sizeof(module_name), "rlm_%s", name1);
-
-	/*
-	 *	Pull in the module object
-	 */
-	node->entry = linkto_module(module_name, cs);
-	if (!node->entry) {
-		talloc_free(node);
-		/* linkto_module logs any errors */
+	if (node->entry->module->config &&
+	    (cf_section_parse_pass2(node->cs, node->insthandle,
+				    node->entry->module->config) < 0)) {
 		return NULL;
 	}
 
-	if (check_config && (node->entry->module->instantiate) &&
-	    (node->entry->module->type & RLM_TYPE_CHECK_CONFIG_UNSAFE) != 0) {
-		char const *value = NULL;
-		CONF_PAIR *cp;
+	/*
+	 *	Call the instantiate method, if any.
+	 */
+	if (node->entry->module->instantiate) {
+		cf_log_module(node->cs, "Instantiating module \"%s\" from file %s", node->name,
+			      cf_section_filename(node->cs));
 
-		cp = cf_pair_find(cs, "force_check_config");
-		if (cp) {
-			value = cf_pair_value(cp);
+		/*
+		 *	Call the module's instantiation routine.
+		 */
+		if ((node->entry->module->instantiate)(node->cs, node->insthandle) < 0) {
+			cf_log_err_cs(node->cs, "Instantiation failed for module \"%s\"", node->name);
+		
+			return NULL;
 		}
-
-		if (value && (strcmp(value, "yes") == 0)) goto print_inst;
-
-		cf_log_module(cs, "Skipping instantiation of %s", instname);
-	} else {
-	print_inst:
-		check_config_safe = true;
-		cf_log_module(cs, "Instantiating module \"%s\" from file %s", instname,
-			      cf_section_filename(cs));
-	}
-
-	strlcpy(node->name, instname, sizeof(node->name));
-
-	/*
-	 *	Parse the module configuration, and setup destructors so the
-	 *	module's detach method is called when it's instance data is
-	 *	about to be freed.
-	 */
-	if (module_conf_parse(node, &node->insthandle) < 0) {
-		talloc_free(node);
-
-		return NULL;
-	}
-
-	/*
-	 *	Call the module's instantiation routine.
-	 */
-	if ((node->entry->module->instantiate) &&
-	    (!check_config || check_config_safe) &&
-	    ((node->entry->module->instantiate)(cs, node->insthandle) < 0)) {
-		cf_log_err_cs(cs, "Instantiation failed for module \"%s\"", node->name);
-		talloc_free(node);
-
-		return NULL;
 	}
 
 #ifdef HAVE_PTHREAD_H
@@ -684,15 +759,10 @@ module_instance_t *find_module_instance(CONF_SECTION *modules,
 		 *	Initialize the mutex.
 		 */
 		pthread_mutex_init(node->mutex, NULL);
-	} else {
-		/*
-		 *	The module is thread-safe.  Don't give it a mutex.
-		 */
-		node->mutex = NULL;
-	}
-
+	}	
 #endif
-	rbtree_insert(instance_tree, node);
+
+	node->instantiated = true;
 
 	return node;
 }
@@ -764,7 +834,7 @@ int find_module_sibling_section(CONF_SECTION **out, CONF_SECTION *module, char c
 	 *	instantiation order issues.
 	 */
 	inst_name = cf_pair_value(cp);
-	inst = find_module_instance(cf_item_parent(cf_section_to_item(module)), inst_name, true);
+	inst = module_instantiate(cf_item_parent(cf_section_to_item(module)), inst_name);
 
 	/*
 	 *	Remove the config data we added for loop
@@ -1019,7 +1089,7 @@ static int load_component_section(CONF_SECTION *cs,
 		 *	i.e. They're not allowed in a "group" or "redundant"
 		 *	subsection.
 		 */
-		if (comp == RLM_COMPONENT_AUTH) {
+		if (comp == MOD_AUTHENTICATE) {
 			DICT_VALUE *dval;
 			char const *modrefname = NULL;
 			if (cp) {
@@ -1095,7 +1165,7 @@ static int load_component_section(CONF_SECTION *cs,
 			return -1;
 		}
 
-		if (debug_flag > 2) modcall_debug(this, 2);
+		if (rad_debug_lvl > 2) modcall_debug(this, 2);
 
 		add_to_modcallable(subcomp->modulelist, this);
 	}
@@ -1132,7 +1202,7 @@ static int load_byserver(CONF_SECTION *cs)
 		ERROR("Failed to initialize components");
 
 	error:
-		if (debug_flag == 0) {
+		if (rad_debug_lvl == 0) {
 			ERROR("Failed to load virtual server %s",
 			      (name != NULL) ? name : "<default>");
 		}
@@ -1145,7 +1215,7 @@ static int load_byserver(CONF_SECTION *cs)
 	 *	configuration section, and loading it.
 	 */
 	found = 0;
-	for (comp = 0; comp < RLM_COMPONENT_COUNT; ++comp) {
+	for (comp = 0; comp < MOD_COUNT; ++comp) {
 		CONF_SECTION *subcs;
 
 		subcs = cf_section_sub_find(cs,
@@ -1167,20 +1237,20 @@ static int load_byserver(CONF_SECTION *cs)
 #ifdef WITH_PROXY
 		    !main_config.proxy_requests &&
 #endif
-		    ((comp == RLM_COMPONENT_PRE_PROXY) ||
-		     (comp == RLM_COMPONENT_POST_PROXY))) {
+		    ((comp == MOD_PRE_PROXY) ||
+		     (comp == MOD_POST_PROXY))) {
 			continue;
 		}
 
 #ifndef WITH_ACCOUNTING
-		if (comp == RLM_COMPONENT_ACCT) continue;
+		if (comp == MOD_ACCOUNTING) continue;
 #endif
 
 #ifndef WITH_SESSION_MGMT
-		if (comp == RLM_COMPONENT_SESS) continue;
+		if (comp == MOD_SESSION) continue;
 #endif
 
-		if (debug_flag <= 3) {
+		if (rad_debug_lvl <= 3) {
 			cf_log_module(cs, "Loading %s {...}",
 				      section_type_value[comp].section);
 		} else {
@@ -1191,7 +1261,7 @@ static int load_byserver(CONF_SECTION *cs)
 			goto error;
 		}
 
-		if (debug_flag > 3) {
+		if (rad_debug_lvl > 3) {
 			DEBUG(" } # %s", section_type_value[comp].section);
 		}
 
@@ -1226,12 +1296,12 @@ static int load_byserver(CONF_SECTION *cs)
 		if (subcs) {
 			cf_log_module(cs, "Loading vmps {...}");
 			if (load_component_section(subcs, components,
-						   RLM_COMPONENT_POST_AUTH) < 0) {
+						   MOD_POST_AUTH) < 0) {
 				goto error;
 			}
 			c = lookup_by_index(components,
-					    RLM_COMPONENT_POST_AUTH, 0);
-			if (c) server->mc[RLM_COMPONENT_POST_AUTH] = c->modulelist;
+					    MOD_POST_AUTH, 0);
+			if (c) server->mc[MOD_POST_AUTH] = c->modulelist;
 			break;
 		}
 #endif
@@ -1259,12 +1329,12 @@ static int load_byserver(CONF_SECTION *cs)
 			if (!load_subcomponent_section(subcs,
 						       components,
 						       da,
-						       RLM_COMPONENT_POST_AUTH)) {
+						       MOD_POST_AUTH)) {
 				goto error; /* FIXME: memleak? */
 			}
 			c = lookup_by_index(components,
-					    RLM_COMPONENT_POST_AUTH, 0);
-			if (c) server->mc[RLM_COMPONENT_POST_AUTH] = c->modulelist;
+					    MOD_POST_AUTH, 0);
+			if (c) server->mc[MOD_POST_AUTH] = c->modulelist;
 
 			subcs = cf_subsection_find_next(cs, subcs, "dhcp");
 		}
@@ -1277,7 +1347,7 @@ static int load_byserver(CONF_SECTION *cs)
 		cf_log_info(cs, "} # server");
 	}
 
-	if (debug_flag == 0) {
+	if (rad_debug_lvl == 0) {
 		INFO("Loaded virtual server %s",
 		       (name != NULL) ? name : "<default>");
 	}
@@ -1318,19 +1388,6 @@ static int pass2_cb(UNUSED void *ctx, void *data)
 	return 0;
 }
 
-static int pass2_instance_cb(UNUSED void *ctx, void *data)
-{
-	module_instance_t *node = data;
-
-	if (!node->entry->module->config || !node->cs) return 0;
-
-	if (cf_section_parse_pass2(node->cs, node->insthandle,
-				   node->entry->module->config) < 0) {
-		return -1;
-	}
-
-	return 0;
-}
 
 /*
  *	Load all of the virtual servers.
@@ -1399,14 +1456,6 @@ int virtual_servers_load(CONF_SECTION *config)
 	}
 
 	/*
-	 *	Check all of the module config items which are xlat expanded.
-	 */
-	if (rbtree_walk(instance_tree, RBTREE_IN_ORDER,
-			pass2_instance_cb, NULL) != 0) {
-		return -1;
-	}
-
-	/*
 	 *	Try to compile the "authorize", etc. sections which
 	 *	aren't in a virtual server.
 	 */
@@ -1414,7 +1463,7 @@ int virtual_servers_load(CONF_SECTION *config)
 	if (server) {
 		int i;
 
-		for (i = RLM_COMPONENT_AUTH; i < RLM_COMPONENT_COUNT; i++) {
+		for (i = MOD_AUTHENTICATE; i < MOD_COUNT; i++) {
 			if (!modcall_pass2(server->mc[i])) return -1;
 		}
 
@@ -1440,7 +1489,7 @@ int virtual_servers_load(CONF_SECTION *config)
 		server = virtual_server_find(name2);
 		if (!server) continue;
 
-		for (i = RLM_COMPONENT_AUTH; i < RLM_COMPONENT_COUNT; i++) {
+		for (i = MOD_AUTHENTICATE; i < MOD_COUNT; i++) {
 			if (!modcall_pass2(server->mc[i])) return -1;
 		}
 
@@ -1465,6 +1514,7 @@ int module_hup_module(CONF_SECTION *cs, module_instance_t *node, time_t when)
 	fr_module_hup_t *mh;
 
 	if (!node ||
+	    node->entry->module->bootstrap ||
 	    !node->entry->module->instantiate ||
 	    ((node->entry->module->type & RLM_TYPE_HUP_SAFE) == 0)) {
 		return 1;
@@ -1505,6 +1555,9 @@ int module_hup_module(CONF_SECTION *cs, module_instance_t *node, time_t when)
 	mh->next = node->mh;
 	node->mh = mh;
 
+	/*
+	 *	Replace the instance handle while the module is running.
+	 */
 	node->insthandle = insthandle;
 
 	/*
@@ -1604,7 +1657,7 @@ static bool server_define_types(CONF_SECTION *cs)
 	/*
 	 *	Loop over all of the components
 	 */
-	for (comp = 0; comp < RLM_COMPONENT_COUNT; ++comp) {
+	for (comp = 0; comp < MOD_COUNT; ++comp) {
 		CONF_SECTION *subcs;
 		CONF_ITEM *modref;
 		DICT_ATTR const *da;
@@ -1796,40 +1849,30 @@ int modules_init(CONF_SECTION *config)
 	 *	This is O(N^2) in the number of modules, but most
 	 *	systems should have less than 100 modules.
 	 */
-	for (ci=cf_item_find_next(modules, NULL);
+	for (ci = cf_item_find_next(modules, NULL);
 	     ci != NULL;
-	     ci=next) {
-		char const *name1, *name2;
-		CONF_SECTION *subcs, *duplicate;
+	     ci = next) {
+		char const *name1;
+		CONF_SECTION *subcs;
+		module_instance_t *node;
 
 		next = cf_item_find_next(modules, ci);
 
 		if (!cf_item_is_section(ci)) continue;
 
+		subcs = cf_item_to_section(ci);
+
+		node = module_bootstrap(subcs);
+		if (!node) return -1;
+
 		if (!next || !cf_item_is_section(next)) continue;
 
-		subcs = cf_item_to_section(ci);
 		name1 = cf_section_name1(subcs);
-		name2 = cf_section_name2(subcs);
 
 		if (is_reserved_word(name1)) {
 			cf_log_err_cs(subcs, "Module cannot be named for an 'unlang' keyword");
 			return -1;
 		}
-
-		duplicate = cf_section_find_name2(cf_item_to_section(next),
-						  name1, name2);
-		if (!duplicate) continue;
-
-		if (!name2) name2 = "";
-
-		ERROR("Duplicate module \"%s %s\", in file %s:%d and file %s:%d",
-		       name1, name2,
-		       cf_section_filename(subcs),
-		       cf_section_lineno(subcs),
-		       cf_section_filename(duplicate),
-		       cf_section_lineno(duplicate));
-		return -1;
 	}
 
 	/*
@@ -1862,7 +1905,7 @@ int modules_init(CONF_SECTION *config)
 				cp = cf_item_to_pair(ci);
 				name = cf_pair_attr(cp);
 
-				module = find_module_instance(modules, name, true);
+				module = module_instantiate(modules, name);
 				if (!module && (name[0] != '-')) {
 					return -1;
 				}
@@ -1920,7 +1963,7 @@ int modules_init(CONF_SECTION *config)
 							return -1;
 						}
 
-						module = find_module_instance(modules, cf_pair_attr(cp), true);
+						module = module_instantiate(modules, cf_pair_attr(cp));
 						if (!module) {
 							return -1;
 						}
@@ -1980,7 +2023,7 @@ int modules_init(CONF_SECTION *config)
 		name = cf_section_name2(subcs);
 		if (!name) name = cf_section_name1(subcs);
 
-		module = find_module_instance(modules, name, true);
+		module = module_instantiate(modules, name);
 		if (!module) return -1;
 	}
 	cf_log_info(cs, " } # modules");
@@ -1996,7 +2039,7 @@ int modules_init(CONF_SECTION *config)
  */
 rlm_rcode_t process_authorize(int autz_type, REQUEST *request)
 {
-	return indexed_modcall(RLM_COMPONENT_AUTZ, autz_type, request);
+	return indexed_modcall(MOD_AUTHORIZE, autz_type, request);
 }
 
 /*
@@ -2004,7 +2047,7 @@ rlm_rcode_t process_authorize(int autz_type, REQUEST *request)
  */
 rlm_rcode_t process_authenticate(int auth_type, REQUEST *request)
 {
-	return indexed_modcall(RLM_COMPONENT_AUTH, auth_type, request);
+	return indexed_modcall(MOD_AUTHENTICATE, auth_type, request);
 }
 
 #ifdef WITH_ACCOUNTING
@@ -2013,7 +2056,7 @@ rlm_rcode_t process_authenticate(int auth_type, REQUEST *request)
  */
 rlm_rcode_t module_preacct(REQUEST *request)
 {
-	return indexed_modcall(RLM_COMPONENT_PREACCT, 0, request);
+	return indexed_modcall(MOD_PREACCT, 0, request);
 }
 
 /*
@@ -2021,7 +2064,7 @@ rlm_rcode_t module_preacct(REQUEST *request)
  */
 rlm_rcode_t process_accounting(int acct_type, REQUEST *request)
 {
-	return indexed_modcall(RLM_COMPONENT_ACCT, acct_type, request);
+	return indexed_modcall(MOD_ACCOUNTING, acct_type, request);
 }
 #endif
 
@@ -2042,7 +2085,7 @@ int process_checksimul(int sess_type, REQUEST *request, int maxsimul)
 	request->simul_max = maxsimul;
 	request->simul_mpp = 1;
 
-	rcode = indexed_modcall(RLM_COMPONENT_SESS, sess_type, request);
+	rcode = indexed_modcall(MOD_SESSION, sess_type, request);
 
 	if (rcode != RLM_MODULE_OK) {
 		/* FIXME: Good spot for a *rate-limited* warning to the log */
@@ -2059,7 +2102,7 @@ int process_checksimul(int sess_type, REQUEST *request, int maxsimul)
  */
 rlm_rcode_t process_pre_proxy(int type, REQUEST *request)
 {
-	return indexed_modcall(RLM_COMPONENT_PRE_PROXY, type, request);
+	return indexed_modcall(MOD_PRE_PROXY, type, request);
 }
 
 /*
@@ -2067,7 +2110,7 @@ rlm_rcode_t process_pre_proxy(int type, REQUEST *request)
  */
 rlm_rcode_t process_post_proxy(int type, REQUEST *request)
 {
-	return indexed_modcall(RLM_COMPONENT_POST_PROXY, type, request);
+	return indexed_modcall(MOD_POST_PROXY, type, request);
 }
 #endif
 
@@ -2076,17 +2119,17 @@ rlm_rcode_t process_post_proxy(int type, REQUEST *request)
  */
 rlm_rcode_t process_post_auth(int postauth_type, REQUEST *request)
 {
-	return indexed_modcall(RLM_COMPONENT_POST_AUTH, postauth_type, request);
+	return indexed_modcall(MOD_POST_AUTH, postauth_type, request);
 }
 
 #ifdef WITH_COA
 rlm_rcode_t process_recv_coa(int recv_coa_type, REQUEST *request)
 {
-	return indexed_modcall(RLM_COMPONENT_RECV_COA, recv_coa_type, request);
+	return indexed_modcall(MOD_RECV_COA, recv_coa_type, request);
 }
 
 rlm_rcode_t process_send_coa(int send_coa_type, REQUEST *request)
 {
-	return indexed_modcall(RLM_COMPONENT_SEND_COA, send_coa_type, request);
+	return indexed_modcall(MOD_SEND_COA, send_coa_type, request);
 }
 #endif

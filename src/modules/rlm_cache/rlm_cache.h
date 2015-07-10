@@ -47,7 +47,7 @@ typedef enum {
  *	be used as the instance handle.
  */
 typedef struct rlm_cache_t {
-	char const		*xlat_name;		//!< Name of xlat function to register.
+	char const		*name;		//!< Name of xlat function to register.
 
 	char const		*driver_name;		//!< Datastore name
 	void			*handle;		//!< Datastore handle.
@@ -60,7 +60,7 @@ typedef struct rlm_cache_t {
 	int32_t			epoch;			//!< Time after which entries are considered valid.
 	bool			stats;			//!< Generate statistics.
 
-	value_pair_map_t	*maps;			//!< Attribute map applied to users.
+	vp_map_t	*maps;			//!< Attribute map applied to users.
 							//!< and profiles.
 	CONF_SECTION		*cs;
 } rlm_cache_t;
@@ -77,7 +77,7 @@ typedef struct rlm_cache_entry_t {
 	VALUE_PAIR		*state;			//!< Cached session-state list.
 } rlm_cache_entry_t;
 
-typedef int			(*mod_instantiate_t)(CONF_SECTION *conf, rlm_cache_t *inst);
+typedef int			(*cache_instantiate_t)(CONF_SECTION *conf, rlm_cache_t *inst);
 typedef rlm_cache_entry_t	*(*cache_entry_alloc_t)(rlm_cache_t *inst, REQUEST *request);
 typedef void			(*cache_entry_free_t)(rlm_cache_entry_t *c);
 
@@ -97,7 +97,7 @@ typedef int			(*cache_reconnect_t)(rlm_cache_t *inst, REQUEST *request, rlm_cach
 struct cache_module {
 	char const		*name;			//!< Driver name.
 
-	mod_instantiate_t	mod_instantiate;	//!< (optional) Instantiate a driver.
+	cache_instantiate_t	instantiate;		//!< (optional) Instantiate a driver.
 	cache_entry_alloc_t	alloc;			//!< (optional) Allocate a new entry.
 	cache_entry_free_t	free;			//!< (optional) Free memory used by an entry.
 

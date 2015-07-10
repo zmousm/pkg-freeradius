@@ -46,7 +46,8 @@ RCSID("$Id$")
 #include <pthread.h>
 #endif
 
-static bool rate_limit = true;
+log_lvl_t	rad_debug_lvl = 0;		//!< Global debugging level
+static bool	rate_limit = true;		//!< Whether repeated log entries should be rate limited
 
 /** Maps log categories to message prefixes
  */
@@ -298,7 +299,7 @@ int radlog_init(fr_log_t *log, bool daemonize)
 		 *	If we're debugging, allow STDERR to go to
 		 *	STDOUT too, for executed programs,
 		 */
-		if (debug_flag) {
+		if (rad_debug_lvl) {
 			dup2(STDOUT_FILENO, STDERR_FILENO);
 		} else {
 			dup2(devnull, STDERR_FILENO);
@@ -312,7 +313,7 @@ int radlog_init(fr_log_t *log, bool daemonize)
 		 *	If we're debugging, allow STDOUT to go to
 		 *	STDERR too, for executed programs,
 		 */
-		if (debug_flag) {
+		if (rad_debug_lvl) {
 			dup2(STDERR_FILENO, STDOUT_FILENO);
 		} else {
 			dup2(devnull, STDOUT_FILENO);
@@ -327,7 +328,7 @@ int radlog_init(fr_log_t *log, bool daemonize)
 		dup2(devnull, STDOUT_FILENO);
 		dup2(devnull, STDERR_FILENO);
 
-	} else if (debug_flag) {
+	} else if (rad_debug_lvl) {
 		/*
 		 *	If we're debugging, allow STDOUT and STDERR to
 		 *	go to the log file.
@@ -400,7 +401,7 @@ int vradlog(log_type_t type, char const *msg, va_list ap)
 	 *	of debugging.
 	 */
 	if (default_log.dst != L_DST_SYSLOG) {
-		if ((debug_flag != 1) && (debug_flag != 2)) {
+		if ((rad_debug_lvl != 1) && (rad_debug_lvl != 2)) {
 			time_t timeval;
 
 			timeval = time(NULL);
@@ -531,7 +532,7 @@ int radlog(log_type_t type, char const *msg, ...)
 	/*
 	 *	Non-debug message, or debugging is enabled.  Log it.
 	 */
-	if (((type & L_DBG) == 0) || (debug_flag > 0)) {
+	if (((type & L_DBG) == 0) || (rad_debug_lvl > 0)) {
 		r = vradlog(type, msg, ap);
 	}
 	va_end(ap);
@@ -566,7 +567,7 @@ static int radlog_always(log_type_t type, char const *msg, ...)
  */
 inline bool debug_enabled(log_type_t type, log_lvl_t lvl)
 {
-	if ((type & L_DBG) && (lvl <= debug_flag)) return true;
+	if ((type & L_DBG) && (lvl <= rad_debug_lvl)) return true;
 
 	return false;
 }
@@ -575,7 +576,7 @@ inline bool debug_enabled(log_type_t type, log_lvl_t lvl)
  */
 bool rate_limit_enabled(void)
 {
-	if (rate_limit || (debug_flag < 1)) return true;
+	if (rate_limit || (rad_debug_lvl < 1)) return true;
 
 	return false;
 }
@@ -601,7 +602,7 @@ inline bool radlog_debug_enabled(log_type_t type, log_lvl_t lvl, REQUEST *reques
 	 */
 	if ((type & L_DBG) &&
 	    ((request && request->log.func && (lvl <= request->log.lvl)) ||
-	     ((debug_flag != 0) && (lvl <= debug_flag)))) {
+	     ((rad_debug_lvl != 0) && (lvl <= rad_debug_lvl)))) {
 		return true;
 	}
 
@@ -820,7 +821,7 @@ void radlog_request_error(log_type_t type, log_lvl_t lvl, REQUEST *request, char
 	va_end(ap);
 }
 
-/** Write the string being parsed, and a marker showing where the parse error ocurred
+/** Write the string being parsed, and a marker showing where the parse error occurred
  *
  * @param type the log category.
  * @param lvl of debugging this message should be logged at.

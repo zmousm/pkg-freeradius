@@ -5,8 +5,7 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -40,7 +39,7 @@ RCSID("$Id$")
 
 bool	fr_dns_lookups = false;	    /* IP -> hostname lookups? */
 bool    fr_hostname_lookups = true; /* hostname -> IP lookups? */
-int	fr_debug_flag = 0;
+int	fr_debug_lvl = 0;
 
 static char const *months[] = {
 	"jan", "feb", "mar", "apr", "may", "jun",
@@ -1120,9 +1119,33 @@ bool is_whitespace(char const *value)
 	return true;
 }
 
+/** Check whether the string is made up of printable UTF8 chars
+ *
+ * @param value to check.
+ * @param len of value.
+ *
+ * @return
+ *	- true if the string is printable.
+ *	- false if the string contains non printable chars
+ */
+ bool is_printable(void const *value, size_t len)
+ {
+ 	uint8_t	const *p = value;
+ 	int	clen;
+ 	size_t	i;
+
+ 	for (i = 0; i < len; i++) {
+ 		clen = fr_utf8_char(p);
+ 		if (clen == 0) return false;
+ 		i += (size_t)clen;
+ 		p += clen;
+ 	}
+ 	return true;
+ }
+
 /** Check whether the string is all numbers
  *
- * @return true if the entirety of the string is are numebrs, else false.
+ * @return true if the entirety of the string is all numbers, else false.
  */
 bool is_integer(char const *value)
 {
@@ -1135,7 +1158,7 @@ bool is_integer(char const *value)
 
 /** Check whether the string is allzeros
  *
- * @return true if the entirety of the string is are numebrs, else false.
+ * @return true if the entirety of the string is all zeros, else false.
  */
 bool is_zero(char const *value)
 {

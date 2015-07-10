@@ -586,6 +586,7 @@ ac_unique_file="rlm_ldap.c"
 ac_subst_vars='LTLIBOBJS
 LIBOBJS
 targetname
+SASL
 mod_cflags
 mod_ldflags
 OBJEXT
@@ -3097,14 +3098,17 @@ smart_prefix=
 
 
 	if test "x$fail" = "x"; then
-		for ac_func in ldap_sasl_bind \
+		for ac_func in ldap_sasl_interactive_bind \
 			ldap_unbind_ext_s \
 			ldap_start_tls_s \
 			ldap_initialize \
 			ldap_set_rebind_proc \
 			ldap_create_sort_control \
 			ldap_create_sort_keylist \
-			ldap_free_sort_keylist
+			ldap_free_sort_keylist \
+			ldap_url_parse \
+			ldap_is_ldap_url \
+			ldap_url_desc2str
 
 do :
   as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
@@ -3185,6 +3189,14 @@ _ACEOF
 
 mod_ldflags=$SMART_LIBS
 mod_cflags="$SMART_CPPFLAGS"
+
+if test x"$ac_cv_func_ldap_sasl_interactive_bind" = "xyes"; then
+	SASL=sasl.c
+else
+	SASL=
+fi
+
+
 
 
 

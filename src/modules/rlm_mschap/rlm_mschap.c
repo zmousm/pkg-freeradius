@@ -25,25 +25,25 @@
 /*  MPPE support from Takahiro Wagatsuma <waga@sic.shibaura-it.ac.jp> */
 RCSID("$Id$")
 
-#include	<freeradius-devel/radiusd.h>
-#include	<freeradius-devel/modules.h>
-#include	<freeradius-devel/rad_assert.h>
-#include	<freeradius-devel/md5.h>
-#include	<freeradius-devel/sha1.h>
+#include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/modules.h>
+#include <freeradius-devel/rad_assert.h>
+#include <freeradius-devel/md5.h>
+#include <freeradius-devel/sha1.h>
 
-#include 	<ctype.h>
+#include <ctype.h>
 
-#include	"rlm_mschap.h"
-#include	"mschap.h"
-#include	"smbdes.h"
-#include	"auth_wbclient.h"
+#include "rlm_mschap.h"
+#include "mschap.h"
+#include "smbdes.h"
+#include "auth_wbclient.h"
 
 #ifdef HAVE_OPENSSL_CRYPTO_H
 USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #  include	<openssl/rc4.h>
 #endif
 
-#ifdef WITH_OPEN_DIRECTORY
+#ifdef __APPLE__
 int od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR * usernamepair);
 #endif
 
@@ -557,7 +557,7 @@ static const CONF_PARSER module_config[] = {
 	{ "retry_msg", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_mschap_t, retry_msg), NULL },
 	{ "winbind_username", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_TMPL, rlm_mschap_t, wb_username), NULL },
 	{ "winbind_domain", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_TMPL, rlm_mschap_t, wb_domain), NULL },
-#ifdef WITH_OPEN_DIRECTORY
+#ifdef __APPLE__
 	{ "use_open_directory", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_mschap_t, open_directory), "yes" },
 #endif
 
@@ -565,11 +565,7 @@ static const CONF_PARSER module_config[] = {
 };
 
 
-/*
- *	Create instance for our module. Allocate space for
- *	instance structure and read configuration parameters
- */
-static int mod_instantiate(CONF_SECTION *conf, void *instance)
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 {
 	char const *name;
 	rlm_mschap_t *inst = instance;
@@ -581,6 +577,17 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	if (!name) name = cf_section_name1(conf);
 	inst->xlat_name = name;
 	xlat_register(inst->xlat_name, mschap_xlat, NULL, inst);
+
+	return 0;
+}
+
+/*
+ *	Create instance for our module. Allocate space for
+ *	instance structure and read configuration parameters
+ */
+static int mod_instantiate(CONF_SECTION *conf, void *instance)
+{
+	rlm_mschap_t *inst = instance;
 
 	/*
 	 *	For backwards compatibility
@@ -602,11 +609,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 		inst->wb_pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, NULL, NULL);
 		if (!inst->wb_pool) {
-			ERROR("rlm_mschap (%s): unable to initialise winbind connection pool", name);
+			cf_log_err_cs(conf, "Unable to initialise winbind connection pool");
 			return -1;
 		}
 #else
-		ERROR("rlm_mschap (%s): 'winbind' auth not enabled at compiled time", name);
+		cf_log_err_cs(conf, "'winbind' auth not enabled at compiled time");
 		return -1;
 #endif
 	}
@@ -618,14 +625,14 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	switch (inst->method) {
 	case AUTH_INTERNAL:
-		DEBUG("rlm_mschap (%s): using internal authentication", name);
+		DEBUG("rlm_mschap (%s): using internal authentication", inst->xlat_name);
 		break;
 	case AUTH_NTLMAUTH_EXEC:
-		DEBUG("rlm_mschap (%s): authenticating by calling 'ntlm_auth'", name);
+		DEBUG("rlm_mschap (%s): authenticating by calling 'ntlm_auth'", inst->xlat_name);
 		break;
 #ifdef WITH_AUTH_WINBIND
 	case AUTH_WBCLIENT:
-		DEBUG("rlm_mschap (%s): authenticating directly to winbind", name);
+		DEBUG("rlm_mschap (%s): authenticating directly to winbind", inst->xlat_name);
 		break;
 #endif
 	}
@@ -1101,11 +1108,10 @@ static int CC_HINT(nonnull (1, 2, 4, 5 ,6)) do_mschap(rlm_mschap_t *inst, REQUES
 	memset(nthashhash, 0, NT_DIGEST_LENGTH);
 
 	switch (method) {
+		/*
+		 *	Do normal authentication.
+		 */
 	case AUTH_INTERNAL:
-	/*
-	 *	Do normal authentication.
-	 */
-		{
 		/*
 		 *	No password: can't do authentication.
 		 */
@@ -1128,14 +1134,12 @@ static int CC_HINT(nonnull (1, 2, 4, 5 ,6)) do_mschap(rlm_mschap_t *inst, REQUES
 		    (password->da->attr == PW_NT_PASSWORD)) {
 			fr_md4_calc(nthashhash, password->vp_octets, MD4_DIGEST_LENGTH);
 		}
-
 		break;
-		}
-	case AUTH_NTLMAUTH_EXEC:
-	/*
-	 *	Run ntlm_auth
-	 */
-		{
+
+		/*
+		 *	Run ntlm_auth
+		 */
+	case AUTH_NTLMAUTH_EXEC: {
 		int	result;
 		char	buffer[256];
 		size_t	len;
@@ -1143,7 +1147,7 @@ static int CC_HINT(nonnull (1, 2, 4, 5 ,6)) do_mschap(rlm_mschap_t *inst, REQUES
 		/*
 		 *	Run the program, and expect that we get 16
 		 */
-		result = radius_exec_program(buffer, sizeof(buffer), NULL, request, inst->ntlm_auth, NULL,
+		result = radius_exec_program(request, buffer, sizeof(buffer), NULL, request, inst->ntlm_auth, NULL,
 					     true, true, inst->ntlm_auth_timeout);
 		if (result != 0) {
 			char *p;
@@ -1194,18 +1198,19 @@ static int CC_HINT(nonnull (1, 2, 4, 5 ,6)) do_mschap(rlm_mschap_t *inst, REQUES
 			REDEBUG("Invalid output from ntlm_auth: NT_KEY has non-hex values");
 			return -1;
 		}
-
 		break;
 		}
+
 #ifdef WITH_AUTH_WINBIND
+		/*
+		 *	Process auth via the wbclient library
+		 */
 	case AUTH_WBCLIENT:
-	/*
-	 *	Process auth via the wbclient library
-	 */
 		return do_auth_wbclient(inst, request, challenge, response, nthashhash);
 #endif
-	default:
+
 		/* We should never reach this line */
+	default:
 		RERROR("Internal error: Unknown mschap auth method (%d)", method);
 		return -1;
 	}
@@ -1569,11 +1574,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void * instance, REQUEST *r
 
 		RDEBUG("MS-CHAPv2 password change request received");
 
-		if (!nt_password) {
-			REDEBUG("No valid NT-Password attribute found, can't change password");
-			return RLM_MODULE_INVALID;
-		}
-
 		if (cpw->vp_length != 68) {
 			REDEBUG("MS-CHAP2-CPW has the wrong format: length %zu != 68", cpw->vp_length);
 			return RLM_MODULE_INVALID;
@@ -1815,7 +1815,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void * instance, REQUEST *r
 				username->vp_strvalue, response_name->vp_strvalue);
 		}
 
-#ifdef WITH_OPEN_DIRECTORY
+#ifdef __APPLE__
 		/*
 		 *  No "known good" NT-Password attribute.  Try to do
 		 *  OpenDirectory authentication.
@@ -1888,8 +1888,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void * instance, REQUEST *r
 				snprintf(newchal + (i * 2), 3, "%02x", fr_rand() & 0xff);
 			}
 
-			snprintf(buffer, sizeof(buffer), "E=648 R=0 C=%s V=3 M=Password Expired", newchal);
+			snprintf(buffer, sizeof(buffer), "E=648 R=%d C=%s V=3 M=Password Expired",
+				 inst->allow_retry, newchal);
 
+			RDEBUG("Password has expired.  The user should retry authentication");
 			mschap_add_reply(request, *response->vp_octets, "MS-CHAP-Error", buffer, strlen(buffer));
 			return RLM_MODULE_REJECT;
 		}
@@ -1984,21 +1986,16 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void * instance, REQUEST *r
 
 extern module_t rlm_mschap;
 module_t rlm_mschap = {
-	RLM_MODULE_INIT,
-	"MS-CHAP",
-	RLM_TYPE_THREAD_SAFE | RLM_TYPE_HUP_SAFE,	/* type */
-	sizeof(rlm_mschap_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	mod_detach,			/* detach */
-	{
-		mod_authenticate,	/* authenticate */
-		mod_authorize,		/* authorize */
-		NULL,			/* pre-accounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "mschap",
+	.type		= 0,
+	.inst_size	= sizeof(rlm_mschap_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize
 	},
 };

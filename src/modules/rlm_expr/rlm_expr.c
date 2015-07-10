@@ -224,54 +224,48 @@ static bool get_number(REQUEST *request, char const **string, int64_t *answer)
 	 *	Look for an attribute.
 	 */
 	if (*p == '&') {
-		ssize_t slen;
-		VALUE_PAIR *vp;
-		vp_tmpl_t vpt;
+		ssize_t		slen;
+		VALUE_PAIR	*vp;
+		vp_tmpl_t	vpt;
 
 		p += 1;
 
 		slen = tmpl_from_attr_substr(&vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
-		if (slen < 0) {
-			RDEBUG("Failed parsing attribute name '%s': %s", p, fr_strerror());
+		if (slen <= 0) {
+			REDEBUG("Failed parsing attribute name '%s': %s", p, fr_strerror());
 			return false;
 		}
 
 		p += slen;
 
 		if (tmpl_find_vp(&vp, request, &vpt) < 0) {
-			RDEBUG("Can't find &%s", vpt.tmpl_da->name);
+			RWDEBUG("Can't find &%.*s.  Using 0 as operand value", (int)vpt.len, vpt.name);
 			x = 0;
 			goto done;
 		}
 
-		switch (vp->da->type) {
-		default:
-			RDEBUG("WARNING: Non-integer attribute %s", vp->da->name);
-			x = 0;
-			break;
+		if (vp->da->type != PW_TYPE_INTEGER64) {
+			value_data_t	value;
 
-		case PW_TYPE_INTEGER64:
-			/*
-			 *	FIXME: error out if the number is too large.
-			 */
-			x = vp->vp_integer64;
-			break;
+			if (value_data_cast(vp, &value, PW_TYPE_INTEGER64, NULL, vp->da->type, vp->da, &vp->data, vp->vp_length) < 0) {
+				REDEBUG("Failed converting &%.*s to an integer value: %s", (int) vpt.len,
+					vpt.name, fr_strerror());
+				return false;
+			}
+			if (value.integer64 > INT64_MAX) {
+			overflow:
+				REDEBUG("Value of &%.*s (%"PRIu64 ") would overflow a signed 64bit integer "
+					"(our internal arithmetic type)", (int)vpt.len, vpt.name, value.integer64);
+				return false;
+			}
+			x = (int64_t)value.integer64;
 
-		case PW_TYPE_INTEGER:
-			x = vp->vp_integer;
-			break;
-
-		case PW_TYPE_SIGNED:
-			x = vp->vp_signed;
-			break;
-
-		case PW_TYPE_SHORT:
-			x = vp->vp_short;
-			break;
-
-		case PW_TYPE_BYTE:
-			x = vp->vp_byte;
-			break;
+			RINDENT();
+			RDEBUG3("&%.*s --> %" PRIu64, (int)vpt.len, vpt.name, x);
+			REXDENT();
+		} else {
+			if (vp->vp_integer64 > INT64_MAX) goto overflow;
+			x = (int64_t)vp->vp_integer64;
 		}
 
 		goto done;
@@ -1504,7 +1498,7 @@ static bool parse_pad(REQUEST *request, char const *fmt,
 	if (!vpt) return false;
 
 	slen = tmpl_from_attr_substr(vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
-	if (slen < 0) {
+	if (slen <= 0) {
 		talloc_free(vpt);
 		RDEBUG("Failed expanding string: %s", fr_strerror());
 		return false;
@@ -1546,13 +1540,13 @@ static bool parse_pad(REQUEST *request, char const *fmt,
 
 		*fill = *p;
 	}
-       
+
 	*pvpt = vpt;
 	*plength = length;
 
 	return true;
 }
-		      
+
 
 /** left pad a string
  *
@@ -1648,7 +1642,7 @@ static ssize_t rpad_xlat(UNUSED void *instance, REQUEST *request,
  *	that must be referenced in later calls, store a handle to it
  *	in *instance otherwise put a null pointer there.
  */
-static int mod_instantiate(CONF_SECTION *conf, void *instance)
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 {
 	rlm_expr_t *inst = instance;
 
@@ -1659,9 +1653,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	xlat_register(inst->xlat_name, expr_xlat, NULL, inst);
 
-	/*
-	 *	FIXME: unregister these, too
-	 */
 	xlat_register("rand", rand_xlat, NULL, inst);
 	xlat_register("randstr", randstr_xlat, NULL, inst);
 	xlat_register("urlquote", urlquote_xlat, NULL, inst);
@@ -1707,17 +1698,9 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
  */
 extern module_t rlm_expr;
 module_t rlm_expr = {
-	RLM_MODULE_INIT,
-	"expr",				/* Name */
-	0,   	/* type */
-	sizeof(rlm_expr_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		NULL,			/* authorization */
-		NULL,			/* pre-accounting */
-		NULL			/* accounting */
-	},
+	.magic		= RLM_MODULE_INIT,
+	.name		= "expr",
+	.inst_size	= sizeof(rlm_expr_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
 };

@@ -144,6 +144,13 @@ int rad_accounting(REQUEST *request)
 		}
 	}
 
+#ifdef WITH_PROXY
+	/*
+	 *	We didn't see a reply to the proxied request.  Fail.
+	 */
+	if (request->proxy && !request->proxy_reply) return RLM_MODULE_FAIL;
+#endif
+
 	/*
 	 *	We get here IF we're not proxying, OR if we've
 	 *	received the accounting reply from the end server,

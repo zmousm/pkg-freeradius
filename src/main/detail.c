@@ -1080,9 +1080,8 @@ static const CONF_PARSER detail_config[] = {
 	{ "load_factor", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_detail_t, load_factor), STRINGIFY(10) },
 	{ "poll_interval", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_detail_t, poll_interval), STRINGIFY(1) },
 	{ "retry_interval", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_detail_t, retry_interval), STRINGIFY(30) },
-	{ "one_shot", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, listen_detail_t, one_shot), NULL },
-	{ "track", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, listen_detail_t, track), NULL },
-	{ "max_outstanding", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_detail_t, load_factor), NULL },
+	{ "one_shot", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, listen_detail_t, one_shot), "no" },
+	{ "track", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, listen_detail_t, track), "no" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -1125,10 +1124,13 @@ int detail_parse(CONF_SECTION *cs, rad_listen_t *this)
 	FR_INTEGER_BOUND_CHECK("poll_interval", data->poll_interval, >=, 1);
 	FR_INTEGER_BOUND_CHECK("poll_interval", data->poll_interval, <=, 60);
 
-	FR_INTEGER_BOUND_CHECK("max_outstanding", data->max_outstanding, >=, 1);
-
 	FR_INTEGER_BOUND_CHECK("retry_interval", data->retry_interval, >=, 4);
 	FR_INTEGER_BOUND_CHECK("retry_interval", data->retry_interval, <=, 3600);
+
+	/*
+	 *	Only checking the config.  Don't start threads or anything else.
+	 */
+	if (check_config) return 0;
 
 	/*
 	 *	If the filename is a glob, use "detail.work" as the
@@ -1176,11 +1178,6 @@ int detail_parse(CONF_SECTION *cs, rad_listen_t *this)
 	client->longname = client->shortname = data->filename;
 	client->secret = client->shortname;
 	client->nas_type = talloc_strdup(data, "none");	/* Part of 'data' not dynamically allocated */
-
-	/*
-	 *	Only checking the config.  Don't start threads or anything else.
-	 */
-	if (check_config) return 0;
 
 #ifdef WITH_DETAIL_THREAD
 	/*

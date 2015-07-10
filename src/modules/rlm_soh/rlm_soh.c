@@ -106,7 +106,7 @@ static const CONF_PARSER module_config[] = {
 };
 
 
-static int mod_instantiate(CONF_SECTION *conf, void *instance)
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 {
 	char const *name;
 	rlm_soh_t *inst = instance;
@@ -115,6 +115,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	if (!name) name = cf_section_name1(conf);
 	inst->xlat_name = name;
 	if (!inst->xlat_name) return -1;
+
 	xlat_register(inst->xlat_name, soh_xlat, NULL, inst);
 
 	return 0;
@@ -211,21 +212,14 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void * instance, REQUES
 
 extern module_t rlm_soh;
 module_t rlm_soh = {
-	RLM_MODULE_INIT,
-	"SoH",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_soh_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	NULL,			/* detach */
-	{
-		NULL,			/* authenticate */
-		mod_authorize,		/* authorize */
-		NULL,			/* pre-accounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		mod_post_auth		/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "soh",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_soh_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_authorize,
+		[MOD_POST_AUTH]		= mod_post_auth
 	},
 };

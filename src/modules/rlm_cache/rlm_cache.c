@@ -246,7 +246,7 @@ static rlm_rcode_t cache_insert(rlm_cache_t *inst, REQUEST *request, rlm_cache_h
 	VALUE_PAIR *vp, *to_cache;
 	vp_cursor_t src_list, packet, reply, control, state;
 
-	value_pair_map_t const *map;
+	vp_map_t const *map;
 
 	bool merge = true;
 	rlm_cache_entry_t *c;
@@ -274,14 +274,11 @@ static rlm_rcode_t cache_insert(rlm_cache_t *inst, REQUEST *request, rlm_cache_h
 	for (map = inst->maps; map != NULL; map = map->next) {
 		rad_assert(map->lhs && map->rhs);
 
-		if (map_to_vp(&to_cache, request, map, NULL) < 0) {
+		if (map_to_vp(c, &to_cache, request, map, NULL) < 0) {
 			RDEBUG("Skipping %s", map->rhs->name);
 			continue;
 		}
 
-		/*
-		 *	Reparent the VPs map_to_vp may return multiple.
-		 */
 		for (vp = fr_cursor_init(&src_list, &to_cache);
 		     vp;
 		     vp = fr_cursor_next(&src_list)) {
@@ -307,7 +304,6 @@ static rlm_rcode_t cache_insert(rlm_cache_t *inst, REQUEST *request, rlm_cache_h
 			RINDENT();
 			if (RDEBUG_ENABLED2) map_debug_log(request, map, vp);
 			REXDENT();
-			(void) talloc_steal(c, vp);
 
 			vp->op = map->op;
 
@@ -366,7 +362,7 @@ static rlm_rcode_t cache_insert(rlm_cache_t *inst, REQUEST *request, rlm_cache_h
 /** Verify that a map in the cache section makes sense
  *
  */
-static int cache_verify(value_pair_map_t *map, void *ctx)
+static int cache_verify(vp_map_t *map, void *ctx)
 {
 	if (modcall_fixup_update(map, ctx) < 0) return -1;
 
@@ -676,6 +672,25 @@ static int mod_detach(void *instance)
 	return 0;
 }
 
+
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
+{
+	rlm_cache_t *inst = instance;
+
+	inst->cs = conf;
+
+	inst->name = cf_section_name2(conf);
+	if (!inst->name) inst->name = cf_section_name1(conf);
+
+	/*
+	 *	Register the cache xlat function
+	 */
+	xlat_register(inst->name, cache_xlat, NULL, inst);
+
+	return 0;
+}
+
+
 /*
  *	Instantiate the module.
  */
@@ -686,19 +701,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	inst->cs = conf;
 
-	inst->xlat_name = cf_section_name2(conf);
-	if (!inst->xlat_name) inst->xlat_name = cf_section_name1(conf);
-
-	/*
-	 *	Register the cache xlat function
-	 */
-	xlat_register(inst->xlat_name, cache_xlat, NULL, inst);
-
 	/*
 	 *	Sanity check for crazy people.
 	 */
 	if (strncmp(inst->driver_name, "rlm_cache_", 8) != 0) {
-		ERROR("rlm_cache (%s): \"%s\" is NOT an Cache driver!", inst->xlat_name, inst->driver_name);
+		cf_log_err_cs(conf, "\"%s\" is NOT an Cache driver!", inst->driver_name);
 		return -1;
 	}
 
@@ -707,20 +714,20 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	 */
 	inst->handle = lt_dlopenext(inst->driver_name);
 	if (!inst->handle) {
-		ERROR("rlm_cache (%s): Could not link driver %s: %s", inst->xlat_name, inst->driver_name, dlerror());
-		ERROR("rlm_cache (%s): Make sure it (and all its dependent libraries!) are in the search path"
-		      "of your system's ld", inst->xlat_name);
+		cf_log_err_cs(conf, "Could not link driver %s: %s", inst->driver_name, dlerror());
+		cf_log_err_cs(conf, "Make sure it (and all its dependent libraries!) are in the search path"
+			      "of your system's ld");
 		return -1;
 	}
 
 	inst->module = (cache_module_t *) dlsym(inst->handle, inst->driver_name);
 	if (!inst->module) {
-		ERROR("rlm_cache (%s): Could not link symbol %s: %s", inst->xlat_name, inst->driver_name, dlerror());
+		cf_log_err_cs(conf, "Could not link symbol %s: %s", inst->driver_name, dlerror());
 		return -1;
 	}
 
-	INFO("rlm_cache (%s): Driver %s (module %s) loaded and linked", inst->xlat_name,
-	     inst->driver_name, inst->module->name);
+	DEBUG("rlm_cache (%s): Driver %s (module %s) loaded and linked", inst->name,
+	      inst->driver_name, inst->module->name);
 
 	/*
 	 *	Non optional fields and callbacks
@@ -730,7 +737,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	rad_assert(inst->module->insert);
 	rad_assert(inst->module->expire);
 
-	if (inst->module->mod_instantiate) {
+	if (inst->module->instantiate) {
 		CONF_SECTION *cs;
 		char const *name;
 
@@ -753,7 +760,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		 *	Should write its instance data in inst->driver,
 		 *	and parent it off of inst.
 		 */
-		if (inst->module->mod_instantiate(cs, inst) < 0) return -1;
+		if (inst->module->instantiate(cs, inst) < 0) return -1;
 	}
 
 	rad_assert(inst->key && *inst->key);
@@ -802,21 +809,19 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
  */
 extern module_t rlm_cache;
 module_t rlm_cache = {
-	RLM_MODULE_INIT,
-	"cache",
-	0,				/* type */
-	sizeof(rlm_cache_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	mod_detach,			/* detach */
-	{
-		NULL,			/* authentication */
-		mod_cache_it,		/* authorization */
-		mod_cache_it,		/* preaccounting */
-		mod_cache_it,		/* accounting */
-		NULL,			/* checksimul */
-		mod_cache_it,	      	/* pre-proxy */
-		mod_cache_it,	       	/* post-proxy */
-		mod_cache_it,		/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "cache",
+	.inst_size	= sizeof(rlm_cache_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_cache_it,
+		[MOD_PREACCT]		= mod_cache_it,
+		[MOD_ACCOUNTING]	= mod_cache_it,
+		[MOD_PRE_PROXY]		= mod_cache_it,
+		[MOD_POST_PROXY]	= mod_cache_it,
+		[MOD_POST_AUTH]		= mod_cache_it
 	},
 };

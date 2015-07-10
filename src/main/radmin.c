@@ -77,8 +77,7 @@ static char const *radmin_version = "radmin version " RADIUSD_VERSION_STRING
  *	they're running inside of the server.  And we don't (yet)
  *	have a "libfreeradius-server", or "libfreeradius-util".
  */
-log_lvl_t debug_flag = 0;
-struct main_config_t main_config;
+main_config_t main_config;
 
 bool check_config = false;
 
@@ -472,6 +471,7 @@ int main(int argc, char **argv)
 
 		if (cf_file_read(cs, buffer) < 0) {
 			fprintf(stderr, "%s: Errors reading or parsing %s\n", progname, buffer);
+			talloc_free(cs);
 			usage(1);
 		}
 
@@ -721,7 +721,7 @@ int main(int argc, char **argv)
 	retry:
 		len = run_command(sockfd, line, buffer, sizeof(buffer));
 		if (len < 0) {
-			if (!quiet) fprintf(stderr, "Reconnecting...");
+			if (!quiet) fprintf(stderr, "... reconnecting ...\n");
 
 			if (do_connect(&sockfd, file, server) < 0) {
 				exit(1);

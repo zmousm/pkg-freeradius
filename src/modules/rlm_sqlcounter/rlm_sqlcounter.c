@@ -323,7 +323,7 @@ static size_t sqlcounter_expand(char *out, int outlen, char const *fmt, rlm_sqlc
 				 */
 			default:
 				*q++ = '%';
-				*q++ = '%';				
+				*q++ = '%';
 				*q++ = *p++;
 				break;
 		}
@@ -383,6 +383,51 @@ static int sqlcounter_cmp(void *instance, REQUEST *request, UNUSED VALUE_PAIR *r
 	return 0;
 }
 
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
+{
+	rlm_sqlcounter_t *inst = instance;
+	DICT_ATTR const *da;
+	ATTR_FLAGS flags;
+
+	memset(&flags, 0, sizeof(flags));
+	flags.compare = 1;	/* ugly hack */
+	da = dict_attrbyname(inst->counter_name);
+	if (da && (da->type != PW_TYPE_INTEGER64)) {
+		cf_log_err_cs(conf, "Counter attribute %s MUST be integer64", inst->counter_name);
+		return -1;
+	}
+
+	if (!da && (dict_addattr(inst->counter_name, -1, 0, PW_TYPE_INTEGER64, flags) < 0)) {
+		cf_log_err_cs(conf, "Failed to create counter attribute %s: %s", inst->counter_name, fr_strerror());
+		return -1;
+	}
+
+	/*
+	 *  Register the counter comparison operation.
+	 */
+	if (paircompare_register_byname(inst->counter_name, NULL, true, sqlcounter_cmp, inst) < 0) {
+		cf_log_err_cs(conf, "Failed registering counter attribute %s: %s", inst->counter_name, fr_strerror());
+		return -1;
+	}
+
+	inst->dict_attr = dict_attrbyname(inst->counter_name);
+	if (!inst->dict_attr) {
+		cf_log_err_cs(conf, "Failed to find counter attribute %s", inst->counter_name);
+		return -1;
+	}
+
+	/*
+	 *  Create a new attribute for the check item.
+	 */
+	flags.compare = 0;
+	if ((dict_addattr(inst->limit_name, -1, 0, PW_TYPE_INTEGER64, flags) < 0) ||
+	    !dict_attrbyname(inst->limit_name)) {
+		cf_log_err_cs(conf, "Failed to create check attribute %s: %s", inst->limit_name, fr_strerror());
+		return -1;
+	}
+
+	return 0;
+}
 
 /*
  *	Do any per-module initialization that is separate to each
@@ -398,7 +443,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	rlm_sqlcounter_t *inst = instance;
 	DICT_ATTR const *da;
-	ATTR_FLAGS flags;
 	time_t now;
 
 	rad_assert(inst->query && *inst->query);
@@ -417,29 +461,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	}
 	inst->reply_attr = da;
 
-	/*
-	 *  Create a new attribute for the counter.
-	 */
-	rad_assert(inst->counter_name && *inst->counter_name);
-	memset(&flags, 0, sizeof(flags));
-	if ((dict_addattr(inst->counter_name, -1, 0, PW_TYPE_INTEGER64, flags) < 0) ||
-	    !(da = dict_attrbyname(inst->counter_name))) {
-		cf_log_err_cs(conf, "Failed to create counter attribute %s: %s", inst->counter_name, fr_strerror());
-		return -1;
-	}
-
-	inst->dict_attr = da;
-
-	/*
-	 *  Create a new attribute for the check item.
-	 */
-	rad_assert(inst->limit_name && *inst->limit_name);
-	if ((dict_addattr(inst->limit_name, -1, 0, PW_TYPE_INTEGER64, flags) < 0) ||
-	    !(da = dict_attrbyname(inst->limit_name))) {
-		cf_log_err_cs(conf, "Failed to create check attribute %s: %s", inst->limit_name, fr_strerror());
-		return -1;
-	}
-
 	now = time(NULL);
 	inst->reset_time = 0;
 
@@ -457,11 +478,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		cf_log_err_cs(conf, "Invalid reset '%s'", inst->reset);
 		return -1;
 	}
-
-	/*
-	 *  Register the counter comparison operation.
-	 */
-	paircompare_register(inst->dict_attr, NULL, true, sqlcounter_cmp, inst);
 
 	return 0;
 }
@@ -626,22 +642,15 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
  */
 extern module_t rlm_sqlcounter;
 module_t rlm_sqlcounter = {
-	RLM_MODULE_INIT,
-	"rlm_sqlcounter",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_sqlcounter_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		mod_authorize,		/* authorization */
-		NULL,			/* preaccounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "sqlcounter",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_sqlcounter_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.instantiate	= mod_instantiate,
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_authorize
 	},
 };
 

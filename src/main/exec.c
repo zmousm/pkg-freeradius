@@ -93,15 +93,23 @@ pid_t radius_start_program(char const *cmd, REQUEST *request, bool exec_wait,
 	int from_child[2] = {-1, -1};
 	pid_t pid;
 #endif
-	int argc;
-	int i;
-	char *argv[MAX_ARGV];
-	char argv_buf[4096];
+	int		argc;
+	int		i;
+	char const	**argv_p;
+	char		*argv[MAX_ARGV], **argv_start = argv;
+	char		argv_buf[4096];
 #define MAX_ENVP 1024
 	char *envp[MAX_ENVP];
 	int envlen = 0;
 
-	argc = rad_expand_xlat(request, cmd, MAX_ARGV, argv, true, sizeof(argv_buf), argv_buf);
+	/*
+	 *	Stupid array decomposition...
+	 *
+	 *	If we do memcpy(&argv_p, &argv, sizeof(argv_p)) src ends up being a char **
+	 *	pointing to the value of the first element.
+	 */
+	memcpy(&argv_p, &argv_start, sizeof(argv_p));
+	argc = rad_expand_xlat(request, cmd, MAX_ARGV, argv_p, true, sizeof(argv_buf), argv_buf);
 	if (argc <= 0) {
 		DEBUG("invalid command line '%s'.", cmd);
 		return -1;
@@ -109,7 +117,7 @@ pid_t radius_start_program(char const *cmd, REQUEST *request, bool exec_wait,
 
 
 #ifndef NDEBUG
-	if (debug_flag > 2) {
+	if (rad_debug_lvl > 2) {
 		DEBUG3("executing cmd %s", cmd);
 		for (i = 0; i < argc; i++) {
 			DEBUG3("\t[%d] %s", i, argv[i]);
@@ -251,7 +259,7 @@ pid_t radius_start_program(char const *cmd, REQUEST *request, bool exec_wait,
 		 *	If we are debugging, then we want the error
 		 *	messages to go to the STDERR of the server.
 		 */
-		if (debug_flag == 0) {
+		if (rad_debug_lvl == 0) {
 			dup2(devnull, STDERR_FILENO);
 		}
 		close(devnull);
@@ -499,6 +507,7 @@ int radius_readfrom_program(int fd, pid_t pid, int timeout,
 
 /** Execute a program.
  *
+ * @param[in,out] ctx to allocate new VALUE_PAIR (s) in.
  * @param[out] out buffer to append plaintext (non valuepair) output.
  * @param[in] outlen length of out buffer.
  * @param[out] output_pairs list of value pairs - child stdout will be parsed and added into this list
@@ -513,7 +522,7 @@ int radius_readfrom_program(int fd, pid_t pid, int timeout,
 
  * @return 0 if exec_wait==0, exit code if exec_wait!=0, -1 on error.
  */
-int radius_exec_program(char *out, size_t outlen, VALUE_PAIR **output_pairs,
+int radius_exec_program(TALLOC_CTX *ctx, char *out, size_t outlen, VALUE_PAIR **output_pairs,
 			REQUEST *request, char const *cmd, VALUE_PAIR *input_pairs,
 			bool exec_wait, bool shell_escape, int timeout)
 
@@ -593,7 +602,7 @@ int radius_exec_program(char *out, size_t outlen, VALUE_PAIR **output_pairs,
 			answer[--len] = '\0';
 		}
 
-		if (userparse(request, answer, output_pairs) == T_INVALID) {
+		if (userparse(ctx, answer, output_pairs) == T_INVALID) {
 			RERROR("Failed parsing output from: %s: %s", cmd, fr_strerror());
 			strlcpy(out, answer, len);
 			ret = -1;

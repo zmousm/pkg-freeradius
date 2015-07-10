@@ -83,7 +83,7 @@ ATTRIBUTE	Replicate-To-Realm			1049	string
 ATTRIBUTE	Acct-Session-Start-Time			1050	date
 ATTRIBUTE	Acct-Unique-Session-Id			1051	string
 ATTRIBUTE	Client-IP-Address			1052	ipaddr virtual
-ATTRIBUTE	Ldap-UserDn				1053	string
+ATTRIBUTE	LDAP-UserDN				1053	string
 ATTRIBUTE	NS-MTA-MD5-Password			1054	string
 ATTRIBUTE	SQL-User-Name				1055	string
 ATTRIBUTE	LM-Password				1057	octets
@@ -102,12 +102,12 @@ ATTRIBUTE	Digest-CNonce				1070	string
 ATTRIBUTE	Digest-Nonce-Count			1071	string
 ATTRIBUTE	Digest-User-Name			1072	string
 ATTRIBUTE	Pool-Name				1073	string
-ATTRIBUTE	Ldap-Group				1074	string
+# LDAP-Group is now dynamically created
 ATTRIBUTE	Module-Success-Message			1075	string
 ATTRIBUTE	Module-Failure-Message			1076	string
 #		X99-Fast		1077	integer
 ATTRIBUTE	Rewrite-Rule				1078	string
-ATTRIBUTE	Sql-Group				1079	string
+# SQL-Group is now dynamically created
 ATTRIBUTE	Response-Packet-Type			1080	integer virtual
 ATTRIBUTE	Digest-HA1				1081	string
 ATTRIBUTE	MS-CHAP-Use-NTLM-Auth			1082	integer
@@ -176,6 +176,9 @@ VALUE	Module-Return-Code		updated			8
 ATTRIBUTE	Packet-Original-Timestamp		1109	date
 ATTRIBUTE	SQL-Table-Name				1110	string
 ATTRIBUTE	Home-Server-Pool			1111	string
+
+# For delayed evaluation of maps
+ATTRIBUTE	Attribute-Map				1112	string
 
 ATTRIBUTE	FreeRADIUS-Client-IP-Address		1120	ipaddr
 ATTRIBUTE	FreeRADIUS-Client-IPv6-Address		1121	ipv6addr
@@ -595,10 +598,9 @@ ATTRIBUTE	Radclient-Test-Name			2200	string
 VALUE	Auth-Type			Local			1
 VALUE	Auth-Type			System			2
 VALUE	Auth-Type			SecurID			3
-VALUE	Auth-Type			Crypt-Local		4
-VALUE	Auth-Type			Reject			5
-VALUE	Auth-Type			ActivCard		6
-VALUE	Auth-Type			EAP			7
+VALUE	Auth-Type			Reject			4
+VALUE	Auth-Type			ActivCard		5
+VALUE	Auth-Type			EAP			6
 
 #
 #	FreeRADIUS extensions (most originally from Cistron)

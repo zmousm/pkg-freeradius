@@ -137,7 +137,9 @@ $INCLUDE dictionary.alcatel-lucent.aaa
 $INCLUDE dictionary.alteon
 $INCLUDE dictionary.alvarion
 $INCLUDE dictionary.apc
+$INCLUDE dictionary.aptilo
 $INCLUDE dictionary.arbor
+$INCLUDE dictionary.arista
 $INCLUDE dictionary.aruba
 $INCLUDE dictionary.azaire
 $INCLUDE dictionary.ascend
@@ -269,6 +271,7 @@ $INCLUDE dictionary.versanet
 $INCLUDE dictionary.waverider
 $INCLUDE dictionary.walabi
 $INCLUDE dictionary.wichorus
+$INCLUDE dictionary.wifialliance
 $INCLUDE dictionary.wimax
 $INCLUDE dictionary.wispr
 $INCLUDE dictionary.xedia

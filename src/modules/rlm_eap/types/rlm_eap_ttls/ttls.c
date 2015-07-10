@@ -144,7 +144,6 @@ static VALUE_PAIR *diameter2vp(REQUEST *request, REQUEST *fake, SSL *ssl,
 	size_t		offset;
 	size_t		size;
 	size_t		data_left = data_len;
-	char		*p;
 	VALUE_PAIR	*first = NULL;
 	VALUE_PAIR	*vp;
 	RADIUS_PACKET	*packet = fake->packet; /* FIXME: api issues */
@@ -349,15 +348,9 @@ static VALUE_PAIR *diameter2vp(REQUEST *request, REQUEST *fake, SSL *ssl,
 			memcpy(vp->vp_ipv6prefix, data, vp->vp_length);
 			break;
 
-			/*
-			 *	Ensure it's NUL terminated.
-			 */
 		case PW_TYPE_STRING:
-			vp->vp_strvalue = p = talloc_array(vp, char, size + 1);
-			vp->type = VT_DATA;
-			memcpy(p, data, size);
-			p[size] = '\0';
-			vp->vp_length = strlen(p);
+			pairbstrncpy(vp, data, size);
+			vp->vp_length = strlen(vp->vp_strvalue); /* embedded zeros are NOT allowed */
 			break;
 
 			/*
@@ -583,7 +576,7 @@ static int vp2diameter(REQUEST *request, tls_session_t *tls_session, VALUE_PAIR 
 #ifndef NDEBUG
 		size_t i;
 
-		if ((debug_flag > 2) && fr_log_fp) {
+		if ((rad_debug_lvl > 2) && fr_log_fp) {
 			for (i = 0; i < total; i++) {
 				if ((i & 0x0f) == 0) fprintf(fr_log_fp, "  TTLS tunnel data out %04x: ", (int) i);
 
@@ -842,7 +835,7 @@ static int CC_HINT(nonnull) eapttls_postproxy(eap_handler_t *handler, void *data
 		fake->reply = talloc_steal(fake, request->proxy_reply);
 		request->proxy_reply = NULL;
 
-		if ((debug_flag > 0) && fr_log_fp) {
+		if ((rad_debug_lvl > 0) && fr_log_fp) {
 			fprintf(fr_log_fp, "server %s {\n",
 				(!fake->server) ? "" : fake->server);
 		}
@@ -855,7 +848,7 @@ static int CC_HINT(nonnull) eapttls_postproxy(eap_handler_t *handler, void *data
 		rcode = rad_postauth(fake);
 		RDEBUG2("post-auth returns %d", rcode);
 
-		if ((debug_flag > 0) && fr_log_fp) {
+		if ((rad_debug_lvl > 0) && fr_log_fp) {
 			fprintf(fr_log_fp, "} # server %s\n",
 				(!fake->server) ? "" : fake->server);
 
@@ -975,7 +968,7 @@ int eapttls_process(eap_handler_t *handler, tls_session_t *tls_session)
 	}
 
 #ifndef NDEBUG
-	if ((debug_flag > 2) && fr_log_fp) {
+	if ((rad_debug_lvl > 2) && fr_log_fp) {
 		size_t i;
 
 		for (i = 0; i < data_len; i++) {
@@ -994,7 +987,7 @@ int eapttls_process(eap_handler_t *handler, tls_session_t *tls_session)
 	}
 
 	/*
-	 *	Allocate a fake REQUEST structe.
+	 *	Allocate a fake REQUEST structure.
 	 */
 	fake = request_alloc_fake(request);
 
@@ -1038,19 +1031,13 @@ int eapttls_process(eap_handler_t *handler, tls_session_t *tls_session)
 			    (vp->vp_strvalue[0] == PW_EAP_RESPONSE) &&
 			    (vp->vp_strvalue[EAP_HEADER_LEN] == PW_EAP_IDENTITY) &&
 			    (vp->vp_strvalue[EAP_HEADER_LEN + 1] != 0)) {
-				char *p;
-
 				/*
 				 *	Create & remember a User-Name
 				 */
 				t->username = pairmake(t, NULL, "User-Name", NULL, T_OP_EQ);
 				rad_assert(t->username != NULL);
-				t->username->vp_length = vp->vp_length - 5;
 
-				t->username->vp_strvalue = p = talloc_array(t->username, char,
-									    t->username->vp_length + 1);
-				memcpy(p, vp->vp_octets + 5, t->username->vp_length);
-				p[t->username->vp_length] = 0;
+				pairbstrncpy(t->username, vp->vp_octets + 5, vp->vp_length - 5);
 
 				RDEBUG("Got tunneled identity of %s",
 				       t->username->vp_strvalue);
@@ -1170,7 +1157,7 @@ int eapttls_process(eap_handler_t *handler, tls_session_t *tls_session)
 	} /* else fake->server == request->server */
 
 
-	if ((debug_flag > 0) && fr_log_fp) {
+	if ((rad_debug_lvl > 0) && fr_log_fp) {
 		RDEBUG("Sending tunneled request");
 	}
 

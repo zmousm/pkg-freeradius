@@ -71,7 +71,7 @@ static char const *action_codes[] = {
 
 #ifdef DEBUG_STATE_MACHINE
 #  define TRACE_STATE_MACHINE \
-if (debug_flag) do { \
+if (rad_debug_lvl) do { \
 	struct timeval debug_tv; \
 	gettimeofday(&debug_tv, NULL); \
 	debug_tv.tv_sec -= fr_start_time; \
@@ -659,7 +659,7 @@ static void request_done(REQUEST *request, int action)
 #endif
 
 #ifdef DEBUG_STATE_MACHINE
-		if (debug_flag) printf("(%u) ********\tSTATE %s C-%s -> C-%s\t********\n",
+		if (rad_debug_lvl) printf("(%u) ********\tSTATE %s C-%s -> C-%s\t********\n",
 				       request->number, __FUNCTION__,
 				       child_state_names[request->child_state],
 				       child_state_names[REQUEST_DONE]);
@@ -827,7 +827,7 @@ static void request_cleanup_delay_init(REQUEST *request)
 	 */
 	if (timercmp(&when, &now, >)) {
 #ifdef DEBUG_STATE_MACHINE
-		if (debug_flag) printf("(%u) ********\tNEXT-STATE %s -> %s\n", request->number, __FUNCTION__, "request_cleanup_delay");
+		if (rad_debug_lvl) printf("(%u) ********\tNEXT-STATE %s -> %s\n", request->number, __FUNCTION__, "request_cleanup_delay");
 #endif
 		request->process = request_cleanup_delay;
 		request->child_state = REQUEST_CLEANUP_DELAY;
@@ -939,7 +939,7 @@ static void request_queue_or_run(REQUEST *request,
 	 */
 	if (request->master_state == REQUEST_STOP_PROCESSING) {
 #ifdef DEBUG_STATE_MACHINE
-		if (debug_flag) printf("(%u) ********\tSTATE %s M-%s causes C-%s-> C-%s\t********\n",
+		if (rad_debug_lvl) printf("(%u) ********\tSTATE %s M-%s causes C-%s-> C-%s\t********\n",
 				       request->number, __FUNCTION__,
 				       master_state_names[request->master_state],
 				       child_state_names[request->child_state],
@@ -1077,7 +1077,7 @@ static void request_cleanup_delay(REQUEST *request, int action)
 
 		if (timercmp(&when, &now, >)) {
 #ifdef DEBUG_STATE_MACHINE
-			if (debug_flag) printf("(%u) ********\tNEXT-STATE %s -> %s\n", request->number, __FUNCTION__, "request_cleanup_delay");
+			if (rad_debug_lvl) printf("(%u) ********\tNEXT-STATE %s -> %s\n", request->number, __FUNCTION__, "request_cleanup_delay");
 #endif
 			STATE_MACHINE_TIMER(FR_ACTION_TIMER);
 			return;
@@ -1153,7 +1153,7 @@ static void request_response_delay(REQUEST *request, int action)
 
 		if (timercmp(&when, &now, >)) {
 #ifdef DEBUG_STATE_MACHINE
-			if (debug_flag) printf("(%u) ********\tNEXT-STATE %s -> %s\n", request->number, __FUNCTION__, "request_response_delay");
+			if (rad_debug_lvl) printf("(%u) ********\tNEXT-STATE %s -> %s\n", request->number, __FUNCTION__, "request_response_delay");
 #endif
 			STATE_MACHINE_TIMER(FR_ACTION_TIMER);
 			return;
@@ -1297,6 +1297,14 @@ static void request_finish(REQUEST *request, int action)
 		rad_postauth(request);
 	}
 
+#ifdef WITH_COA
+	/*
+	 *	Maybe originate a CoA request.
+	 */
+	if ((action == FR_ACTION_RUN) && !request->proxy && request->coa) {
+		request_coa_originate(request);
+	}
+#endif
 
 	/*
 	 *	Clean up.  These are no longer needed.
@@ -1457,7 +1465,7 @@ static void request_running(REQUEST *request, int action)
 	case FR_ACTION_RUN:
 		if (!request_pre_handler(request, action)) {
 #ifdef DEBUG_STATE_MACHINE
-			if (debug_flag) printf("(%u) ********\tSTATE %s failed in pre-handler C-%s -> C-%s\t********\n",
+			if (rad_debug_lvl) printf("(%u) ********\tSTATE %s failed in pre-handler C-%s -> C-%s\t********\n",
 					       request->number, __FUNCTION__,
 					       child_state_names[request->child_state],
 					       child_state_names[REQUEST_DONE]);
@@ -1478,7 +1486,7 @@ static void request_running(REQUEST *request, int action)
 		if ((action == FR_ACTION_RUN) &&
 		    request_will_proxy(request)) {
 #ifdef DEBUG_STATE_MACHINE
-			if (debug_flag) printf("(%u) ********\tWill Proxy\t********\n", request->number);
+			if (rad_debug_lvl) printf("(%u) ********\tWill Proxy\t********\n", request->number);
 #endif
 			/*
 			 *	If this fails, it
@@ -1491,16 +1499,7 @@ static void request_running(REQUEST *request, int action)
 #endif
 		{
 #ifdef DEBUG_STATE_MACHINE
-			if (debug_flag) printf("(%u) ********\tFinished\t********\n", request->number);
-#endif
-
-#ifdef WITH_COA
-			/*
-			 *	Maybe originate a CoA request.
-			 */
-			if ((action == FR_ACTION_RUN) && request->coa) {
-				request_coa_originate(request);
-			}
+			if (rad_debug_lvl) printf("(%u) ********\tFinished\t********\n", request->number);
 #endif
 
 #ifdef WITH_PROXY
@@ -1665,6 +1664,7 @@ skip_dup:
 	if (!ctx) {
 		ctx = talloc_pool(NULL, main_config.talloc_pool_size);
 		if (!ctx) return 0;
+		talloc_set_name_const(ctx, "request_receive_pool");
 
 		/*
 		 *	The packet is still allocated from a different
@@ -1762,7 +1762,7 @@ static REQUEST *request_setup(TALLOC_CTX *ctx, rad_listen_t *listener, RADIUS_PA
 	request->master_state = REQUEST_ACTIVE;
 	request->child_state = REQUEST_RUNNING;
 #ifdef DEBUG_STATE_MACHINE
-	if (debug_flag) printf("(%u) ********\tSTATE %s C-%s -> C-%s\t********\n",
+	if (rad_debug_lvl) printf("(%u) ********\tSTATE %s C-%s -> C-%s\t********\n",
 			       request->number, __FUNCTION__,
 			       child_state_names[request->child_state],
 			       child_state_names[REQUEST_RUNNING]);
@@ -2551,9 +2551,12 @@ static int setup_post_proxy_fail(REQUEST *request)
 	if (request->proxy->code == PW_CODE_ACCESS_REQUEST) {
 		dval = dict_valbyname(PW_POST_PROXY_TYPE, 0,
 				      "Fail-Authentication");
+#ifdef WITH_ACCOUNTING
 	} else if (request->proxy->code == PW_CODE_ACCOUNTING_REQUEST) {
 		dval = dict_valbyname(PW_POST_PROXY_TYPE, 0,
 				      "Fail-Accounting");
+#endif
+
 #ifdef WITH_COA
 	} else if (request->proxy->code == PW_CODE_COA_REQUEST) {
 		dval = dict_valbyname(PW_POST_PROXY_TYPE, 0, "Fail-CoA");
@@ -2784,9 +2787,9 @@ static int request_will_proxy(REQUEST *request)
 
 		pool = home_pool_byname(vp->vp_strvalue, pool_type);
 
-	/*
-	 *	Send it directly to a home server (i.e. NAS)
-	 */
+		/*
+		 *	Send it directly to a home server (i.e. NAS)
+		 */
 	} else if (((vp = pairfind(request->config, PW_PACKET_DST_IP_ADDRESS, 0, TAG_ANY)) != NULL) ||
 		   ((vp = pairfind(request->config, PW_PACKET_DST_IPV6_ADDRESS, 0, TAG_ANY)) != NULL)) {
 		VALUE_PAIR *port;
@@ -2807,7 +2810,23 @@ static int request_will_proxy(REQUEST *request)
 
 		port = pairfind(request->config, PW_PACKET_DST_PORT, 0, TAG_ANY);
 		if (!port) {
-		dst_port = PW_COA_UDP_PORT;
+			if (request->packet->code == PW_CODE_ACCESS_REQUEST) {
+				dst_port = PW_AUTH_UDP_PORT;
+
+#ifdef WITH_ACCOUNTING
+			} else if (request->packet->code == PW_CODE_ACCOUNTING_REQUEST) {
+				dst_port = PW_ACCT_UDP_PORT;
+#endif
+
+#ifdef WITH_COA
+			} else if ((request->packet->code == PW_CODE_COA_REQUEST) ||
+				   (request->packet->code == PW_CODE_DISCONNECT_REQUEST)) {
+				dst_port = PW_COA_UDP_PORT;
+#endif
+			} else { /* shouldn't happen for RADIUS... */
+				return 0;
+			}
+
 		} else {
 			dst_port = vp->vp_integer;
 		}
@@ -2819,13 +2838,25 @@ static int request_will_proxy(REQUEST *request)
 		if (!home) {
 			char buffer[256];
 
-			WARN("No such CoA home server %s port %u",
+			WARN("No such home server %s port %u",
 			     inet_ntop(dst_ipaddr.af, &dst_ipaddr.ipaddr, buffer, sizeof(buffer)),
 			     (unsigned int) dst_port);
 			return 0;
 		}
 
-		goto do_home;
+		/*
+		 *	The home server is alive (or may be alive).
+		 *	Send the packet to the IP.
+		 */
+		if (home->state != HOME_STATE_IS_DEAD) goto do_home;
+
+		/*
+		 *	The home server is dead.  If you wanted
+		 *	fail-over, you should have proxied to a pool.
+		 *	Sucks to be you.
+		 */
+
+		return 0;
 
 	} else {
 		return 0;
@@ -2987,6 +3018,67 @@ do_home:
 	}
 }
 
+static int proxy_to_virtual_server(REQUEST *request)
+{
+	REQUEST *fake;
+
+	if (request->packet->dst_port == 0) {
+		WARN("Cannot proxy an internal request");
+		return 0;
+	}
+
+	DEBUG("Proxying to virtual server %s",
+	      request->home_server->server);
+
+	/*
+	 *	Packets to virtual servers don't get
+	 *	retransmissions sent to them.  And the virtual
+	 *	server is run ONLY if we have no child
+	 *	threads, or we're running in a child thread.
+	 */
+	rad_assert(!spawn_flag || !we_are_master());
+
+	fake = request_alloc_fake(request);
+
+	fake->packet->vps = paircopy(fake->packet, request->packet->vps);
+	talloc_free(request->proxy);
+
+	fake->server = request->home_server->server;
+	fake->handle = request->handle;
+	fake->process = NULL; /* should never be run for anything */
+
+	/*
+	 *	Run the virtual server.
+	 */
+	request_running(fake, FR_ACTION_RUN);
+
+	request->proxy = talloc_steal(request, fake->packet);
+	fake->packet = NULL;
+	request->proxy_reply = talloc_steal(request, fake->reply);
+	fake->reply = NULL;
+
+	talloc_free(fake);
+
+	/*
+	 *	No reply code, toss the reply we have,
+	 *	and do post-proxy-type Fail.
+	 */
+	if (!request->proxy_reply->code) {
+		TALLOC_FREE(request->proxy_reply);
+		setup_post_proxy_fail(request);
+	}
+
+	/*
+	 *	Do the proxy reply (if any)
+	 */
+	if (process_proxy_reply(request, request->proxy_reply)) {
+		request->handle(request);
+	}
+
+	return -1;	/* so we call request_finish */
+}
+
+
 static int request_proxy(REQUEST *request, int retransmit)
 {
 	char buffer[128];
@@ -3016,65 +3108,7 @@ static int request_proxy(REQUEST *request, int retransmit)
 	 *
 	 *	So, we have some horrible hacks to get around that.
 	 */
-	if (request->home_server->server) {
-		REQUEST *fake;
-
-		if (request->packet->dst_port == 0) {
-			WARN("Cannot proxy an internal request");
-			return 0;
-		}
-
-		DEBUG("Proxying to virtual server %s",
-		      request->home_server->server);
-
-		/*
-		 *	Packets to virtual serrers don't get
-		 *	retransmissions sent to them.  And the virtual
-		 *	server is run ONLY if we have no child
-		 *	threads, or we're running in a child thread.
-		 */
-		rad_assert(retransmit == 0);
-		rad_assert(!spawn_flag || !we_are_master());
-
-		fake = request_alloc_fake(request);
-
-		fake->packet->vps = paircopy(fake->packet, request->packet->vps);
-		talloc_free(request->proxy);
-
-		fake->server = request->home_server->server;
-		fake->handle = request->handle;
-		fake->process = NULL; /* should never be run for anything */
-
-		/*
-		 *	Run the virtual server.
-		 */
-		request_running(fake, FR_ACTION_RUN);
-
-		request->proxy = talloc_steal(request, fake->packet);
-		fake->packet = NULL;
-		request->proxy_reply = talloc_steal(request, fake->reply);
-		fake->reply = NULL;
-
-		talloc_free(fake);
-
-		/*
-		 *	No reply code, toss the reply we have,
-		 *	and do post-proxy-type Fail.
-		 */
-		if (!request->proxy_reply->code) {
-			TALLOC_FREE(request->proxy_reply);
-			setup_post_proxy_fail(request);
-		}
-
-		/*
-		 *	Do the proxy reply (if any)
-		 */
-		if (process_proxy_reply(request, request->proxy_reply)) {
-			request->handle(request);
-		}
-
-		return -1;	/* so we call request_finish */
-	}
+	if (request->home_server->server) return proxy_to_virtual_server(request);
 
 	/*
 	 *	We're actually sending a proxied packet.  Do that now.
@@ -3086,7 +3120,7 @@ static int request_proxy(REQUEST *request, int retransmit)
 
 	rad_assert(request->proxy->id >= 0);
 
-	if (debug_flag) {
+	if (rad_debug_lvl) {
 		struct timeval *response_window;
 
 		response_window = request_response_window(request);
@@ -3173,19 +3207,6 @@ static int request_proxy_anew(REQUEST *request)
 		}
 		return 0;
 	}
-	home_server_update_request(home, request);
-
-	if (!insert_into_proxy_hash(request)) {
-		RPROXY("Failed to insert retransmission into the proxy list");
-		goto post_proxy_fail;
-	}
-
-	/*
-	 *	Free the old packet, to force re-encoding
-	 */
-	talloc_free(request->proxy->data);
-	request->proxy->data = NULL;
-	request->proxy->data_len = 0;
 
 #ifdef WITH_ACCOUNTING
 	/*
@@ -3206,6 +3227,33 @@ static int request_proxy_anew(REQUEST *request)
 		}
 	}
 #endif
+
+	/*
+	 *	May have failed over to a "fallback" virtual server.
+	 *	If so, run that instead of doing proxying to a real
+	 *	server.
+	 */
+	if (home->server) {
+		request->home_server = home;
+		TALLOC_FREE(request->proxy);
+
+		(void) proxy_to_virtual_server(request);
+		return 0;
+	}
+
+	home_server_update_request(home, request);
+
+	if (!insert_into_proxy_hash(request)) {
+		RPROXY("Failed to insert retransmission into the proxy list");
+		goto post_proxy_fail;
+	}
+
+	/*
+	 *	Free the old packet, to force re-encoding
+	 */
+	talloc_free(request->proxy->data);
+	request->proxy->data = NULL;
+	request->proxy->data_len = 0;
 
 	if (request_proxy(request, 1) != 1) goto post_proxy_fail;
 
@@ -3341,8 +3389,8 @@ static void ping_home_server(void *ctx)
 	 */
 	if (home->ping_check == HOME_PING_CHECK_NONE) {
 		if (home->state == HOME_STATE_ZOMBIE) {
-			when = home->zombie_period_start;
-			when.tv_sec += home->zombie_period;
+			home->when = home->zombie_period_start;
+			home->when.tv_sec += home->zombie_period;
 			INSERT_EVENT(ping_home_server, home);
 		}
 
@@ -3410,10 +3458,10 @@ static void ping_home_server(void *ctx)
 	request->proxy->dst_port = home->port;
 	request->home_server = home;
 #ifdef DEBUG_STATE_MACHINE
-	if (debug_flag) printf("(%u) ********\tSTATE %s C-%s -> C-%s\t********\n", request->number, __FUNCTION__,
+	if (rad_debug_lvl) printf("(%u) ********\tSTATE %s C-%s -> C-%s\t********\n", request->number, __FUNCTION__,
 			       child_state_names[request->child_state],
 			       child_state_names[REQUEST_DONE]);
-	if (debug_flag) printf("(%u) ********\tNEXT-STATE %s -> %s\n", request->number, __FUNCTION__, "request_ping");
+	if (rad_debug_lvl) printf("(%u) ********\tNEXT-STATE %s -> %s\n", request->number, __FUNCTION__, "request_ping");
 #endif
 #ifdef HAVE_PTHREAD_H
 	rad_assert(request->child_pid == NO_SUCH_CHILD_PID);
@@ -4088,7 +4136,7 @@ static void request_coa_originate(REQUEST *request)
 	debug_packet(coa, coa->proxy, false);
 
 #ifdef DEBUG_STATE_MACHINE
-	if (debug_flag) printf("(%u) ********\tSTATE %s C-%s -> C-%s\t********\n", request->number, __FUNCTION__,
+	if (rad_debug_lvl) printf("(%u) ********\tSTATE %s C-%s -> C-%s\t********\n", request->number, __FUNCTION__,
 			       child_state_names[request->child_state],
 			       child_state_names[REQUEST_PROXIED]);
 #endif
@@ -4104,6 +4152,8 @@ static void request_coa_originate(REQUEST *request)
 	coa->child_pid = NO_SUCH_CHILD_PID;
 #endif
 
+	if (we_are_master()) coa_separate(request->coa);
+
 	/*
 	 *	And send the packet.
 	 */
@@ -4115,14 +4165,11 @@ static void coa_retransmit(REQUEST *request)
 {
 	uint32_t delay, frac;
 	struct timeval now, when, mrd;
+	char buffer[128];
 
 	VERIFY_REQUEST(request);
 
 	fr_event_now(el, &now);
-
-	/*
-	 *	FIXME: Enforce max_request_time
-	 */
 
 	if (request->delay == 0) {
 		/*
@@ -4160,8 +4207,6 @@ static void coa_retransmit(REQUEST *request)
 	 */
 	if (request->home_server->coa_mrc &&
 	    (request->num_coa_requests >= request->home_server->coa_mrc)) {
-		char buffer[128];
-
 		RERROR("Failing request - originate-coa ID %u, due to lack of any response from coa server %s port %d",
 		       request->proxy->id,
 			       inet_ntop(request->proxy->dst_ipaddr.af,
@@ -4228,6 +4273,13 @@ static void coa_retransmit(REQUEST *request)
 
 	FR_STATS_TYPE_INC(request->home_server->stats.total_requests);
 
+	RDEBUG2("Sending duplicate CoA request to home server %s port %d - ID: %d",
+		inet_ntop(request->proxy->dst_ipaddr.af,
+			  &request->proxy->dst_ipaddr.ipaddr,
+			  buffer, sizeof(buffer)),
+		request->proxy->dst_port,
+		request->proxy->id);
+
 	request->proxy_listener->send(request->proxy_listener,
 				      request);
 }
@@ -4261,6 +4313,8 @@ static void coa_wait_for_reply(REQUEST *request, int action)
 
 	switch (action) {
 	case FR_ACTION_TIMER:
+		request_max_time(request);
+
 		if (request->parent) coa_separate(request);
 
 		coa_retransmit(request);
@@ -4299,6 +4353,11 @@ static void coa_separate(REQUEST *request)
 	(void) talloc_steal(NULL, request);
 	request->parent->coa = NULL;
 	request->parent = NULL;
+
+	if (we_are_master()) {
+		request->delay = 0;
+		coa_retransmit(request);
+	}
 }
 
 
@@ -4479,7 +4538,7 @@ static void event_status(struct timeval *wake)
 	int argval;
 #endif
 
-	if (debug_flag == 0) {
+	if (rad_debug_lvl == 0) {
 		if (just_started) {
 			INFO("Ready to process requests");
 			just_started = false;

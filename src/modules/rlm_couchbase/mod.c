@@ -69,7 +69,7 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 	rlm_couchbase_handle_t *chandle = NULL;     /* connection handle pointer */
 	cookie_t *cookie = NULL;                    /* couchbase cookie */
 	lcb_t cb_inst;                              /* couchbase connection instance */
-	lcb_error_t cb_error = LCB_SUCCESS;         /* couchbase error status */
+	lcb_error_t cb_error;			/* couchbase error status */
 
 	/* create instance */
 	cb_error = couchbase_init_connection(&cb_inst, inst->server, inst->bucket, inst->password);
@@ -103,34 +103,7 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 	return chandle;
 }
 
-/** Check the health of a connection handle
- *
- * Attempt to determing the state of the Couchbase connection by requesting
- * a cluster statistics report.  Mark the connection as failed if the request
- * returns anything other than success.
- *
- * @param  instance The module instance (currently unused).
- * @param  handle   The connection handle.
- * @return          Returns 0 on success (alive) and -1 on error (unavailable).
- */
-int mod_conn_alive(UNUSED void *instance, void *handle)
-{
-	rlm_couchbase_handle_t *chandle = handle;   /* connection handle pointer */
-	lcb_t cb_inst = chandle->handle;            /* couchbase instance */
-	lcb_error_t cb_error = LCB_SUCCESS;         /* couchbase error status */
-
-	/* attempt to get server stats */
-	if ((cb_error = couchbase_server_stats(cb_inst, NULL)) != LCB_SUCCESS) {
-		/* log error */
-		ERROR("rlm_couchbase: failed to get couchbase server stats: %s (0x%x)",
-		      lcb_strerror(NULL, cb_error), cb_error);
-		/* error out */
-		return -1;
-	}
-	return 0;
-}
-
-/** Build a JSON object map from the configuration "map" section
+/** Build a JSON object map from the configuration "update" section
  *
  * Parse the "map" section from the module configuration file and store this
  * as a JSON object (key/value list) in the module instance.  This map will be
@@ -150,10 +123,11 @@ int mod_build_attribute_element_map(CONF_SECTION *conf, void *instance)
 
 	/* find map section */
 	cs = cf_section_sub_find(conf, "map");
+	if (!cs) cf_section_sub_find(conf, "update");
 
 	/* check section */
 	if (!cs) {
-		ERROR("rlm_couchbase: failed to find 'map' section in config");
+		ERROR("rlm_couchbase: failed to find 'update' section in config");
 		/* fail */
 		return -1;
 	}
@@ -177,21 +151,21 @@ int mod_build_attribute_element_map(CONF_SECTION *conf, void *instance)
 		/* get value pair from item */
 		cp = cf_item_to_pair(ci);
 
-		/* get pair name (element name) */
-		element = cf_pair_attr(cp);
+		/* get pair name (attribute name) */
+		attribute = cf_pair_attr(cp);
 
-		/* get pair value (attribute name) */
-		attribute = cf_pair_value(cp);
+		/* get pair value (element name) */
+		element = cf_pair_value(cp);
 
 		/* add pair name and value */
 		json_object_object_add(inst->map, attribute, json_object_new_string(element));
 
 		/* debugging */
-		DEBUG3("rlm_couchbase: added attribute '%s' to element '%s' map to object", attribute, element);
+		DEBUG3("rlm_couchbase: added attribute '%s' to element '%s' mapping", attribute, element);
 	}
 
 	/* debugging */
-	DEBUG3("rlm_couchbase: built attribute to element map %s", json_object_to_json_string(inst->map));
+	DEBUG3("rlm_couchbase: built attribute to element mapping %s", json_object_to_json_string(inst->map));
 
 	/* return */
 	return 0;

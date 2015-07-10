@@ -5,8 +5,7 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -31,7 +30,7 @@ RCSID("$Id$")
 #define MAX_VMPS_LEN (MAX_STRING_LEN - 1)
 
 /* @todo: this is a hack */
-#  define debug_pair(vp)	do { if (fr_debug_flag && fr_log_fp) { \
+#  define debug_pair(vp)	do { if (fr_debug_lvl && fr_log_fp) { \
 					vp_print(fr_log_fp, vp); \
 				     } \
 				} while(0)

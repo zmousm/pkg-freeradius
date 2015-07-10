@@ -41,7 +41,6 @@ char const *progname = NULL;
 char const *radacct_dir = NULL;
 char const *radlog_dir = NULL;
 char const *radlib_dir = NULL;
-log_lvl_t debug_flag = 0;
 bool check_config = false;
 bool log_stripped_names = false;
 
@@ -104,14 +103,17 @@ static RADCLIENT *client_alloc(void *ctx)
 
 static REQUEST *request_setup(FILE *fp)
 {
-	VALUE_PAIR *vp;
-	REQUEST *request;
-	vp_cursor_t cursor;
+	VALUE_PAIR	*vp;
+	REQUEST		*request;
+	vp_cursor_t	cursor;
+	struct timeval	now;
 
 	/*
 	 *	Create and initialize the new request.
 	 */
 	request = request_alloc(NULL);
+	gettimeofday(&now, NULL);
+	request->timestamp = now.tv_sec;
 
 	request->packet = rad_alloc(request, false);
 	if (!request->packet) {
@@ -119,6 +121,7 @@ static REQUEST *request_setup(FILE *fp)
 		talloc_free(request);
 		return NULL;
 	}
+	request->packet->timestamp = now;
 
 	request->reply = rad_alloc(request, false);
 	if (!request->reply) {
@@ -313,7 +316,7 @@ static REQUEST *request_setup(FILE *fp)
 		}
 	} /* loop over the VP's we read in */
 
-	if (debug_flag) {
+	if (rad_debug_lvl) {
 		for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 		     vp;
 		     vp = fr_cursor_next(&cursor)) {
@@ -351,7 +354,7 @@ static REQUEST *request_setup(FILE *fp)
 	/*
 	 *	Debugging
 	 */
-	request->log.lvl = debug_flag;
+	request->log.lvl = rad_debug_lvl;
 	request->log.func = vradlog_request;
 
 	request->username = pairfind(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
@@ -428,7 +431,7 @@ static ssize_t xlat_poke(UNUSED void *instance, REQUEST *request,
 
 	*(p++) = '\0';
 
-	mi = find_module_instance(modules, buffer, false);
+	mi = module_find(modules, buffer);
 	if (!mi) {
 		RDEBUG("Failed finding module '%s'", buffer);
 	fail:
@@ -514,16 +517,22 @@ static ssize_t xlat_poke(UNUSED void *instance, REQUEST *request,
  */
 static bool do_xlats(char const *filename, FILE *fp)
 {
-	int lineno = 0;
-	ssize_t len;
-	char *p;
-	char input[8192];
-	char output[8192];
-	REQUEST *request;
+	int		lineno = 0;
+	ssize_t		len;
+	char		*p;
+	char		input[8192];
+	char		output[8192];
+	REQUEST		*request;
+	struct timeval	now;
 
+	/*
+	 *	Create and initialize the new request.
+	 */
 	request = request_alloc(NULL);
+	gettimeofday(&now, NULL);
+	request->timestamp = now.tv_sec;
 
-	request->log.lvl = debug_flag;
+	request->log.lvl = rad_debug_lvl;
 	request->log.func = vradlog_request;
 
 	output[0] = '\0';
@@ -622,6 +631,7 @@ int main(int argc, char *argv[])
 	VALUE_PAIR *vp;
 	VALUE_PAIR *filter_vps = NULL;
 	bool xlat_only = false;
+	fr_state_t *state = NULL;
 
 	fr_talloc_fault_setup();
 
@@ -641,7 +651,7 @@ int main(int argc, char *argv[])
 	else
 		progname++;
 
-	debug_flag = 0;
+	rad_debug_lvl = 0;
 	set_radius_dir(NULL, RADIUS_DIR);
 
 	/*
@@ -715,14 +725,14 @@ int main(int argc, char *argv[])
 				exit(EXIT_FAILURE);
 
 			case 'X':
-				debug_flag += 2;
+				rad_debug_lvl += 2;
 				main_config.log_auth = true;
 				main_config.log_auth_badpass = true;
 				main_config.log_auth_goodpass = true;
 				break;
 
 			case 'x':
-				debug_flag++;
+				rad_debug_lvl++;
 				break;
 
 			default:
@@ -731,8 +741,8 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (debug_flag) version_print();
-	fr_debug_flag = debug_flag;
+	if (rad_debug_lvl) version_print();
+	fr_debug_lvl = rad_debug_lvl;
 
 	/*
 	 *	Mismatch between the binary and the libraries it depends on
@@ -741,6 +751,13 @@ int main(int argc, char *argv[])
 		fr_perror("radiusd");
 		exit(EXIT_FAILURE);
 	}
+
+	/*
+	 *  Initialising OpenSSL once, here, is safer than having individual modules do it.
+	 */
+#ifdef HAVE_OPENSSL_CRYPTO_H
+	tls_global_init();
+#endif
 
 	if (xlat_register("poke", xlat_poke, NULL, NULL) < 0) {
 		rcode = EXIT_FAILURE;
@@ -761,7 +778,7 @@ int main(int argc, char *argv[])
 		goto finish;
 	}
 
-	fr_state_init();
+	state =fr_state_init(NULL);
 
 	/*
 	 *  Set the panic action (if required)
@@ -882,8 +899,8 @@ int main(int argc, char *argv[])
 
 		if (filter_vps && !pairvalidate(failed, filter_vps, request->reply->vps)) {
 			pairvalidate_debug(request, failed);
-			fr_perror("Output file %s does not match attributes in filter %s",
-				  output_file ? output_file : input_file, filter_file);
+			fr_perror("Output file %s does not match attributes in filter %s (%s)",
+				  output_file ? output_file : input_file, filter_file, fr_strerror());
 			rcode = EXIT_FAILURE;
 			goto finish;
 		}
@@ -903,7 +920,7 @@ finish:
 
 	xlat_free();		/* modules may have xlat's */
 
-	fr_state_delete();
+	fr_state_delete(state);
 
 	/*
 	 *	Free the configuration items.

@@ -109,8 +109,8 @@ static int mod_instantiate(CONF_SECTION *conf, rlm_sql_config_t *config)
 		db_string = talloc_asprintf_append(db_string, " host='%s'", config->sql_server);
 	}
 
-	if (config->sql_port[0] != '\0') {
-		db_string = talloc_asprintf_append(db_string, " port=%s", config->sql_port);
+	if (config->sql_port) {
+		db_string = talloc_asprintf_append(db_string, " port=%i", config->sql_port);
 	}
 
 	if (config->sql_login[0] != '\0') {
@@ -221,13 +221,10 @@ static int _sql_socket_destructor(rlm_sql_postgres_conn_t *conn)
 {
 	DEBUG2("rlm_sql_postgresql: Socket destructor called, closing socket");
 
-	if (!conn->db) {
-		return 0;
-	}
+	if (!conn->db) return 0;
 
 	/* PQfinish also frees the memory used by the PGconn structure */
 	PQfinish(conn->db);
-	conn->db = NULL;
 
 	return 0;
 }
@@ -356,6 +353,24 @@ static sql_rcode_t sql_select_query(rlm_sql_handle_t * handle, rlm_sql_config_t 
 	return sql_query(handle, config, query);
 }
 
+static sql_rcode_t sql_fields(char const **out[], rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
+	rlm_sql_postgres_conn_t *conn = handle->conn;
+
+	int		fields, i;
+	char const	**names;
+
+	fields = PQnfields(conn->result);
+	if (fields <= 0) return RLM_SQL_ERROR;
+
+	MEM(names = talloc_zero_array(handle, char const *, fields + 1));
+
+	for (i = 0; i < fields; i++) names[i] = PQfname(conn->result, i);
+	*out = names;
+
+	return RLM_SQL_OK;
+}
+
 static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 
@@ -464,6 +479,7 @@ rlm_sql_module_t rlm_sql_postgresql = {
 	.sql_query			= sql_query,
 	.sql_select_query		= sql_select_query,
 	.sql_num_fields			= sql_num_fields,
+	.sql_fields			= sql_fields,
 	.sql_fetch_row			= sql_fetch_row,
 	.sql_error			= sql_error,
 	.sql_finish_query		= sql_free_result,

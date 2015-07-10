@@ -781,6 +781,24 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 	return 0;
 }
 
+
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
+{
+	rlm_rest_t *inst = instance;
+
+	inst->xlat_name = cf_section_name2(conf);
+	if (!inst->xlat_name) inst->xlat_name = cf_section_name1(conf);
+
+	/*
+	 *	Register the rest xlat function
+	 */
+	xlat_register(inst->xlat_name, rest_xlat, rest_uri_escape, inst);
+	xlat_register("jsonquote", jsonquote_xlat, NULL, inst);
+
+	return 0;
+}
+
+
 /*
  *	Do any per-module initialization that is separate to each
  *	configured instance of the module.  e.g. set up connections
@@ -794,32 +812,18 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	rlm_rest_t *inst = instance;
-	char const *xlat_name;
-
-	xlat_name = cf_section_name2(conf);
-	if (!xlat_name) {
-		xlat_name = cf_section_name1(conf);
-	}
-
-	inst->xlat_name = xlat_name;
-
-	/*
-	 *	Register the rest xlat function
-	 */
-	xlat_register(inst->xlat_name, rest_xlat, rest_uri_escape, inst);
-	xlat_register("jsonquote", jsonquote_xlat, NULL, inst);
 
 	/*
 	 *	Parse sub-section configs.
 	 */
 	if (
-		(parse_sub_section(conf, &inst->authorize, RLM_COMPONENT_AUTZ) < 0) ||
-		(parse_sub_section(conf, &inst->authenticate, RLM_COMPONENT_AUTH) < 0) ||
-		(parse_sub_section(conf, &inst->accounting, RLM_COMPONENT_ACCT) < 0) ||
+		(parse_sub_section(conf, &inst->authorize, MOD_AUTHORIZE) < 0) ||
+		(parse_sub_section(conf, &inst->authenticate, MOD_AUTHENTICATE) < 0) ||
+		(parse_sub_section(conf, &inst->accounting, MOD_ACCOUNTING) < 0) ||
 
 /* @todo add behaviour for checksimul */
-/*		(parse_sub_section(conf, &inst->checksimul, RLM_COMPONENT_SESS) < 0) || */
-		(parse_sub_section(conf, &inst->post_auth, RLM_COMPONENT_POST_AUTH) < 0))
+/*		(parse_sub_section(conf, &inst->checksimul, MOD_SESSION) < 0) || */
+		(parse_sub_section(conf, &inst->post_auth, MOD_POST_AUTH) < 0))
 	{
 		return -1;
 	}
@@ -866,21 +870,18 @@ static int mod_detach(void *instance)
  */
 extern module_t rlm_rest;
 module_t rlm_rest = {
-	RLM_MODULE_INIT,
-	"rlm_rest",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_rest_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	mod_detach,			/* detach */
-	{
-		mod_authenticate,	/* authentication */
-		mod_authorize,		/* authorization */
-		NULL,			/* preaccounting */
-		mod_accounting,		/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		mod_post_auth		/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "rest",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_rest_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize,
+		[MOD_ACCOUNTING]	= mod_accounting,
+		[MOD_POST_AUTH]		= mod_post_auth
 	},
 };

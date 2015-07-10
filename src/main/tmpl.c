@@ -202,9 +202,11 @@ VALUE_PAIR **radius_list(REQUEST *request, pair_lists_t list)
 		break;
 
 	case PAIR_LIST_REQUEST:
+		if (!request->packet) return NULL;
 		return &request->packet->vps;
 
 	case PAIR_LIST_REPLY:
+		if (!request->reply) return NULL;
 		return &request->reply->vps;
 
 	case PAIR_LIST_CONTROL:
@@ -602,13 +604,27 @@ ssize_t tmpl_from_attr_substr(vp_tmpl_t *vpt, char const *name,
 		return -(p - name);
 	}
 
-	if (*p == '\0') {
-		type = TMPL_TYPE_LIST;
-		goto finish;
-	}
-
 	attr.tag = TAG_ANY;
 	attr.num = NUM_ANY;
+
+	/*
+	 *	This may be just a bare list, but it can still
+	 *	have instance selectors and tag selectors.
+	 */
+	switch (*p) {
+	case '\0':
+		type = TMPL_TYPE_LIST;
+		attr.num = NUM_ALL;	/* Hack - Should be removed once tests are updated */
+		goto finish;
+
+	case '[':
+		type = TMPL_TYPE_LIST;
+		attr.num = NUM_ALL;	/* Hack - Should be removed once tests are updated */
+		goto do_num;
+
+	default:
+		break;
+	}
 
 	attr.da = dict_attrbyname_substr(&p);
 	if (!attr.da) {
@@ -636,7 +652,7 @@ ssize_t tmpl_from_attr_substr(vp_tmpl_t *vpt, char const *name,
 						   ((DICT_ATTR *)&attr.unknown.da)->vendor);
 			if (attr.da) {
 				vpt->auto_converted = true;
-				goto skip_tag;
+				goto do_num;
 			}
 
 			if (!allow_unknown) {
@@ -650,7 +666,7 @@ ssize_t tmpl_from_attr_substr(vp_tmpl_t *vpt, char const *name,
 			 */
 			attr.da = (DICT_ATTR *)&attr.unknown.da;
 
-			goto skip_tag; /* unknown attributes can't have tags */
+			goto do_num; /* unknown attributes can't have tags */
 		}
 
 		/*
@@ -674,14 +690,14 @@ ssize_t tmpl_from_attr_substr(vp_tmpl_t *vpt, char const *name,
 		}
 		*q = '\0';
 
-		goto skip_tag;
+		goto do_num;
 	}
 
 	/*
 	 *	The string MIGHT have a tag.
 	 */
 	if (*p == ':') {
-		if (!attr.da->flags.has_tag) {
+		if (attr.da && !attr.da->flags.has_tag) { /* Lists don't have a da */
 			fr_strerror_printf("Attribute '%s' cannot have a tag", attr.da->name);
 			return -(p - name);
 		}
@@ -696,7 +712,7 @@ ssize_t tmpl_from_attr_substr(vp_tmpl_t *vpt, char const *name,
 		p = q;
 	}
 
-skip_tag:
+do_num:
 	if (*p == '\0') goto finish;
 
 	if (*p == '[') {
@@ -776,7 +792,8 @@ ssize_t tmpl_from_attr_str(vp_tmpl_t *vpt, char const *name,
 	slen = tmpl_from_attr_substr(vpt, name, request_def, list_def, allow_unknown, allow_undefined);
 	if (slen <= 0) return slen;
 	if (name[slen] != '\0') {
-		fr_strerror_printf("Unexpected text after attribute name");
+		/* This looks wrong, but it produces meaningful errors for unknown attrs with tags */
+		fr_strerror_printf("Unexpected text after %s", fr_int2str(tmpl_names, vpt->type, "<INVALID>"));
 		return -slen;
 	}
 
@@ -786,9 +803,6 @@ ssize_t tmpl_from_attr_str(vp_tmpl_t *vpt, char const *name,
 }
 
 /** Parse a string into a TMPL_TYPE_ATTR_* or #TMPL_TYPE_LIST type #vp_tmpl_t
- *
- * @note Unlike #tmpl_from_attr_substr this function will error out if the entire
- *	name string isn't parsed.
  *
  * @param[in,out] ctx to allocate #vp_tmpl_t in.
  * @param[out] out Where to write pointer to new #vp_tmpl_t.
@@ -818,6 +832,36 @@ ssize_t tmpl_from_attr_str(vp_tmpl_t *vpt, char const *name,
  *
  * @see REMARKER to produce pretty error markers from the return value.
  */
+ssize_t tmpl_afrom_attr_substr(TALLOC_CTX *ctx, vp_tmpl_t **out, char const *name,
+			       request_refs_t request_def, pair_lists_t list_def,
+			       bool allow_unknown, bool allow_undefined)
+{
+	ssize_t slen;
+	vp_tmpl_t *vpt;
+
+	MEM(vpt = talloc(ctx, vp_tmpl_t)); /* tmpl_from_attr_substr zeros it */
+
+	slen = tmpl_from_attr_substr(vpt, name, request_def, list_def, allow_unknown, allow_undefined);
+	if (slen <= 0) {
+		TALLOC_FREE(vpt);
+		return slen;
+	}
+	vpt->name = talloc_strndup(vpt, vpt->name, slen);
+
+	VERIFY_TMPL(vpt);
+
+	*out = vpt;
+
+	return slen;
+}
+
+/** Parse a string into a TMPL_TYPE_ATTR_* or #TMPL_TYPE_LIST type #vp_tmpl_t
+ *
+ * @note Unlike #tmpl_afrom_attr_substr this function will error out if the entire
+ *	name string isn't parsed.
+ *
+ * @copydetails tmpl_afrom_attr_substr
+ */
 ssize_t tmpl_afrom_attr_str(TALLOC_CTX *ctx, vp_tmpl_t **out, char const *name,
 			    request_refs_t request_def, pair_lists_t list_def,
 			    bool allow_unknown, bool allow_undefined)
@@ -833,7 +877,8 @@ ssize_t tmpl_afrom_attr_str(TALLOC_CTX *ctx, vp_tmpl_t **out, char const *name,
 		return slen;
 	}
 	if (name[slen] != '\0') {
-		fr_strerror_printf("Unexpected text after attribute name");
+		/* This looks wrong, but it produces meaningful errors for unknown attrs with tags */
+		fr_strerror_printf("Unexpected text after %s", fr_int2str(tmpl_names, vpt->type, "<INVALID>"));
 		TALLOC_FREE(vpt);
 		return -slen;
 	}
@@ -1211,17 +1256,27 @@ int tmpl_define_unknown_attr(vp_tmpl_t *vpt)
  * @{
  */
 
-/** Expand a #vp_tmpl_t to a string, writing the result to a buffer
+/** Expand a #vp_tmpl_t to a string writing the result to a buffer
+ *
+ * The intended use of #tmpl_expand and #tmpl_aexpand is for modules to easily convert a #vp_tmpl_t
+ * provided by the conf parser, into a usable value.
+ * The value returned should be raw and undoctored for #PW_TYPE_STRING and #PW_TYPE_OCTETS types,
+ * and the printable (string) version of the data for all others.
  *
  * Depending what arguments are passed, either copies the value to buff, or writes a pointer
  * to a string buffer to out. This allows the most efficient access to the value resolved by
  * the #vp_tmpl_t, avoiding unecessary string copies.
  *
+ * @note This function is used where raw string values are needed, which may mean the string
+ *	returned may be binary data or contain unprintable chars. #fr_prints or #fr_aprints should
+ *	be used before using these values in debug statements. #is_printable can be used to check
+ *	if the string only contains printable chars.
+ *
  * @param out Where to write a pointer to the string buffer. On return may point to buff if
  *	buff was used to store the value. Otherwise will point to a #value_data_t buffer,
  *	or the name of the template. To force copying to buff, out should be NULL.
- * @param buff Expansion buffer, may be NULL if out is not NULL, and processing
- *	#TMPL_TYPE_LITERAL or string types.
+ * @param buff Expansion buffer, may be NULL if out is not NULL, and processing #TMPL_TYPE_LITERAL
+ *	or string types.
  * @param bufflen Length of expansion buffer.
  * @param request Current request.
  * @param vpt to expand. Must be one of the following types:
@@ -1230,12 +1285,13 @@ int tmpl_define_unknown_attr(vp_tmpl_t *vpt)
  *	- #TMPL_TYPE_XLAT
  *	- #TMPL_TYPE_XLAT_STRUCT
  *	- #TMPL_TYPE_ATTR
+ *	- #TMPL_TYPE_DATA
  * @param escape xlat escape function (only used for xlat types).
  * @param escape_ctx xlat escape function data.
  * @return -1 on error, else the length of data written to buff, or pointed to by out.
  */
 ssize_t tmpl_expand(char const **out, char *buff, size_t bufflen, REQUEST *request,
-		    vp_tmpl_t const *vpt, RADIUS_ESCAPE_STRING escape, void *escape_ctx)
+		    vp_tmpl_t const *vpt, xlat_escape_t escape, void *escape_ctx)
 {
 	VALUE_PAIR *vp;
 	ssize_t slen = -1;	/* quiet compiler */
@@ -1262,7 +1318,7 @@ ssize_t tmpl_expand(char const **out, char *buff, size_t bufflen, REQUEST *reque
 	{
 		RDEBUG4("EXPAND TMPL EXEC");
 		rad_assert(buff);
-		if (radius_exec_program(buff, bufflen, NULL, request, vpt->name, NULL,
+		if (radius_exec_program(request, buff, bufflen, NULL, request, vpt->name, NULL,
 					true, false, EXEC_TIMEOUT) != 0) {
 			return -1;
 		}
@@ -1301,12 +1357,29 @@ ssize_t tmpl_expand(char const **out, char *buff, size_t bufflen, REQUEST *reque
 		ret = tmpl_find_vp(&vp, request, vpt);
 		if (ret < 0) return -2;
 
-		if (out && (vp->da->type == PW_TYPE_STRING)) {
-			*out = vp->vp_strvalue;
+		if (out && ((vp->da->type == PW_TYPE_STRING) || (vp->da->type == PW_TYPE_OCTETS))) {
+			*out = vp->data.ptr;
 			slen = vp->vp_length;
 		} else {
 			if (out) *out = buff;
 			slen = vp_prints_value(buff, bufflen, vp, '\0');
+		}
+	}
+		break;
+
+	case TMPL_TYPE_DATA:
+	{
+		RDEBUG4("EXPAND TMPL DATA");
+
+		if (out && ((vpt->tmpl_data_type == PW_TYPE_STRING) || (vpt->tmpl_data_type == PW_TYPE_OCTETS))) {
+			*out = vpt->tmpl_data_value.ptr;
+			slen = vpt->tmpl_data_length;
+		} else {
+			if (out) *out = buff;
+			/**
+			 *  @todo tmpl_expand should accept an enumv da from the lhs of the map.
+			 */
+			slen = value_data_prints(buff, bufflen, vpt->tmpl_data_type, NULL, &vpt->tmpl_data_value, vpt->tmpl_data_length, '\0');
 		}
 	}
 		break;
@@ -1317,7 +1390,6 @@ ssize_t tmpl_expand(char const **out, char *buff, size_t bufflen, REQUEST *reque
 	case TMPL_TYPE_UNKNOWN:
 	case TMPL_TYPE_NULL:
 	case TMPL_TYPE_LIST:
-	case TMPL_TYPE_DATA:
 	case TMPL_TYPE_REGEX:
 	case TMPL_TYPE_ATTR_UNDEFINED:
 	case TMPL_TYPE_REGEX_STRUCT:
@@ -1336,10 +1408,9 @@ ssize_t tmpl_expand(char const **out, char *buff, size_t bufflen, REQUEST *reque
 	 *	Or, if it's from a "string" attribute, it needs re-parsing.
 	 *	Integers, IP addresses, etc. don't need re-parsing.
 	 */
-	if (cf_new_escape &&
-	    ((vpt->type != TMPL_TYPE_ATTR) ||
-	     (vpt->tmpl_da->type == PW_TYPE_STRING))) {
-	     	value_data_t vd;
+	if (cf_new_escape && (vpt->type != TMPL_TYPE_ATTR)) {
+	     	value_data_t	vd;
+	     	int		ret;
 
 		PW_TYPE type = PW_TYPE_STRING;
 
@@ -1359,6 +1430,22 @@ ssize_t tmpl_expand(char const **out, char *buff, size_t bufflen, REQUEST *reque
 
 /** Expand a template to a string, allocing a new buffer to hold the string
  *
+ * The intended use of #tmpl_expand and #tmpl_aexpand is for modules to easily convert a #vp_tmpl_t
+ * provided by the conf parser, into a usable value.
+ * The value returned should be raw and undoctored for #PW_TYPE_STRING and #PW_TYPE_OCTETS types,
+ * and the printable (string) version of the data for all others.
+ *
+ * This function will always duplicate values, whereas #tmpl_expand may return a pointer to an
+ * existing buffer.
+ *
+ * @note This function is used where raw string values are needed, which may mean the string
+ *	returned may be binary data or contain unprintable chars. #fr_prints or #fr_aprints should
+ *	be used before using these values in debug statements. #is_printable can be used to check
+ *	if the string only contains printable chars.
+ *
+ * @note The type (char or uint8_t) can be obtained with talloc_get_type, and may be used as a
+ *	hint as to how to process or print the data.
+ *
  * @param ctx to allocate new buffer in.
  * @param out Where to write pointer to the new buffer.
  * @param request Current request.
@@ -1368,12 +1455,15 @@ ssize_t tmpl_expand(char const **out, char *buff, size_t bufflen, REQUEST *reque
  *	- #TMPL_TYPE_XLAT
  *	- #TMPL_TYPE_XLAT_STRUCT
  *	- #TMPL_TYPE_ATTR
+ *	- #TMPL_TYPE_DATA
  * @param escape xlat escape function (only used for xlat types).
- * @param escape_ctx xlat escape function data.
- * @return -1 on error, else the length of data written to buff, or pointed to by out.
+ * @param escape_ctx xlat escape function data (only used for xlat types).
+ * @return
+ *	- -1 on failure.
+ *	- The length of data written to buff, or pointed to by out.
  */
 ssize_t tmpl_aexpand(TALLOC_CTX *ctx, char **out, REQUEST *request, vp_tmpl_t const *vpt,
-		     RADIUS_ESCAPE_STRING escape, void *escape_ctx)
+		     xlat_escape_t escape, void *escape_ctx)
 {
 	VALUE_PAIR *vp;
 	ssize_t slen = -1;	/* quiet compiler */
@@ -1396,7 +1486,8 @@ ssize_t tmpl_aexpand(TALLOC_CTX *ctx, char **out, REQUEST *request, vp_tmpl_t co
 
 		RDEBUG4("EXPAND TMPL EXEC");
 		buff = talloc_array(ctx, char, 1024);
-		if (radius_exec_program(buff, 1024, NULL, request, vpt->name, NULL, true, false, EXEC_TIMEOUT) != 0) {
+		if (radius_exec_program(request, buff, 1024, NULL, request, vpt->name, NULL,
+					true, false, EXEC_TIMEOUT) != 0) {
 			TALLOC_FREE(buff);
 			return -1;
 		}
@@ -1436,9 +1527,51 @@ ssize_t tmpl_aexpand(TALLOC_CTX *ctx, char **out, REQUEST *request, vp_tmpl_t co
 		ret = tmpl_find_vp(&vp, request, vpt);
 		if (ret < 0) return -2;
 
-		*out = vp_aprints_value(ctx, vp, '"');
-		if (!*out) return -1;
-		slen = talloc_array_length(*out) - 1;
+		switch (vpt->tmpl_da->type) {
+		case PW_TYPE_STRING:
+			*out = talloc_bstrndup(ctx, vp->vp_strvalue, vp->vp_length);
+			if (!*out) return -1;
+			slen = vp->vp_length;
+			break;
+
+		case PW_TYPE_OCTETS:
+			*out = talloc_memdup(ctx, vp->vp_octets, vp->vp_length);
+			if (!*out) return -1;
+			slen = vp->vp_length;
+			break;
+
+		default:
+			*out = vp_aprints_value(ctx, vp, '\0');
+			if (!*out) return -1;
+			slen = talloc_array_length(*out) - 1;
+			break;
+		}
+	}
+		break;
+
+	case TMPL_TYPE_DATA:
+	{
+		RDEBUG4("EXPAND TMPL DATA");
+
+		switch (vpt->tmpl_data_type) {
+		case PW_TYPE_STRING:
+			*out = talloc_bstrndup(ctx, vpt->tmpl_data_value.strvalue, vpt->tmpl_data_length);
+			if (!*out) return -1;
+			slen = vpt->tmpl_data_length;
+			break;
+
+		case PW_TYPE_OCTETS:
+			*out = talloc_memdup(ctx, vpt->tmpl_data_value.octets, vpt->tmpl_data_length);
+			if (!*out) return -1;
+			slen = vpt->tmpl_data_length;
+			break;
+
+		default:
+			*out = value_data_aprints(ctx, vpt->tmpl_data_type, NULL, &vpt->tmpl_data_value, vpt->tmpl_data_length, '\0');
+			if (!*out) return -1;
+			slen = talloc_array_length(*out) - 1;
+			break;
+		}
 	}
 		break;
 
@@ -1448,7 +1581,6 @@ ssize_t tmpl_aexpand(TALLOC_CTX *ctx, char **out, REQUEST *request, vp_tmpl_t co
 	case TMPL_TYPE_UNKNOWN:
 	case TMPL_TYPE_NULL:
 	case TMPL_TYPE_LIST:
-	case TMPL_TYPE_DATA:
 	case TMPL_TYPE_REGEX:
 	case TMPL_TYPE_ATTR_UNDEFINED:
 	case TMPL_TYPE_REGEX_STRUCT:
@@ -1465,10 +1597,8 @@ ssize_t tmpl_aexpand(TALLOC_CTX *ctx, char **out, REQUEST *request, vp_tmpl_t co
 	 *	Or, if it's from a "string" attribute, it needs re-parsing.
 	 *	Integers, IP addresses, etc. don't need re-parsing.
 	 */
-	if (cf_new_escape &&
-	    ((vpt->type != TMPL_TYPE_ATTR) ||
-	     (vpt->tmpl_da->type == PW_TYPE_STRING))) {
-	     	value_data_t vd;
+	if (cf_new_escape && (vpt->type != TMPL_TYPE_ATTR)) {
+	     	value_data_t	vd;
 
 		PW_TYPE type = PW_TYPE_STRING;
 
@@ -1521,8 +1651,6 @@ size_t tmpl_prints(char *out, size_t outlen, vp_tmpl_t const *vpt, DICT_ATTR con
 	case TMPL_TYPE_XLAT_STRUCT:
 		c = '"';
 		break;
-
-	case TMPL_TYPE_LIST:
 	case TMPL_TYPE_LITERAL:	/* single-quoted or bare word */
 		/*
 		 *	Hack
@@ -1545,6 +1673,19 @@ size_t tmpl_prints(char *out, size_t outlen, vp_tmpl_t const *vpt, DICT_ATTR con
 		c = '`';
 		break;
 
+	case TMPL_TYPE_LIST:
+		out[0] = '&';
+		if (vpt->tmpl_request == REQUEST_CURRENT) {
+			snprintf(out + 1, outlen - 1, "%s",
+				 fr_int2str(pair_lists, vpt->tmpl_list, ""));
+		} else {
+			snprintf(out + 1, outlen - 1, "%s.%s",
+				 fr_int2str(request_refs, vpt->tmpl_request, ""),
+				 fr_int2str(pair_lists, vpt->tmpl_list, ""));
+		}
+		len = strlen(out);
+		goto attr_inst_tag;
+
 	case TMPL_TYPE_ATTR:
 		out[0] = '&';
 		if (vpt->tmpl_request == REQUEST_CURRENT) {
@@ -1565,9 +1706,8 @@ size_t tmpl_prints(char *out, size_t outlen, vp_tmpl_t const *vpt, DICT_ATTR con
 
 		len = strlen(out);
 
-		if ((vpt->tmpl_tag == TAG_ANY) && (vpt->tmpl_num == NUM_ANY)) {
-			return len;
-		}
+	attr_inst_tag:
+		if ((vpt->tmpl_tag == TAG_ANY) && (vpt->tmpl_num == NUM_ANY)) return len;
 
 		q = out + len;
 		outlen -= len;
@@ -1646,8 +1786,8 @@ size_t tmpl_prints(char *out, size_t outlen, vp_tmpl_t const *vpt, DICT_ATTR con
 		return (q - out);
 
 	case TMPL_TYPE_DATA:
-		return vp_data_prints_value(out, outlen, vpt->tmpl_data_type, values,
-					    &vpt->tmpl_data_value, vpt->tmpl_data_length, vpt->quote);
+		return value_data_prints(out, outlen, vpt->tmpl_data_type, values, &vpt->tmpl_data_value,
+					 vpt->tmpl_data_length, vpt->quote);
 	}
 
 	if (outlen <= 3) {
@@ -1694,6 +1834,7 @@ size_t tmpl_prints(char *out, size_t outlen, vp_tmpl_t const *vpt, DICT_ATTR con
 VALUE_PAIR *tmpl_cursor_init(int *err, vp_cursor_t *cursor, REQUEST *request, vp_tmpl_t const *vpt)
 {
 	VALUE_PAIR **vps, *vp = NULL;
+	int num;
 
 	VERIFY_TMPL(vpt);
 
@@ -1717,9 +1858,6 @@ VALUE_PAIR *tmpl_cursor_init(int *err, vp_cursor_t *cursor, REQUEST *request, vp
 	 *	May not may not be found, but it *is* a known name.
 	 */
 	case TMPL_TYPE_ATTR:
-	{
-		int num;
-
 		switch (vpt->tmpl_num) {
 		case NUM_ANY:
 			vp = fr_cursor_next_by_da(cursor, vpt->tmpl_da, vpt->tmpl_tag);
@@ -1734,7 +1872,6 @@ VALUE_PAIR *tmpl_cursor_init(int *err, vp_cursor_t *cursor, REQUEST *request, vp
 		 *	Get the last instance of a VALUE_PAIR.
 		 */
 		case NUM_LAST:
-
 		{
 			VALUE_PAIR *last = NULL;
 
@@ -1742,7 +1879,7 @@ VALUE_PAIR *tmpl_cursor_init(int *err, vp_cursor_t *cursor, REQUEST *request, vp
 				VERIFY_VP(vp);
 				last = vp;
 			}
-
+			VERIFY_VP(last);
 			if (!last) break;
 			return last;
 		}
@@ -1756,6 +1893,8 @@ VALUE_PAIR *tmpl_cursor_init(int *err, vp_cursor_t *cursor, REQUEST *request, vp
 		 *	total number of attributes.
 		 */
 		case NUM_COUNT:
+			return fr_cursor_next_by_da(cursor, vpt->tmpl_da, vpt->tmpl_tag);
+
 		default:
 			num = vpt->tmpl_num;
 			while ((vp = fr_cursor_next_by_da(cursor, vpt->tmpl_da, vpt->tmpl_tag))) {
@@ -1767,10 +1906,49 @@ VALUE_PAIR *tmpl_cursor_init(int *err, vp_cursor_t *cursor, REQUEST *request, vp
 
 		if (err) *err = -1;
 		return NULL;
-	}
 
 	case TMPL_TYPE_LIST:
-		vp = fr_cursor_init(cursor, vps);
+		switch (vpt->tmpl_num) {
+		case NUM_COUNT:
+		case NUM_ANY:
+		case NUM_ALL:
+			vp = fr_cursor_init(cursor, vps);
+			if (!vp) {
+				if (err) *err = -1;
+				return NULL;
+			}
+			VERIFY_VP(vp);
+			return vp;
+
+		/*
+		 *	Get the last instance of a VALUE_PAIR.
+		 */
+		case NUM_LAST:
+		{
+			VALUE_PAIR *last = NULL;
+
+			for (vp = fr_cursor_init(cursor, vps);
+			     vp;
+			     vp = fr_cursor_next(cursor)) {
+				VERIFY_VP(vp);
+				last = vp;
+			}
+			if (!last) break;
+			VERIFY_VP(last);
+			return last;
+		}
+
+		default:
+			num = vpt->tmpl_num;
+			for (vp = fr_cursor_init(cursor, vps);
+			     vp;
+			     vp = fr_cursor_next(cursor)) {
+				VERIFY_VP(vp);
+				if (num-- <= 0) return vp;
+			}
+			break;
+		}
+
 		break;
 
 	default:
@@ -1800,10 +1978,25 @@ VALUE_PAIR *tmpl_cursor_next(vp_cursor_t *cursor, vp_tmpl_t const *vpt)
 	 *	May not may not be found, but it *is* a known name.
 	 */
 	case TMPL_TYPE_ATTR:
-		if (vpt->tmpl_num != NUM_ALL) return NULL;
+		switch (vpt->tmpl_num) {
+		default:
+			return NULL;
+
+		case NUM_ALL:
+		case NUM_COUNT:	/* This cursor is being used to count matching attrs */
+			break;
+		}
 		return fr_cursor_next_by_da(cursor, vpt->tmpl_da, vpt->tmpl_tag);
 
 	case TMPL_TYPE_LIST:
+		switch (vpt->tmpl_num) {
+		default:
+			return NULL;
+
+		case NUM_ALL:
+		case NUM_COUNT:	/* This cursor is being used to count matching attrs */
+			break;
+		}
 		return fr_cursor_next(cursor);
 
 	default:
@@ -2107,6 +2300,11 @@ void tmpl_verify(char const *file, int line, vp_tmpl_t const *vpt)
 			break;
 
 		case PW_TYPE_TLV:
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: TMPL_TYPE_DATA is of type TLV",
+				     file, line);
+			fr_assert(0);
+			fr_exit_now(1);
+
 		case PW_TYPE_OCTETS:
 			break;
 

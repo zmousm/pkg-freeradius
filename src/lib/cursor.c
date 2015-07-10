@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 of the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -54,21 +53,23 @@ inline static VALUE_PAIR *fr_cursor_update(vp_cursor_t *cursor, VALUE_PAIR *vp)
 
 /** Setup a cursor to iterate over attribute pairs
  *
- * @note Don't call directly, use the fr_cursor_init macro instead.
- *
  * @addtogroup module_safe
  *
  * @param cursor Where to initialise the cursor (uses existing structure).
- * @param vp to start from.
+ * @param const_vp to start from.
  * @return the attribute pointed to by vp.
  */
-VALUE_PAIR *_fr_cursor_init(vp_cursor_t *cursor, VALUE_PAIR const * const *vp)
+VALUE_PAIR *fr_cursor_init(vp_cursor_t *cursor, VALUE_PAIR * const *const_vp)
 {
-	if (!vp || !cursor) {
+	VALUE_PAIR **vp;
+
+	if (!const_vp || !cursor) {
 		return NULL;
 	}
 
 	memset(cursor, 0, sizeof(*cursor));
+
+	memcpy(&vp, &const_vp, sizeof(vp)); /* stupid const hacks */
 
 	/*
 	 *  Useful check to see if uninitialised memory is pointed
@@ -380,6 +381,20 @@ void fr_cursor_merge(vp_cursor_t *cursor, VALUE_PAIR *add)
  *
  * @todo this is really inefficient and should be fixed...
  *
+ * The current VP will be set to the one before the VP being removed,
+ * this is so the commonly used check and remove loop (below) works
+ * as expected.
+ @code {.c}
+   for (vp = fr_cursor_init(&cursor, head);
+        vp;
+        vp = fr_cursor_next(&cursor) {
+        if (<condition>) {
+            vp = fr_cursor_remove(&cursor);
+            talloc_free(vp);
+        }
+   }
+ @endcode
+ *
  * @addtogroup module_safe
  *
  * @param cursor to remove the current pair from.
@@ -387,30 +402,49 @@ void fr_cursor_merge(vp_cursor_t *cursor, VALUE_PAIR *add)
  */
 VALUE_PAIR *fr_cursor_remove(vp_cursor_t *cursor)
 {
-	VALUE_PAIR *vp, **last;
+	VALUE_PAIR *vp, *before;
 
 	if (!fr_assert(cursor->first)) return NULL;	/* cursor must have been initialised */
 
 	vp = cursor->current;
 	if (!vp) return NULL;
 
-	last = cursor->first;
-	while (*last != vp) last = &(*last)->next;
+	/*
+	 *	Where VP is head of the list
+	 */
+	if (*(cursor->first) == vp) {
+		*(cursor->first) = vp->next;
+		cursor->current = vp->next;
+		cursor->next = vp->next ? vp->next->next : NULL;
+		goto fixup;
+	}
 
-	fr_cursor_next(cursor);   /* Advance the cursor past the one were about to delete */
+	/*
+	 *	Where VP is not head of the list
+	 */
+	before = *(cursor->first);
+	if (!before) return NULL;
 
-	*last = vp->next;
-	vp->next = NULL;
+	/*
+	 *	Find the VP immediately preceding the one being removed
+	 */
+	while (before->next != vp) before = before->next;
+
+	cursor->next = before->next = vp->next;	/* close the gap */
+	cursor->current = before;		/* current jumps back one, but this is usually desirable */
+
+fixup:
+	vp->next = NULL;			/* limit scope of pairfree() */
 
 	/*
 	 *	Fixup cursor->found if we removed the VP it was referring to
 	 */
-	if (vp == cursor->found) cursor->found = *last;
+	if (vp == cursor->found) cursor->found = cursor->current;
 
 	/*
 	 *	Fixup cursor->last if we removed the VP it was referring to
 	 */
-	if (vp == cursor->last) cursor->last = *last;
+	if (vp == cursor->last) cursor->last = cursor->current;
 	return vp;
 }
 

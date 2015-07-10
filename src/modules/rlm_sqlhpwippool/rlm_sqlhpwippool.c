@@ -155,14 +155,14 @@ static int nvp_select(unsigned int line, rlm_sqlhpwippool_t *data,
 	}
 	va_end(ap);
 
-	if ((data->db->sql_store_result)(sqlsock, data->sql_inst->config)) {
+	if (data->db->sql_store_result && (data->db->sql_store_result)(sqlsock, data->sql_inst->config)) {
 		nvp_log(__LINE__, data, L_ERR,
 			"nvp_select(): error while saving results of query from line %u",
 			line);
 		return 0;
 	}
 
-	if ((data->db->sql_num_rows)(sqlsock, data->sql_inst->config) < 1) {
+	if (data->db->sql_num_rows && ((data->db->sql_num_rows)(sqlsock, data->sql_inst->config) < 1)) {
 		nvp_log(__LINE__, data, L_DBG,
 			"nvp_select(): no results in query from line %u", line);
 		return -1;
@@ -296,7 +296,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	inst->sincesync = 0;
 
-	sql_inst = find_module_instance(cf_section_find("modules"), (inst->sql_module_instance), true);
+	sql_inst = module_instantiate(cf_section_find("modules"), (inst->sql_module_instance));
 	if (!sql_inst) {
 		nvp_log(__LINE__, inst, L_ERR,
 			"mod_instantiate(): cannot find module instance "
@@ -769,21 +769,14 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 
 extern module_t rlm_sqlhpwippool;
 module_t rlm_sqlhpwippool = {
-	RLM_MODULE_INIT,
-	"sqlhpwippool",			/* name */
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_sqlhpwippool_t),
-	module_config,
-	mod_instantiate,	/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		NULL,			/* authorization */
-		NULL,			/* preaccounting */
-		mod_accounting,/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		mod_post_auth	/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "sqlhpwippool",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_sqlhpwippool_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.methods = {
+		[MOD_ACCOUNTING]	= mod_accounting,
+		[MOD_POST_AUTH]		= mod_post_auth
 	},
 };

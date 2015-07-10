@@ -154,7 +154,7 @@ static int digest_fix(REQUEST *request)
 			memcpy(q, p + 2, attrlen - 2);
 			q[attrlen - 2] = '\0';
 
-			if ((debug_flag > 1) && fr_log_fp) {
+			if ((rad_debug_lvl > 1) && fr_log_fp) {
 				vp_print(fr_log_fp, sub);
 			}
 
@@ -182,7 +182,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
 	if (rcode != RLM_MODULE_OK) return rcode;
 
 
-	if (pairfind(request->config, PW_AUTHTYPE, 0, TAG_ANY)) {
+	if (pairfind(request->config, PW_AUTH_TYPE, 0, TAG_ANY)) {
 		RWDEBUG2("Auth-Type already set.  Not setting to DIGEST");
 		return RLM_MODULE_NOOP;
 	}
@@ -455,7 +455,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, REQU
 	fr_bin2hex((char *) kd, hash, sizeof(hash));
 
 #ifndef NRDEBUG
-	if (debug_flag > 1) {
+	if (rad_debug_lvl > 1) {
 		fr_printf_log("H(A1) = ");
 		for (i = 0; i < 16; i++) {
 			fr_printf_log("%02x", hash[i]);
@@ -524,7 +524,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, REQU
 	fr_bin2hex((char *) kd + kd_len, hash, sizeof(hash));
 
 #ifndef NRDEBUG
-	if (debug_flag > 1) {
+	if (rad_debug_lvl > 1) {
 		fr_printf_log("H(A2) = ");
 		for (i = 0; i < 16; i++) {
 			fr_printf_log("%02x", hash[i]);
@@ -559,7 +559,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, REQU
 	}
 
 #ifndef NRDEBUG
-	if (debug_flag > 1) {
+	if (rad_debug_lvl > 1) {
 		fr_printf_log("EXPECTED ");
 		for (i = 0; i < 16; i++) {
 			fr_printf_log("%02x", kd[i]);
@@ -596,21 +596,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, REQU
  */
 extern module_t rlm_digest;
 module_t rlm_digest = {
-	RLM_MODULE_INIT,
-	"digest",
-	0,   	/* type */
-	0,
-	NULL,				/* CONF_PARSER */
-	NULL,				/* instantiation */
-	NULL,				/* detach */
-	{
-		mod_authenticate,	/* authentication */
-		mod_authorize, 	/* authorization */
-		NULL,			/* preaccounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "digest",
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize
 	},
 };

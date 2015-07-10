@@ -70,12 +70,14 @@ typedef struct rlm_sql_mysql_conn {
 } rlm_sql_mysql_conn_t;
 
 typedef struct rlm_sql_mysql_config {
-	char const		*tls_ca_file;
-	char const		*tls_ca_path;
-	char const		*tls_certificate_file;
-	char const		*tls_private_key_file;
-	char const		*tls_cipher;
-	char const		*warnings_str;
+	char const *tls_ca_file;		//!< Path to the CA used to validate the server's certificate.
+	char const *tls_ca_path;		//!< Directory containing CAs that may be used to validate the
+						//!< servers certificate.
+	char const *tls_certificate_file;	//!< Public certificate we present to the server.
+	char const *tls_private_key_file;	//!< Private key for the certificate we present to the server.
+	char const *tls_cipher;
+
+	char const *warnings_str;		//!< Whether we always query the server for additional warnings.
 	rlm_sql_mysql_warnings	warnings;	//!< mysql_warning_count() doesn't
 						//!< appear to work with NDB cluster
 } rlm_sql_mysql_config_t;
@@ -118,11 +120,7 @@ static int _sql_socket_destructor(rlm_sql_mysql_conn_t *conn)
 
 static int _mod_destructor(UNUSED rlm_sql_mysql_config_t *driver)
 {
-	mysql_instance_count--;
-
-	if (mysql_instance_count == 0) {
-		 mysql_library_end();
-	}
+	if (--mysql_instance_count == 0) mysql_library_end();
 
 	return 0;
 }
@@ -248,7 +246,7 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 					config->sql_login,
 					config->sql_password,
 					config->sql_db,
-					atoi(config->sql_port),
+					config->sql_port,
 					NULL,
 					sql_flags);
 	if (!conn->sock) {
@@ -434,6 +432,32 @@ static int sql_num_rows(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *confi
 	}
 
 	return 0;
+}
+
+static sql_rcode_t sql_fields(char const **out[], rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
+	rlm_sql_mysql_conn_t *conn = handle->conn;
+
+	unsigned int	fields, i;
+	MYSQL_FIELD	*field_info;
+	char const	**names;
+
+	fields = mysql_num_fields(conn->result);
+	if (fields == 0) return RLM_SQL_ERROR;
+
+	/*
+	 *	https://bugs.mysql.com/bug.php?id=32318
+	 * 	Hints that we don't have to free field_info.
+	 */
+	field_info = mysql_fetch_fields(conn->result);
+	if (!field_info) return RLM_SQL_ERROR;
+
+	MEM(names = talloc_zero_array(handle, char const *, fields + 1));
+
+	for (i = 0; i < fields; i++) names[i] = field_info[i].name;
+	*out = names;
+
+	return RLM_SQL_OK;
 }
 
 static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
@@ -699,6 +723,7 @@ rlm_sql_module_t rlm_sql_mysql = {
 	.sql_num_fields			= sql_num_fields,
 	.sql_num_rows			= sql_num_rows,
 	.sql_affected_rows		= sql_affected_rows,
+	.sql_fields			= sql_fields,
 	.sql_fetch_row			= sql_fetch_row,
 	.sql_free_result		= sql_free_result,
 	.sql_error			= sql_error,

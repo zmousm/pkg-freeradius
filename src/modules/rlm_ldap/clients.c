@@ -38,7 +38,9 @@
  * @param[out] values array of char pointers.
  * @param[in,out] idx records current array offset.
  * @param[in] cs to iterate over.
- * @return 0 on success else -1 on error.
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
  */
 static int rlm_ldap_client_get_attrs(char const **values, int *idx, CONF_SECTION const *cs)
 {
@@ -93,9 +95,11 @@ static int _get_client_value(char **out, CONF_PAIR const *cp, void *data)
  * @param[in] inst rlm_ldap configuration.
  * @param[in] tmpl to use as the base for the new client.
  * @param[in] map to load client attribute/LDAP attribute mappings from.
- * @return -1 on error else 0.
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
  */
-int rlm_ldap_client_load(ldap_instance_t const *inst, CONF_SECTION *tmpl, CONF_SECTION *map)
+int rlm_ldap_client_load(rlm_ldap_t const *inst, CONF_SECTION *tmpl, CONF_SECTION *map)
 {
 	int 		ret = 0;
 	ldap_rcode_t	status;
@@ -123,17 +127,23 @@ int rlm_ldap_client_load(ldap_instance_t const *inst, CONF_SECTION *tmpl, CONF_S
 	 *	Create an array of LDAP attributes to feed to rlm_ldap_search.
 	 */
 	attrs = talloc_array(inst, char const *, count);
-	if (rlm_ldap_client_get_attrs(attrs, &idx, map) < 0) return -1;
+	if (rlm_ldap_client_get_attrs(attrs, &idx, map) < 0) {
+		talloc_free(attrs);
+		return -1;
+	}
 
 	conn = mod_conn_get(inst, NULL);
-	if (!conn) return -1;
+	if (!conn) {
+		talloc_free(attrs);
+		return -1;
+	}
 
 	/*
 	 *	Perform all searches as the admin user.
 	 */
 	if (conn->rebound) {
-		status = rlm_ldap_bind(inst, NULL, &conn, conn->inst->admin_dn, conn->inst->password,
-				       conn->inst->admin_sasl_mech, true);
+		status = rlm_ldap_bind(inst, NULL, &conn, conn->inst->admin_identity, conn->inst->admin_password,
+				       &(conn->inst->admin_sasl), true);
 		if (status != LDAP_PROC_SUCCESS) {
 			ret = -1;
 			goto finish;

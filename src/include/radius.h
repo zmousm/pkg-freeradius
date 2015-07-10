@@ -99,13 +99,12 @@ typedef enum {
 #include <freeradius-devel/rfc7155.h>
 #include <freeradius-devel/rfc7268.h>
 
-
 /*
  *	All internal attributes are now defined in this file.
  */
 #include <freeradius-devel/attributes.h>
 
-#define PW_EXTENDED_ATTRIBUTE		192
+#include <freeradius-devel/vqp.h>
 
 #define PW_DIGEST_RESPONSE		206
 #define PW_DIGEST_ATTRIBUTES		207
@@ -130,48 +129,6 @@ typedef enum {
 
 #define PW_PPP				1
 #define PW_SLIP				2
-
-/*	Framed Routing Values	*/
-
-#define PW_NONE				0
-#define PW_BROADCAST			1
-#define PW_LISTEN			2
-#define PW_BROADCAST_LISTEN		3
-
-/*	Framed Compression Types	*/
-
-#define PW_VAN_JACOBSEN_TCP_IP		1
-
-/*	Login Services	*/
-
-#define PW_TELNET			0
-#define PW_RLOGIN			1
-#define PW_TCP_CLEAR			2
-#define PW_PORTMASTER			3
-
-/*	Authentication Level	*/
-
-#define PW_AUTHTYPE_LOCAL		0
-#define PW_AUTHTYPE_SYSTEM		1
-#define PW_AUTHTYPE_SECURID		2
-#define PW_AUTHTYPE_CRYPT		3
-#define PW_AUTHTYPE_REJECT		4
-#define PW_AUTHTYPE_ACTIVCARD		5
-#define PW_AUTHTYPE_EAP			6
-#define PW_AUTHTYPE_ACCEPT		254
-#define PW_AUTHTYPE_MS_CHAP		1028
-
-/* Post-auth types */
-#define PW_POSTAUTHTYPE_LOCAL		0
-#define PW_POSTAUTHTYPE_REJECT		1
-
-/*	Port Types		*/
-
-#define PW_NAS_PORT_ASYNC		0
-#define PW_NAS_PORT_SYNC		1
-#define PW_NAS_PORT_ISDN		2
-#define PW_NAS_PORT_ISDN_V120		3
-#define PW_NAS_PORT_ISDN_V110		4
 
 /*	Status Types	*/
 
@@ -206,31 +163,6 @@ typedef enum {
 #define PW_MSCHAP2_RESPONSE		25
 #define PW_MSCHAP2_SUCCESS		26
 #define PW_MSCHAP2_CPW			27
-
-/*
- *	Old nonsense.	Will be deleted ASAP
- */
-#define PW_AUTHTYPE			1000
-#define PW_AUTZTYPE			1011
-#define PW_ACCTTYPE			1012
-#define PW_SESSTYPE			1013
-#define PW_POSTAUTHTYPE			1014
-
-/*
- *	Cisco's VLAN Query Protocol.
- */
-#define PW_VQP_PACKET_TYPE		0x2b00
-#define PW_VQP_ERROR_CODE		0x2b01
-#define PW_VQP_SEQUENCE_NUMBER		0x2b02
-
-#define PW_VQP_CLIENT_IP_ADDRESS	0x2c01
-#define PW_VQP_PORT_NAME		0x2c02
-#define PW_VQP_VLAN_NAME		0x2c03
-#define PW_VQP_DOMAIN_NAME		0x2c04
-#define PW_VQP_ETHERNET_FRAME		0x2c05
-#define PW_VQP_MAC			0x2c06
-#define PW_VQP_UNKNOWN			0x2c07
-#define PW_VQP_COOKIE			0x2c08
 
 /*
  * JANET's code for transporting eap channel binding data over ttls

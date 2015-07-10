@@ -30,6 +30,7 @@ typedef struct REQUEST REQUEST;
 #include <freeradius-devel/xlat.h>
 #include <freeradius-devel/conf.h>
 #include <freeradius-devel/radpaths.h>
+#include <freeradius-devel/dhcp.h>
 
 #include <ctype.h>
 
@@ -40,8 +41,7 @@ typedef struct REQUEST REQUEST;
 #include <assert.h>
 
 #include <freeradius-devel/log.h>
-extern log_lvl_t debug_flag;
-log_lvl_t debug_flag = 0;
+extern log_lvl_t rad_debug_lvl;
 
 #include <sys/wait.h>
 pid_t rad_fork(void);
@@ -590,10 +590,11 @@ static void process_file(const char *root_dir, char const *filename)
 
 	while (fgets(buffer, sizeof(buffer), fp) != NULL) {
 		char *p = strchr(buffer, '\n');
-		VALUE_PAIR *vp, *head = NULL;
+		VALUE_PAIR *vp, *head;
 		VALUE_PAIR **tail = &head;
 
 		lineno++;
+		head = NULL;
 
 		if (!p) {
 			if (!feof(fp)) {
@@ -675,10 +676,9 @@ static void process_file(const char *root_dir, char const *filename)
 
 			attr = data;
 			vp = head;
-			len = 0;
 			while (vp) {
 				len = rad_vp2attr(NULL, NULL, NULL, (VALUE_PAIR const **)(void **)&vp,
-						  attr, sizeof(data) - (attr - data));
+						  attr, data + sizeof(data) - attr);
 				if (len < 0) {
 					fprintf(stderr, "Failed encoding %s: %s\n",
 						vp->da->name, fr_strerror());
@@ -690,7 +690,7 @@ static void process_file(const char *root_dir, char const *filename)
 			}
 
 			pairfree(&head);
-			outlen = len;
+			outlen = attr - data;
 			goto print_hex;
 		}
 
@@ -732,6 +732,90 @@ static void process_file(const char *root_dir, char const *filename)
 				attr += my_len;
 				len -= my_len;
 			}
+
+			/*
+			 *	Output may be an error, and we ignore
+			 *	it if so.
+			 */
+			if (head) {
+				vp_cursor_t cursor;
+				p = output;
+				for (vp = fr_cursor_init(&cursor, &head);
+				     vp;
+				     vp = fr_cursor_next(&cursor)) {
+					vp_prints(p, sizeof(output) - (p - output), vp);
+					p += strlen(p);
+
+					if (vp->next) {strcpy(p, ", ");
+						p += 2;
+					}
+				}
+
+				pairfree(&head);
+			} else if (my_len < 0) {
+				strlcpy(output, fr_strerror(), sizeof(output));
+
+			} else { /* zero-length attribute */
+				*output = '\0';
+			}
+			continue;
+		}
+
+		/*
+		 *	And some DHCP tests
+		 */
+		if (strncmp(p, "encode-dhcp ", 12) == 0) {
+			vp_cursor_t cursor;
+
+			if (strcmp(p + 12, "-") == 0) {
+				p = output;
+			} else {
+				p += 12;
+			}
+
+			if (userparse(NULL, p, &head) != T_EOL) {
+				strlcpy(output, fr_strerror(), sizeof(output));
+				continue;
+			}
+
+			fr_cursor_init(&cursor, &head);
+
+
+			attr = data;
+			vp = head;
+
+			while ((vp = fr_cursor_current(&cursor))) {
+				len = fr_dhcp_encode_option(NULL, attr, data + sizeof(data) - attr, &cursor);
+				if (len < 0) {
+					fprintf(stderr, "Failed encoding %s: %s\n",
+						vp->da->name, fr_strerror());
+					exit(1);
+				}
+				if (len > 0) debug_pair(vp);
+				attr += len;
+			};
+
+			pairfree(&head);
+			outlen = attr - data;
+			goto print_hex;
+		}
+
+		if (strncmp(p, "decode-dhcp ", 12) == 0) {
+			ssize_t my_len;
+
+			if (strcmp(p + 12, "-") == 0) {
+				attr = data;
+				len = data_len;
+			} else {
+				attr = data;
+				len = encode_hex(p + 12, data, sizeof(data));
+				if (len == 0) {
+					fprintf(stderr, "Failed decoding hex string at line %d of %s\n", lineno, directory);
+					exit(1);
+				}
+			}
+
+			my_len = fr_dhcp_decode_options(NULL, &head, attr, len);
 
 			/*
 			 *	Output may be an error, and we ignore
@@ -810,6 +894,17 @@ static void process_file(const char *root_dir, char const *filename)
 	if (fp != stdin) fclose(fp);
 }
 
+static void NEVER_RETURNS usage(void)
+{
+	fprintf(stderr, "usage: radattr [OPTS] filename\n");
+	fprintf(stderr, "  -d <raddb>             Set user dictionary directory (defaults to " RADDBDIR ").\n");
+	fprintf(stderr, "  -D <dictdir>           Set main dictionary directory (defaults to " DICTDIR ").\n");
+	fprintf(stderr, "  -x                     Debugging mode.\n");
+	fprintf(stderr, "  -M                     Show program version information.\n");
+
+	exit(1);
+}
+
 int main(int argc, char *argv[])
 {
 	int c;
@@ -826,23 +921,25 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-	while ((c = getopt(argc, argv, "d:D:xM")) != EOF) switch (c) {
+	while ((c = getopt(argc, argv, "d:D:xMh")) != EOF) switch (c) {
 		case 'd':
+			if (!optarg) usage();
 			radius_dir = optarg;
 			break;
 		case 'D':
+			if (!optarg) usage();
 			dict_dir = optarg;
 			break;
 		case 'x':
-			fr_debug_flag++;
-			debug_flag = fr_debug_flag;
+			fr_debug_lvl++;
+			rad_debug_lvl = fr_debug_lvl;
 			break;
 		case 'M':
 			report = true;
 			break;
+		case 'h':
 		default:
-			fprintf(stderr, "usage: radattr [OPTS] filename\n");
-			exit(1);
+			usage();
 	}
 	argc -= (optind - 1);
 	argv += (optind - 1);

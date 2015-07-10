@@ -78,7 +78,7 @@ static int mod_instantiate(CONF_SECTION *cs, void **instance)
 
 		inst->auth_type = dval->value;
 	} else {
-		inst->auth_type = PW_AUTHTYPE_LOCAL;
+		inst->auth_type = PW_AUTH_TYPE_LOCAL;
 	}
 	return 0;
 }
@@ -152,7 +152,7 @@ static int CC_HINT(nonnull) mod_process(void *instance, eap_handler_t *handler)
 	}
 
 #if 0
-	if ((debug_flag > 2) && fr_log_fp) {
+	if ((rad_debug_lvl > 2) && fr_log_fp) {
 		int i;
 
 		for (i = 0; i < eap_ds->response->length - 4; i++) {
@@ -168,7 +168,7 @@ static int CC_HINT(nonnull) mod_process(void *instance, eap_handler_t *handler)
 	/*
 	 *	Handle passwords here.
 	 */
-	if (inst->auth_type == PW_AUTHTYPE_LOCAL) {
+	if (inst->auth_type == PW_AUTH_TYPE_LOCAL) {
 		/*
 		 *	For now, do cleartext password authentication.
 		 */

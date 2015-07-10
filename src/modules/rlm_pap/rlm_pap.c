@@ -529,9 +529,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 static rlm_rcode_t CC_HINT(nonnull) pap_auth_clear(UNUSED rlm_pap_t *inst, REQUEST *request, VALUE_PAIR *vp)
 {
 	if (RDEBUG_ENABLED3) {
-		RDEBUG3("Comparing with \"known good\" Cleartext-Password \"%s\"", vp->vp_strvalue);
+		RDEBUG3("Comparing with \"known good\" Cleartext-Password \"%s\" (%zd)", vp->vp_strvalue, vp->vp_length);
 	} else {
-		RDEBUG3("Comparing with \"known good\" Cleartext-Password");
+		RDEBUG("Comparing with \"known good\" Cleartext-Password");
 	}
 
 	if ((vp->vp_length != request->password->vp_length) ||
@@ -970,7 +970,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	}
 
 	if (RDEBUG_ENABLED3) {
-		RDEBUG3("Login attempt with password \"%s\"", request->password->vp_strvalue);
+		RDEBUG3("Login attempt with password \"%s\" (%zd)", request->password->vp_strvalue, request->password->vp_length);
 	} else {
 		RDEBUG("Login attempt with password");
 	}
@@ -1076,21 +1076,14 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
  */
 extern module_t rlm_pap;
 module_t rlm_pap = {
-	RLM_MODULE_INIT,
-	"PAP",
-	RLM_TYPE_HUP_SAFE,   	/* type */
-	sizeof(rlm_pap_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	NULL,				/* detach */
-	{
-		mod_authenticate,	/* authentication */
-		mod_authorize,		/* authorization */
-		NULL,			/* preaccounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "pap",
+	.type		= RLM_TYPE_HUP_SAFE,
+	.inst_size	= sizeof(rlm_pap_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize
 	},
 };

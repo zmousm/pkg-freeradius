@@ -290,6 +290,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 		fr_ipaddr_t my_ipaddr;
 
 		my_ipaddr.af = AF_INET;
+		my_ipaddr.prefix = 32;
 		my_ipaddr.ipaddr.ip4addr.s_addr = vp->vp_ipaddr;
 
 		/*
@@ -300,8 +301,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 		 *	send it there again.
 		 */
 		for (i = 0; i < realm->acct_pool->num_home_servers; i++) {
-			if (fr_ipaddr_cmp(&realm->acct_pool->servers[i]->ipaddr,
-					    &my_ipaddr) == 0) {
+			if (fr_ipaddr_cmp(&realm->acct_pool->servers[i]->ipaddr, &my_ipaddr) == 0) {
 				RDEBUG2("Suppressing proxy due to FreeRADIUS-Proxied-To");
 				return RLM_MODULE_OK;
 			}
@@ -505,25 +505,17 @@ static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 /* globally exported name */
 extern module_t rlm_realm;
 module_t rlm_realm = {
-	RLM_MODULE_INIT,
-	"realm",
-	RLM_TYPE_HUP_SAFE,   	/* type */
-	sizeof(struct rlm_realm_t),
-	module_config,
-	mod_instantiate,	       	/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		mod_authorize,	/* authorization */
-		mod_preacct,		/* preaccounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "realm",
+	.type		= RLM_TYPE_HUP_SAFE,
+	.inst_size	= sizeof(struct rlm_realm_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_authorize,
+		[MOD_PREACCT]		= mod_preacct,
 #ifdef WITH_COA
-		, mod_realm_recv_coa,	/* recv-coa */
-		NULL			/* send-coa */
+		[MOD_RECV_COA]		= mod_realm_recv_coa
 #endif
 	},
 };

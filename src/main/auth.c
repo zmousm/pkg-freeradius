@@ -177,8 +177,8 @@ static int CC_HINT(nonnull) rad_check_password(REQUEST *request)
 
 	/*
 	 *	Look for matching check items. We skip the whole lot
-	 *	if the authentication type is PW_AUTHTYPE_ACCEPT or
-	 *	PW_AUTHTYPE_REJECT.
+	 *	if the authentication type is PW_AUTH_TYPE_ACCEPT or
+	 *	PW_AUTH_TYPE_REJECT.
 	 */
 	fr_cursor_init(&cursor, &request->config);
 	while ((auth_type_pair = fr_cursor_next_by_num(&cursor, PW_AUTH_TYPE, 0, TAG_ANY))) {
@@ -186,7 +186,7 @@ static int CC_HINT(nonnull) rad_check_password(REQUEST *request)
 		auth_type_count++;
 
 		RDEBUG2("Found Auth-Type = %s", dict_valnamebyattr(PW_AUTH_TYPE, 0, auth_type));
-		if (auth_type == PW_AUTHTYPE_REJECT) {
+		if (auth_type == PW_AUTH_TYPE_REJECT) {
 			RDEBUG2("Auth-Type = Reject, rejecting user");
 
 			return -2;
@@ -197,7 +197,7 @@ static int CC_HINT(nonnull) rad_check_password(REQUEST *request)
 	 *	Warn if more than one Auth-Type was found, because only the last
 	 *	one found will actually be used.
 	 */
-	if ((auth_type_count > 1) && (debug_flag)) {
+	if ((auth_type_count > 1) && (rad_debug_lvl)) {
 		RERROR("Warning:  Found %d auth-types on request for user '%s'",
 			auth_type_count, request->username->vp_strvalue);
 	}
@@ -207,7 +207,7 @@ static int CC_HINT(nonnull) rad_check_password(REQUEST *request)
 	 *	rejected in the above loop. So that means it is accepted and we
 	 *	do no further authentication.
 	 */
-	if ((auth_type == PW_AUTHTYPE_ACCEPT)
+	if ((auth_type == PW_AUTH_TYPE_ACCEPT)
 #ifdef WITH_PROXY
 	    || (request->proxy)
 #endif
@@ -434,7 +434,7 @@ int rad_authenticate(REQUEST *request)
 			tmp = radius_paircreate(request,
 						&request->config,
 						PW_AUTH_TYPE, 0);
-			if (tmp) tmp->vp_integer = PW_AUTHTYPE_ACCEPT;
+			if (tmp) tmp->vp_integer = PW_AUTH_TYPE_ACCEPT;
 			goto authenticate;
 
 		/*
@@ -599,7 +599,7 @@ authenticate:
 		if (request->password) {
 			VERIFY_VP(request->password);
 			/* double check: maybe the secret is wrong? */
-			if ((debug_flag > 1) && (request->password->da->attr == PW_USER_PASSWORD)) {
+			if ((rad_debug_lvl > 1) && (request->password->da->attr == PW_USER_PASSWORD)) {
 				uint8_t const *p;
 
 				p = (uint8_t const *) request->password->vp_strvalue;

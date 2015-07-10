@@ -454,6 +454,20 @@ static void perl_parse_config(CONF_SECTION *cs, int lvl, HV *rad_hv)
 	DEBUG("%*s}", indent_section, " ");
 }
 
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
+{
+	rlm_perl_t	*inst = instance;
+
+	char const	*xlat_name;
+
+	xlat_name = cf_section_name2(conf);
+	if (!xlat_name) xlat_name = cf_section_name1(conf);
+
+	xlat_register(xlat_name, perl_xlat, NULL, inst);
+
+	return 0;
+}
+
 /*
  *	Do any per-module initialization that is separate to each
  *	configured instance of the module.  e.g. set up connections
@@ -476,13 +490,10 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	char const	**embed_c;	/* Stupid Perl and lack of const consistency */
 	char		**embed;
 	char		**envp = NULL;
-	char const	*xlat_name;
 	int		exitstatus = 0, argc=0;
+	char		arg[] = "0";
 
-	CONF_SECTION *cs;
-
-	MEM(embed_c = talloc_zero_array(inst, char const *, 4));
-	memcpy(&embed, &embed_c, sizeof(embed));
+	CONF_SECTION	*cs;
 
 #ifdef USE_ITHREADS
 	/*
@@ -496,8 +507,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	rlm_perl_make_key(inst->thread_key);
 #endif
 
-	char arg[] = "0";
-
+	/*
+	 *	Setup the argument array we pass to the perl interpreter
+	 */
+	MEM(embed_c = talloc_zero_array(inst, char const *, 4));
+	memcpy(&embed, &embed_c, sizeof(embed));
 	embed_c[0] = NULL;
 	if (inst->perl_flags) {
 		embed_c[1] = inst->perl_flags;
@@ -510,14 +524,20 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		argc = 3;
 	}
 
+	/*
+	 *	Create tweak the server's environment to support
+	 *	perl. Docs say only call this once... Oops.
+	 */
 	PERL_SYS_INIT3(&argc, &embed, &envp);
 
+	/*
+	 *	Allocate a new perl interpreter to do the parsing
+	 */
 	if ((inst->perl = perl_alloc()) == NULL) {
 		ERROR("rlm_perl: No memory for allocating new perl !");
-		return (-1);
+		return -1;
 	}
-
-	perl_construct(inst->perl);
+	perl_construct(inst->perl);	/* ...and initialise it */
 
 #ifdef USE_ITHREADS
 	PL_perl_destruct_level = 2;
@@ -532,29 +552,21 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	PL_exit_flags |= PERL_EXIT_DESTRUCT_END;
 #endif
 
-	xlat_name = cf_section_name2(conf);
-	if (!xlat_name) xlat_name = cf_section_name1(conf);
-	if (xlat_name) xlat_register(xlat_name, perl_xlat, NULL, inst);
-
 	exitstatus = perl_parse(inst->perl, xs_init, argc, embed, NULL);
 
 	end_AV = PL_endav;
 	PL_endav = (AV *)NULL;
 
 	if (exitstatus) {
-		ERROR("rlm_perl: perl_parse failed: %s not found or has syntax errors. \n", inst->module);
+		ERROR("rlm_perl: perl_parse failed: %s not found or has syntax errors", inst->module);
 		return -1;
 	}
 
 	/* parse perl configuration sub-section */
 	cs = cf_section_sub_find(conf, "config");
 	if (cs) {
-		DEBUG("rlm_perl (%s): parsing 'config' section...", xlat_name);
-
-		inst->rad_perlconf_hv = get_hv("RAD_PERLCONF",1);
+		inst->rad_perlconf_hv = get_hv("RAD_PERLCONF", 1);
 		perl_parse_config(cs, 0, inst->rad_perlconf_hv);
-
-		DEBUG("rlm_perl (%s): done parsing 'config'.", xlat_name);
 	}
 
 	inst->perl_parsed = true;
@@ -1019,33 +1031,32 @@ DIAG_ON(nested-externs)
  */
 extern module_t rlm_perl;
 module_t rlm_perl = {
-	RLM_MODULE_INIT,
-	"perl",				/* Name */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "perl",
 #ifdef USE_ITHREADS
-	RLM_TYPE_THREAD_SAFE,		/* type */
+	.type		= RLM_TYPE_THREAD_SAFE,
 #else
-	RLM_TYPE_THREAD_UNSAFE,
+	.type		= RLM_TYPE_THREAD_UNSAFE,
 #endif
-	sizeof(rlm_perl_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	mod_detach,			/* detach */
-	{
-		mod_authenticate,	/* authenticate */
-		mod_authorize,		/* authorize */
-		mod_preacct,		/* preacct */
-		mod_accounting,		/* accounting */
-		mod_checksimul,      	/* check simul */
+	.inst_size	= sizeof(rlm_perl_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize,
+		[MOD_PREACCT]		= mod_preacct,
+		[MOD_ACCOUNTING]	= mod_accounting,
+		[MOD_SESSION]		= mod_checksimul,
 #ifdef WITH_PROXY
-		mod_pre_proxy,		/* pre-proxy */
-		mod_post_proxy,		/* post-proxy */
-#else
-		NULL, NULL,
+		[MOD_PRE_PROXY]		= mod_pre_proxy,
+		[MOD_POST_PROXY]	= mod_post_proxy,
 #endif
-		mod_post_auth		/* post-auth */
+		[MOD_POST_AUTH]		= mod_post_auth,
 #ifdef WITH_COA
-		, mod_recv_coa,
-		mod_send_coa
+		[MOD_RECV_COA]		= mod_recv_coa,
+		[MOD_SEND_COA]		= mod_send_coa
 #endif
 	},
 };

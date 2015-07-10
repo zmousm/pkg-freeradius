@@ -24,6 +24,7 @@ ldap {
 #	port = 389
 
 	#  Administrator account for searching and possibly modifying.
+	#  If using SASL + KRB5 these should be commented out.
 #	identity = 'cn=admin,dc=example,dc=org'
 #	password = mypass
 
@@ -31,9 +32,36 @@ ldap {
 	#  searches will start from.
 	base_dn = 'dc=example,dc=org'
 
-	#  SASL mechanism to use for administrative binds.
-	#  Uncomment for certificate auth or peercred auth (ldapi:// only).
-#	sasl_mech = 'EXTERNAL'
+	#
+	#  SASL parameters to use for admin binds
+	#
+	#  When we're prompted by the SASL library, these control
+	#  the responses given, as well as the identity and password
+	#  directives above.
+	#
+	#  If any directive is commented out, a NULL response will be
+	#  provided to cyrus-sasl.
+	#
+	#  Unfortunately the only way to control Keberos here is through
+	#  environmental variables, as cyrus-sasl provides no API to
+	#  set the krb5 config directly.
+	#
+	#  Full documentation for MIT krb5 can be found here:
+	#
+	#	http://web.mit.edu/kerberos/krb5-devel/doc/admin/env_variables.html
+	#
+	#  At a minimum you probably want to set KRB5_CLIENT_KTNAME.
+	#
+	sasl {
+		# SASL mechanism
+#		mech = 'PLAIN'
+
+		# SASL authorisation identity to proxy.
+#		proxy = 'autz_id'
+
+		# SASL realm. Used for kerberos.
+#		realm = 'example.org'
+	}
 
 	#
 	#  Generic valuepair attribute
@@ -92,8 +120,9 @@ ldap {
 		#  Where only a list is specified as the RADIUS attribute,
 		#  the value of the LDAP attribute is parsed as a valuepair
 		#  in the same format as the 'valuepair_attribute' (above).
-		control:			+= 'radiusCheckAttributes'
-		reply:				+= 'radiusReplyAttributes'
+		control:			+= 'radiusControlAttribute'
+		request:			+= 'radiusRequestAttribute'
+		reply:				+= 'radiusReplyAttribute'
 	}
 
 	#  Set to yes if you have eDirectory and want to use the universal
@@ -121,14 +150,30 @@ ldap {
 	#
 	user {
 		#  Where to start searching in the tree for users
-		base_dn = '${..base_dn}'
+		base_dn = "${..base_dn}"
 
 		#  Filter for user objects, should be specific enough
 		#  to identify a single user object.
 		filter = "(uid=%{%{Stripped-User-Name}:-%{User-Name}})"
 
-		#  SASL mechanism to use for user binds.
-#		sasl_mech = 'PLAIN'
+		#  SASL parameters to use for user binds
+		#
+		#  When we're prompted by the SASL library, these control
+		#  the responses given.
+		#
+		#  Any of the config items below may be an attribute ref
+		#  or and expansion, so different SASL mechs, proxy IDs
+		#  and realms may be used for different users.
+		sasl {
+			# SASL mechanism
+#			mech = 'PLAIN'
+
+			# SASL authorisation identity to proxy.
+#			proxy = &User-Name
+
+			# SASL realm. Used for kerberos.
+#			realm = 'example.org'
+		}
 
 		#  Search scope, may be 'base', 'one', sub' or 'children'
 #		scope = 'sub'
@@ -181,7 +226,7 @@ ldap {
 	#
 	group {
 		#  Where to start searching in the tree for groups
-		base_dn = '${..base_dn}'
+		base_dn = "${..base_dn}"
 
 		#  Filter for group objects, should match all available
 		#  group objects a user might be a member of.
@@ -225,9 +270,10 @@ ldap {
 #		cacheable_name = 'no'
 #		cacheable_dn = 'no'
 
-		#  Override the normal cache attribute (<inst>-LDAP-Group)
-		#  and create a custom attribute.  This can help if multiple
-		#  module instances are used in fail-over.
+		#  Override the normal cache attribute (<inst>-LDAP-Group or
+		#  LDAP-Group if using the default instance) and create a
+		#  custom attribute.  This can help if multiple module instances
+		#  are used in fail-over.
 #		cache_attribute = 'LDAP-Cached-Membership'
 	}
 
@@ -255,7 +301,7 @@ ldap {
 	#
 	client {
 		#   Where to start searching in the tree for clients
-		base_dn = '${..base_dn}'
+		base_dn = "${..base_dn}"
 
 		#
 		#  Filter to match client objects
@@ -384,13 +430,13 @@ ldap {
 		rebind = yes
 
 		#  Seconds to wait for LDAP query to finish. default: 20
-		timeout = 10
+		res_timeout = 10
 
 		#  Seconds LDAP server has to process the query (server-side
 		#  time limit). default: 20
 		#
 		#  LDAP_OPT_TIMELIMIT is set to this value.
-		timelimit = 3
+		srv_timelimit = 3
 
 		#  Seconds to wait for response of the server. (network
 		#  failures) default: 10
@@ -464,11 +510,15 @@ ldap {
 	#  When the server is not threaded, the connection pool
 	#  limits are ignored, and only one connection is used.
 	pool {
-		#  Number of connections to start
-		start = 5
+		#  Connections to create during module instantiation.
+		#  If the server cannot create specified number of
+		#  connections during instantiation it will exit.
+		#  Set to 0 to allow the server to start without the
+		#  directory being available.
+		start = ${thread[pool].start_servers}
 
 		#  Minimum number of connections to keep open
-		min = 4
+		min = ${thread[pool].min_spare_servers}
 
 		#  Maximum number of connections
 		#
@@ -485,14 +535,19 @@ ldap {
 
 		#  Spare connections to be left idle
 		#
-		#  NOTE: Idle connections WILL be closed if 'idle_timeout'
-		#  is set.
-		spare = 3
+		#  NOTE: Idle connections WILL be closed if "idle_timeout"
+		#  is set.  This should be less than or equal to "max" above.
+		spare = ${thread[pool].max_spare_servers}
 
 		#  Number of uses before the connection is closed
 		#
-		#  0 means 'infinite'
+		#  0 means "infinite"
 		uses = 0
+
+		#  The number of seconds to wait after the server tries
+		#  to open a connection, and fails.  During this time,
+		#  no new connections will be opened.
+		retry_delay = 30
 
 		#  The lifetime (in seconds) of the connection
 		lifetime = 0
@@ -500,12 +555,6 @@ ldap {
 		#  Idle timeout (in seconds).  A connection which is
 		#  unused for this length of time will be closed.
 		idle_timeout = 60
-
-		# The number of seconds to wait after the server tries
-		# to open a connection, and fails.  During this time,
-		# no new connections will be opened.
-		#
-		retry_delay = 1
 
 		#  NOTE: All configuration settings are enforced.  If a
 		#  connection is closed because of 'idle_timeout',

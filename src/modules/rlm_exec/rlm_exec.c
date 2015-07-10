@@ -180,7 +180,7 @@ static ssize_t exec_xlat(void *instance, REQUEST *request, char const *fmt, char
 	 *	This function does it's own xlat of the input program
 	 *	to execute.
 	 */
-	result = radius_exec_program(out, outlen, NULL, request, fmt,  input_pairs ? *input_pairs : NULL,
+	result = radius_exec_program(request, out, outlen, NULL, request, fmt,  input_pairs ? *input_pairs : NULL,
 				     inst->wait, inst->shell_escape, inst->timeout);
 	if (result != 0) {
 		out[0] = '\0';
@@ -204,7 +204,7 @@ static ssize_t exec_xlat(void *instance, REQUEST *request, char const *fmt, char
  *	that must be referenced in later calls, store a handle to it
  *	in *instance otherwise put a null pointer there.
  */
-static int mod_instantiate(CONF_SECTION *conf, void *instance)
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 {
 	char const *p;
 	rlm_exec_t	*inst = instance;
@@ -340,7 +340,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_exec_dispatch(void *instance, REQUEST *r
 	 *	This function does it's own xlat of the input program
 	 *	to execute.
 	 */
-	status = radius_exec_program(out, sizeof(out), inst->output ? &answer : NULL, request,
+	status = radius_exec_program(request, out, sizeof(out), inst->output ? &answer : NULL, request,
 				     inst->program, inst->input ? *input_pairs : NULL,
 				     inst->wait, inst->shell_escape, inst->timeout);
 	rcode = rlm_exec_status2rcode(request, out, strlen(out), status);
@@ -390,7 +390,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	}
 
 	tmp = NULL;
-	status = radius_exec_program(out, sizeof(out), &tmp, request, vp->vp_strvalue, request->packet->vps,
+	status = radius_exec_program(request, out, sizeof(out), &tmp, request, vp->vp_strvalue, request->packet->vps,
 				     we_wait, inst->shell_escape, inst->timeout);
 	rcode = rlm_exec_status2rcode(request, out, strlen(out), status);
 
@@ -447,7 +447,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 		return RLM_MODULE_NOOP;
 	}
 
-	status = radius_exec_program(out, sizeof(out), NULL, request, vp->vp_strvalue, request->packet->vps,
+	status = radius_exec_program(request, out, sizeof(out), NULL, request, vp->vp_strvalue, request->packet->vps,
 				     we_wait, inst->shell_escape, inst->timeout);
 	return rlm_exec_status2rcode(request, out, strlen(out), status);
 }
@@ -463,25 +463,23 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
  */
 extern module_t rlm_exec;
 module_t rlm_exec = {
-	RLM_MODULE_INIT,
-	"exec",				/* Name */
-	RLM_TYPE_THREAD_SAFE,   	/* type */
-	sizeof(rlm_exec_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	NULL,				/* detach */
-	{
-		mod_exec_dispatch,	/* authentication */
-		mod_exec_dispatch,	/* authorization */
-		mod_exec_dispatch,	/* pre-accounting */
-		mod_accounting,		/* accounting */
-		NULL,			/* check simul */
-		mod_exec_dispatch,	/* pre-proxy */
-		mod_exec_dispatch,	/* post-proxy */
-		mod_post_auth		/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "exec",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_exec_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_exec_dispatch,
+		[MOD_AUTHORIZE]		= mod_exec_dispatch,
+		[MOD_PREACCT]		= mod_exec_dispatch,
+		[MOD_ACCOUNTING]	= mod_accounting,
+		[MOD_PRE_PROXY]		= mod_exec_dispatch,
+		[MOD_POST_PROXY]	= mod_exec_dispatch,
+		[MOD_POST_AUTH]		= mod_post_auth,
 #ifdef WITH_COA
-		, mod_exec_dispatch,
-		mod_exec_dispatch
+		[MOD_RECV_COA]		= mod_exec_dispatch,
+		[MOD_SEND_COA]		= mod_exec_dispatch
 #endif
 	},
 };

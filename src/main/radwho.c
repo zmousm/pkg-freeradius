@@ -45,7 +45,6 @@ static char const *eol = "\n";
 static int showname = -1;
 static int showptype = 0;
 static int showcid = 0;
-log_lvl_t debug_flag = 0;
 char const *progname = "radwho";
 char const *radlog_dir = NULL;
 
@@ -61,7 +60,7 @@ bool log_stripped_names;
 /*
  *	Global, for log.c to use.
  */
-struct main_config_t main_config;
+main_config_t main_config;
 
 #include <sys/wait.h>
 pid_t rad_fork(void)
@@ -90,7 +89,7 @@ static const CONF_PARSER module_config[] = {
  */
 static char *fullname(char *username)
 {
-#ifdef HAVE_PWD_Hx
+#ifdef HAVE_PWD_H
 	struct passwd *pwd;
 	char *s;
 
@@ -343,6 +342,7 @@ int main(int argc, char **argv)
 	snprintf(buffer, sizeof(buffer), "%.200s/radiusd.conf", raddb_dir);
 	if (cf_file_read(maincs, buffer) < 0) {
 		fprintf(stderr, "%s: Error reading or parsing radiusd.conf\n", argv[0]);
+		talloc_free(maincs);
 		exit(1);
 	}
 
