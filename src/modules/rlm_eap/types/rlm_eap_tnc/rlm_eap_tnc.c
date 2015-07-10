@@ -60,18 +60,16 @@
 #define SET_START(x) 		((x) | (0x20))
 
 typedef struct rlm_eap_tnc {
-	char	*connection_string;
+	char const	*connection_string;
 } rlm_eap_tnc_t;
 
 static CONF_PARSER module_config[] = {
-	{ "connection_string", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_tnc_t, connection_string), NULL,
-	  "NAS Port: %{NAS-Port} NAS IP: %{NAS-IP-Address} NAS_PORT_TYPE: %{NAS-Port-Type}"},
+	{ "connection_string", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_eap_tnc_t, connection_string), "NAS Port: %{NAS-Port} NAS IP: %{NAS-IP-Address} NAS_PORT_TYPE: %{NAS-Port-Type}" },
 
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
-static int tnc_attach(CONF_SECTION *cs, void **instance)
+static int mod_instantiate(CONF_SECTION *cs, void **instance)
 {
 	rlm_eap_tnc_t *inst;
 	TNC_Result result;
@@ -113,11 +111,6 @@ static int mod_detach(void *instance)
 	return 0;
 }
 
-static void tnc_free(void *conn_id)
-{
-	talloc_free(conn_id);
-}
-
 /*
  * This function is called when the first EAP_IDENTITY_RESPONSE message
  * was received.
@@ -138,7 +131,7 @@ static void tnc_free(void *conn_id)
  * For this package, only 'Identifier' has to be set dynamically. Any
  * other information is static.
  */
-static int tnc_initiate(void *instance, eap_handler_t *handler)
+static int mod_session_init(void *instance, eap_handler_t *handler)
 {
 	rlm_eap_tnc_t *inst = instance;
 	REQUEST *request = NULL;
@@ -208,7 +201,7 @@ static int tnc_initiate(void *instance, eap_handler_t *handler)
 	 */
 	MEM(eap_tnc_user = (TNC_BufferReference) strdup(username->vp_strvalue));
 
-	result = storeUsername(conn_id, eap_tnc_user, username->length);
+	result = storeUsername(conn_id, eap_tnc_user, username->vp_length);
 	if (result != TNC_RESULT_SUCCESS) {
 		ERROR("rlm_eap_tnc: NAA-EAP storeUsername returned an "
 		      "error code");
@@ -221,7 +214,6 @@ static int tnc_initiate(void *instance, eap_handler_t *handler)
 	 */
 	handler->opaque = talloc(handler, TNC_ConnectionID);
 	memcpy(handler->opaque, &conn_id, sizeof(TNC_ConnectionID));
-	handler->free_opaque = tnc_free;
 
 	/*
 	 *	Bild first EAP TNC request
@@ -245,7 +237,7 @@ static int tnc_initiate(void *instance, eap_handler_t *handler)
 	 *	stored in 'handler->eap_ds', which will be given back
 	 *	to us...
 	 */
-	handler->stage = AUTHENTICATE;
+	handler->stage = PROCESS;
 
 	return 1;
 }
@@ -260,7 +252,7 @@ static int tnc_initiate(void *instance, eap_handler_t *handler)
  * @param handler The eap_handler_t.
  * @return True, if successfully, else false.
  */
-static int mod_authenticate(UNUSED void *instance, eap_handler_t *handler)
+static int mod_process(UNUSED void *instance, eap_handler_t *handler)
 {
 	TNC_ConnectionID conn_id;
 	TNC_Result result;
@@ -309,12 +301,11 @@ static int mod_authenticate(UNUSED void *instance, eap_handler_t *handler)
 	switch (connection_state) {
 	case TNC_CONNECTION_STATE_HANDSHAKE:
 		code = PW_EAP_REQUEST;
-
 		break;
+
 	case TNC_CONNECTION_STATE_ACCESS_NONE:
 		code = PW_EAP_FAILURE;
 		pairmake_config("TNC-Status", "None", T_OP_SET);
-
 		break;
 
 	case TNC_CONNECTION_STATE_ACCESS_ALLOWED:
@@ -325,11 +316,10 @@ static int mod_authenticate(UNUSED void *instance, eap_handler_t *handler)
 	case TNC_CONNECTION_STATE_ACCESS_ISOLATED:
 		code = PW_EAP_SUCCESS;
 		pairmake_config("TNC-Status", "Isolate", T_OP_SET);
-
 		break;
+
 	default:
 		ERROR("rlm_eap_tnc: Invalid connection state");
-
 		return 0;
 	}
 
@@ -358,11 +348,11 @@ static int mod_authenticate(UNUSED void *instance, eap_handler_t *handler)
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
+extern rlm_eap_module_t rlm_eap_tnc;
 rlm_eap_module_t rlm_eap_tnc = {
-		"eap_tnc",
-		tnc_attach,		/* attach */
-		tnc_initiate,		/* Start the initial request */
-		NULL,			/* authorization */
-		mod_authenticate,	/* authentication */
-		mod_detach		/* detach */
+	.name		= "eap_tnc",
+	.instantiate	= mod_instantiate,	/* Create new submodule instance */
+	.session_init	= mod_session_init,	/* Initialise a new EAP session */
+	.process	= mod_process,		/* Process next round of EAP method */
+	.detach		= mod_detach		/* detach */
 };

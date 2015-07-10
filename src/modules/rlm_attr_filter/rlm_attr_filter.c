@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -31,29 +32,23 @@ RCSID("$Id$")
 
 #include	<ctype.h>
 #include	<fcntl.h>
-#include	<limits.h>
-
 
 /*
  *	Define a structure with the module configuration, so it can
  *	be used as the instance handle.
  */
 typedef struct rlm_attr_filter {
-	char		*filename;
-	char		*key;
+	char const	*filename;
+	char const	*key;
 	bool		relaxed;
 	PAIR_LIST	*attrs;
 } rlm_attr_filter_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "attrsfile",     PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_attr_filter_t, filename), NULL, NULL},
-	{ "filename",     PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED,
-	  offsetof(rlm_attr_filter_t, filename), NULL, NULL},
-	{ "key",     PW_TYPE_STRING_PTR,
-	  offsetof(rlm_attr_filter_t, key), NULL, "%{Realm}" },
-	{ "relaxed",    PW_TYPE_BOOLEAN,
-	  offsetof(rlm_attr_filter_t, relaxed), NULL, "no" },
+	{ "attrsfile", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED, rlm_attr_filter_t, filename), NULL },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED, rlm_attr_filter_t, filename), NULL },
+	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_attr_filter_t, key), "%{Realm}" },
+	{ "relaxed", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_attr_filter_t, relaxed), "no" },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -314,7 +309,7 @@ static rlm_rcode_t CC_HINT(nonnull(1,2)) attr_filter_common(void *instance, REQU
 	pairfree(&packet->vps);
 	packet->vps = output;
 
-	if (request->packet->code == PW_CODE_AUTHENTICATION_REQUEST) {
+	if (request->packet->code == PW_CODE_ACCESS_REQUEST) {
 		request->username = pairfind(request->packet->vps, PW_STRIPPED_USER_NAME, 0, TAG_ANY);
 		if (!request->username) {
 			request->username = pairfind(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
@@ -351,31 +346,26 @@ RLM_AF_FUNC(send_coa, reply)
 #endif
 
 /* globally exported name */
+extern module_t rlm_attr_filter;
 module_t rlm_attr_filter = {
-	RLM_MODULE_INIT,
-	"attr_filter",
-	RLM_TYPE_HUP_SAFE,   	/* type */
-	sizeof(rlm_attr_filter_t),
-	module_config,
-	mod_instantiate,	/* instantiation */
-	NULL,			/* detach */
-	{
-		NULL,		/* authentication */
-		mod_authorize,	/* authorization */
-		mod_preacct,	/* pre-acct */
-		mod_accounting,	/* accounting */
-		NULL,		/* checksimul */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "attr_filter",
+	.type		= RLM_TYPE_HUP_SAFE,
+	.inst_size	= sizeof(rlm_attr_filter_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_authorize,
+		[MOD_PREACCT]		= mod_preacct,
+		[MOD_ACCOUNTING]	= mod_accounting,
 #ifdef WITH_PROXY
-		mod_pre_proxy,	/* pre-proxy */
-		mod_post_proxy,	/* post-proxy */
-#else
-		NULL, NULL,
+		[MOD_PRE_PROXY]		= mod_pre_proxy,
+		[MOD_POST_PROXY]	= mod_post_proxy,
 #endif
-		mod_post_auth	/* post-auth */
+		[MOD_POST_AUTH]		= mod_post_auth,
 #ifdef WITH_COA
-		,
-		mod_recv_coa,
-		mod_send_coa
+		[MOD_RECV_COA]		= mod_recv_coa,
+		[MOD_SEND_COA]		= mod_send_coa
 #endif
 	},
 };

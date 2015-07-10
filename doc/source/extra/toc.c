@@ -23,19 +23,44 @@ of modules in each stage.
 - @subpage module_doc "2. Server modules"
 - @subpage client_doc "3. Client APIs"
 
-@section main_trees GIT Trees
+@section main_branches GIT Branch
 
-@subsection tree_dev Development Tree
+@subsection branch_master Experimental Branch
 
 @code
-git://git.freeradius.org/freeradius-server.git
+git clone git@github.com:FreeRADIUS/freeradius-server.git
 @endcode
 - Web: http://github.com/FreeRADIUS/freeradius-server/tree/master
 
-@subsection tree_2xx 2.x.x stable tree
+@subsection branch_31x 3.1.x feature branch
+
+@note Submit pull requests for new features or modules against this branch.
 
 @code
-git clone git://git.freeradius.org/freeradius-server.git
+git clone git@github.com:FreeRADIUS/freeradius-server.git
+cd freeradius-server
+git fetch origin v3.1.x:v3.1.x
+git checkout v3.1.x
+@endcode
+- Web: http://github.com/FreeRADIUS/freeradius-server/tree/v3.1.x
+
+@subsection branch_30x 3.0.x stable branch
+
+@code
+git clone git@github.com:FreeRADIUS/freeradius-server.git
+cd freeradius-server
+git fetch origin v3.0.x:v3.0.x
+git checkout v3.0.x
+@endcode
+- Web: http://github.com/FreeRADIUS/freeradius-server/tree/v3.0.x
+
+@subsection branch_2xx 2.x.x long-term support branch
+
+@note This branch is now permanently feature frozen. New features or modules 
+      should be submitted against the v3.1.x branch.
+
+@code
+git clone git@github.com:FreeRADIUS/freeradius-server.git 
 cd freeradius-server
 git fetch origin v2.x.x:v2.x.x
 git checkout v2.x.x

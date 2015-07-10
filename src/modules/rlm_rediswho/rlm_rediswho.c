@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -34,7 +35,7 @@ typedef struct rlm_rediswho_t {
 	char const *xlat_name;
 	CONF_SECTION *cs;
 
-	char *redis_instance_name;
+	char const *redis_instance_name;
 	REDIS_INST *redis_inst;
 
 	/*
@@ -46,18 +47,21 @@ typedef struct rlm_rediswho_t {
 	 *	How many session updates to keep track of per user
 	 */
 	int trim_count;
+	char const *insert;
+	char const *trim;
+	char const *expire;
 } rlm_rediswho_t;
 
 static CONF_PARSER module_config[] = {
-	{ "redis-instance-name", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_rediswho_t, redis_instance_name), NULL, NULL},
-	{ "redis_module_instance", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_rediswho_t, redis_instance_name), NULL, "redis"},
+	{ "redis-instance-name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_rediswho_t, redis_instance_name), NULL },
+	{ "redis_module_instance", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rediswho_t, redis_instance_name), "redis" },
 
-	{ "trim-count", PW_TYPE_INTEGER | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_rediswho_t, trim_count), NULL, NULL},
-	{ "trim_count", PW_TYPE_INTEGER,
-	  offsetof(rlm_rediswho_t, trim_count), NULL, "-1"},
+	{ "trim-count", FR_CONF_OFFSET(PW_TYPE_SIGNED | PW_TYPE_DEPRECATED, rlm_rediswho_t, trim_count), NULL },
+	{ "trim_count", FR_CONF_OFFSET(PW_TYPE_SIGNED, rlm_rediswho_t, trim_count), "-1" },
+
+	{ "insert", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED | PW_TYPE_XLAT, rlm_rediswho_t, insert), NULL },
+	{ "trim", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_rediswho_t, trim), NULL }, /* required only if trim_count > 0 */
+	{ "expire", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED | PW_TYPE_XLAT, rlm_rediswho_t, expire), NULL },
 
 	{ NULL, -1, 0, NULL, NULL}
 };
@@ -91,11 +95,13 @@ static int rediswho_command(char const *fmt, REDISSOCK **dissocket_p,
 		if (dissocket->reply->integer > 0)
 			result = dissocket->reply->integer;
 		break;
+
 	case REDIS_REPLY_STATUS:
 	case REDIS_REPLY_STRING:
 		DEBUG("rediswho_command: query response %s\n",
 		      dissocket->reply->str);
 		break;
+
 	default:
 		break;
 	}
@@ -117,8 +123,8 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	inst->cs = conf;
 
-	modinst = find_module_instance(cf_section_find("modules"),
-				       inst->redis_instance_name, 1);
+	modinst = module_instantiate(cf_section_find("modules"),
+				       inst->redis_instance_name);
 	if (!modinst) {
 		ERROR("rediswho: failed to find module instance \"%s\"",
 		       inst->redis_instance_name);
@@ -138,27 +144,24 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 }
 
 static int mod_accounting_all(REDISSOCK **dissocket_p,
-				   rlm_rediswho_t *inst, REQUEST *request,
-				   char const *insert,
-				   char const *trim,
-				   char const *expire)
+			      rlm_rediswho_t *inst, REQUEST *request)
 {
 	int result;
 
-	result = rediswho_command(insert, dissocket_p, inst, request);
+	result = rediswho_command(inst->insert, dissocket_p, inst, request);
 	if (result < 0) {
 		return RLM_MODULE_FAIL;
 	}
 
 	/* Only trim if necessary */
 	if (inst->trim_count >= 0 && result > inst->trim_count) {
-		if (rediswho_command(trim, dissocket_p,
+		if (rediswho_command(inst->trim, dissocket_p,
 				     inst, request) < 0) {
 			return RLM_MODULE_FAIL;
 		}
 	}
 
-	if (rediswho_command(expire, dissocket_p, inst, request) < 0) {
+	if (rediswho_command(inst->expire, dissocket_p, inst, request) < 0) {
 		return RLM_MODULE_FAIL;
 	}
 
@@ -171,13 +174,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void * instance, REQUEST * re
 	VALUE_PAIR * vp;
 	DICT_VALUE *dv;
 	CONF_SECTION *cs;
-	char const *insert, *trim, *expire;
 	rlm_rediswho_t *inst = (rlm_rediswho_t *) instance;
 	REDISSOCK *dissocket;
 
 	vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY);
 	if (!vp) {
-		RDEBUG("Could not find account status type in packet.");
+		RDEBUG("Could not find account status type in packet");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -196,37 +198,22 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void * instance, REQUEST * re
 	dissocket = fr_connection_get(inst->redis_inst->pool);
 	if (!dissocket) return RLM_MODULE_FAIL;
 
-	insert = cf_pair_value(cf_pair_find(cs, "insert"));
-	trim = cf_pair_value(cf_pair_find(cs, "trim"));
-	expire = cf_pair_value(cf_pair_find(cs, "expire"));
-
-	rcode = mod_accounting_all(&dissocket, inst, request,
-					insert,
-					trim,
-					expire);
+	rcode = mod_accounting_all(&dissocket, inst, request);
 
 	if (dissocket) fr_connection_release(inst->redis_inst->pool, dissocket);
 
 	return rcode;
 }
 
-
+extern module_t rlm_rediswho;
 module_t rlm_rediswho = {
-	RLM_MODULE_INIT,
-	"rediswho",
-	RLM_TYPE_THREAD_SAFE,	/* type */
-	sizeof(rlm_rediswho_t),
-	module_config,
-	mod_instantiate,	/* instantiation */
-	NULL, 			/* detach */
-	{
-		NULL, /* authentication */
-		NULL, /* authorization */
-		NULL, /* preaccounting */
-		mod_accounting, /* accounting */
-		NULL, /* checksimul */
-		NULL, /* pre-proxy */
-		NULL, /* post-proxy */
-		NULL /* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "rediswho",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_rediswho_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.methods = {
+		[MOD_ACCOUNTING]	= mod_accounting
 	},
 };

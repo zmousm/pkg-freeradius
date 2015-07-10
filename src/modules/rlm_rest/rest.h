@@ -14,7 +14,7 @@
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-/*
+/**
  * $Id$
  *
  * @brief Function prototypes and datatypes for the REST (HTTP) transport.
@@ -45,11 +45,13 @@ RCSIDH(other_h, "$Id$")
 #define REST_BODY_MAX_ATTRS		256
 
 typedef enum {
-	HTTP_METHOD_CUSTOM,
+	HTTP_METHOD_UNKNOWN = 0,
 	HTTP_METHOD_GET,
 	HTTP_METHOD_POST,
 	HTTP_METHOD_PUT,
-	HTTP_METHOD_DELETE
+	HTTP_METHOD_PATCH,
+	HTTP_METHOD_DELETE,
+	HTTP_METHOD_CUSTOM		//!< Must always come last, should not be in method table
 } http_method_t;
 
 typedef enum {
@@ -58,7 +60,8 @@ typedef enum {
 	HTTP_BODY_UNAVAILABLE,
 	HTTP_BODY_INVALID,
 	HTTP_BODY_NONE,
-	HTTP_BODY_CUSTOM,
+	HTTP_BODY_CUSTOM_XLAT,
+	HTTP_BODY_CUSTOM_LITERAL,
 	HTTP_BODY_POST,
 	HTTP_BODY_JSON,
 	HTTP_BODY_XML,
@@ -104,36 +107,38 @@ extern const FR_NAME_NUMBER http_content_type_table[];
  */
 typedef struct rlm_rest_section_t {
 	char const		*name;		//!< Section name.
-	char			*uri;		//!< URI to send HTTP request to.
+	char const		*uri;		//!< URI to send HTTP request to.
 
-	char			*method_str;	//!< The string version of the HTTP method.
+	char const		*method_str;	//!< The string version of the HTTP method.
 	http_method_t		method;		//!< What HTTP method should be used, GET, POST etc...
 
 	char const		*body_str;	//!< The string version of the encoding/content type.
 	http_body_type_t	body;		//!< What encoding type should be used.
 
+	char const		*force_to_str;	//!< Force decoding with this decoder.
 	http_body_type_t	force_to;	//!< Override the Content-Type header in the response
 						//!< to force decoding as a particular type.
 
-	char			*data;		//!< Custom body data (optional).
+	char const		*data;		//!< Custom body data (optional).
 
-	char			*auth_str;	//!< The string version of the Auth-Type.
+	char const		*auth_str;	//!< The string version of the Auth-Type.
 	http_auth_type_t	auth;		//!< HTTP auth type.
 	bool			require_auth;	//!< Whether HTTP-Auth is required or not.
-	char			*username;	//!< Username used for HTTP-Auth
-	char			*password;	//!< Password used for HTTP-Auth
+	char const		*username;	//!< Username used for HTTP-Auth
+	char const		*password;	//!< Password used for HTTP-Auth
 
-	char			*tls_certificate_file;
-	char			*tls_private_key_file;
-	char			*tls_private_key_password;
-	char			*tls_ca_file;
-	char			*tls_ca_path;
-	char			*tls_random_file;
+	char const		*tls_certificate_file;
+	char const		*tls_private_key_file;
+	char const		*tls_private_key_password;
+	char const		*tls_ca_file;
+	char const		*tls_ca_path;
+	char const		*tls_random_file;
 	bool			tls_check_cert;
 	bool			tls_check_cert_cn;
 
-	int			timeout;	//!< Timeout passed to CURL.
-	size_t			chunk;		//!< Max chunk-size (mainly for testing the encoders)
+	struct timeval		timeout_tv;	//!< Timeout timeval.
+	long			timeout;	//!< Timeout in ms.
+	uint32_t		chunk;		//!< Max chunk-size (mainly for testing the encoders)
 } rlm_rest_section_t;
 
 /*
@@ -142,8 +147,11 @@ typedef struct rlm_rest_section_t {
 typedef struct rlm_rest_t {
 	char const		*xlat_name;	//!< Instance name.
 
-	char			*connect_uri;	//!< URI we attempt to connect to, to pre-establish
+	char const		*connect_uri;	//!< URI we attempt to connect to, to pre-establish
 						//!< TCP connections.
+
+	struct timeval		connect_timeout_tv;	//!< Connection timeout timeval.
+	long			connect_timeout;	//!< Connection timeout ms.
 
 	fr_connection_pool_t	*conn_pool;	//!< Pointer to the connection pool.
 
@@ -152,7 +160,7 @@ typedef struct rlm_rest_t {
 	rlm_rest_section_t	accounting;	//!< Configuration specific to accounting.
 	rlm_rest_section_t	checksimul;	//!< Configuration specific to simultaneous session
 						//!< checking.
-	rlm_rest_section_t	postauth;	//!< Configuration specific to Post-auth
+	rlm_rest_section_t	post_auth;	//!< Configuration specific to Post-auth
 } rlm_rest_t;
 
 /*
@@ -162,6 +170,7 @@ typedef enum {
 	READ_STATE_INIT	= 0,
 	READ_STATE_ATTR_BEGIN,
 	READ_STATE_ATTR_CONT,
+	READ_STATE_ATTR_END,
 	READ_STATE_END,
 } read_state_t;
 
@@ -246,11 +255,9 @@ int rest_init(rlm_rest_t *instance);
 
 void rest_cleanup(void);
 
-void *mod_conn_create(void *instance);
+void *mod_conn_create(TALLOC_CTX *ctx, void *instance);
 
 int mod_conn_alive(void *instance, void *handle);
-
-int mod_conn_delete(void *instance, void *handle);
 
 /*
  *	Request processing API
@@ -268,6 +275,8 @@ int rest_request_perform(rlm_rest_t *instance,
 int rest_response_decode(rlm_rest_t *instance,
 			UNUSED rlm_rest_section_t *section, REQUEST *request,
 			void *handle);
+
+void rest_response_error(REQUEST *request, rlm_rest_handle_t *handle);
 
 void rest_request_cleanup(rlm_rest_t *instance, rlm_rest_section_t *section,
 			  void *handle);

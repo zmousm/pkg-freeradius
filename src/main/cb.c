@@ -30,50 +30,45 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 void cbtls_info(SSL const *s, int where, int ret)
 {
 	char const *str, *state;
-	int w;
 	REQUEST *request = SSL_get_ex_data(s, FR_TLS_EX_INDEX_REQUEST);
-	char buffer[1024];
 
-	w = where & ~SSL_ST_MASK;
-	if (w & SSL_ST_CONNECT) str="    TLS_connect";
-	else if (w & SSL_ST_ACCEPT) str="    TLS_accept";
-	else str="    (other)";
-
-	state = SSL_state_string_long(s);
-	state = state ? state : "NULL";
-	buffer[0] = '\0';
-
-	if (where & SSL_CB_LOOP) {
-		RDEBUG2("%s: %s", str, state);
-	} else if (where & SSL_CB_HANDSHAKE_START) {
-		RDEBUG2("%s: %s", str, state);
-	} else if (where & SSL_CB_HANDSHAKE_DONE) {
-		RDEBUG2("%s: %s", str, state);
-	} else if (where & SSL_CB_ALERT) {
-		str=(where & SSL_CB_READ)?"read":"write";
-
-		snprintf(buffer, sizeof(buffer), "TLS Alert %s:%s:%s",
-			 str,
-			 SSL_alert_type_string_long(ret),
-			 SSL_alert_desc_string_long(ret));
-	} else if (where & SSL_CB_EXIT) {
-		if (ret == 0) {
-			snprintf(buffer, sizeof(buffer), "%s: failed in %s",
-				 str, state);
-
-		} else if (ret < 0) {
-			if (SSL_want_read(s)) {
-				RDEBUG2("%s: Need to read more data: %s",
-				       str, state);
-			} else {
-				snprintf(buffer, sizeof(buffer),
-					 "%s: error in %s", str, state);
-			}
-		}
+	if ((where & ~SSL_ST_MASK) & SSL_ST_CONNECT) {
+		str="TLS_connect";
+	} else if (((where & ~SSL_ST_MASK)) & SSL_ST_ACCEPT) {
+		str="TLS_accept";
+	} else {
+		str="(other)";
 	}
 
-	if (buffer[0] && request) {
-		REDEBUG("SSL says: %s", buffer);
+	state = SSL_state_string_long(s);
+	state = state ? state : "<none>";
+
+	if ((where & SSL_CB_LOOP) || (where & SSL_CB_HANDSHAKE_START) || (where & SSL_CB_HANDSHAKE_DONE)) {
+		RDEBUG2("%s: %s", str, state);
+		return;
+	}
+
+	if (where & SSL_CB_ALERT) {
+		if ((ret & 0xff) == SSL_AD_CLOSE_NOTIFY) return;
+
+		RERROR("TLS Alert %s:%s:%s", (where & SSL_CB_READ) ? "read": "write",
+		       SSL_alert_type_string_long(ret), SSL_alert_desc_string_long(ret));
+		return;
+	}
+
+	if (where & SSL_CB_EXIT) {
+		if (ret == 0) {
+			RERROR("%s: Failed in %s", str, state);
+			return;
+		}
+
+		if (ret < 0) {
+			if (SSL_want_read(s)) {
+				RDEBUG2("%s: Need to read more data: %s", str, state);
+				return;
+			}
+			ERROR("tls: %s: Error in %s", str, state);
+		}
 	}
 }
 
@@ -81,30 +76,31 @@ void cbtls_info(SSL const *s, int where, int ret)
  *	Fill in our 'info' with TLS data.
  */
 void cbtls_msg(int write_p, int msg_version, int content_type,
-	       void const *buf, size_t len,
+	       void const *inbuf, size_t len,
 	       SSL *ssl UNUSED, void *arg)
 {
+	uint8_t const *buf = inbuf;
 	tls_session_t *state = (tls_session_t *)arg;
 
 	/*
 	 *	Work around bug #298, where we may be called with a NULL
 	 *	argument.  We should really log a serious error
 	 */
-	if (!arg) return;
+	if (!state) return;
 
-	state->info.origin = (unsigned char)write_p;
-	state->info.content_type = (unsigned char)content_type;
+	state->info.origin = write_p;
+	state->info.content_type = content_type;
 	state->info.record_len = len;
 	state->info.version = msg_version;
-	state->info.initialized = 1;
+	state->info.initialized = true;
 
 	if (content_type == SSL3_RT_ALERT) {
-		state->info.alert_level = ((unsigned char const *)buf)[0];
-		state->info.alert_description = ((unsigned char const *)buf)[1];
+		state->info.alert_level = buf[0];
+		state->info.alert_description = buf[1];
 		state->info.handshake_type = 0x00;
 
 	} else if (content_type == SSL3_RT_HANDSHAKE) {
-		state->info.handshake_type = ((unsigned char const *)buf)[0];
+		state->info.handshake_type = buf[0];
 		state->info.alert_level = 0x00;
 		state->info.alert_description = 0x00;
 

@@ -60,15 +60,15 @@ RCSID("$Id$")
 #include <gdbm.h>
 #include "../../include/md5.h"
 
-int active = 0;
+static int active = 0;
 
-int aflag = 0;
-int cflag = 0;
-int rflag = 0;
-int vflag = 0;
-int nflag = 0;
-int oflag = 0;
-int uflag = 0;
+static int aflag = 0;
+static int cflag = 0;
+static int rflag = 0;
+static int vflag = 0;
+static int nflag = 0;
+static int oflag = 0;
+static int uflag = 0;
 
 typedef struct ippool_info {
 	uint32_t	ipaddr;
@@ -82,7 +82,7 @@ typedef struct ippool_info {
 
 typedef struct old_ippool_key {
 	char nas[MAX_NAS_NAME_SIZE];
-	unsigned int port;
+	uint16_t port;
 } old_ippool_key;
 
 typedef struct ippool_key {
@@ -104,25 +104,27 @@ void usage(char *argv0);
 void addip(char *sessiondbname, char *indexdbname, char *ipaddress,
 	   char *NASname, char *NASport, int old)
 {
-	GDBM_FILE sessiondb;
-	GDBM_FILE indexdb;
-	datum key_datum, data_datum, save_datum;
-	datum nextkey;
+	GDBM_FILE	sessiondb;
+	GDBM_FILE	indexdb;
+	datum		key_datum, data_datum, save_datum;
+	datum		nextkey;
 
-	ippool_key key;
-	old_ippool_key old_key;
+	ippool_key	key;
+	old_ippool_key	old_key;
 
-	ippool_info entry;
-	struct in_addr ipaddr;
-	uint8_t key_str[17];
-	char hex_str[35];
-	int num = 0;
-	int mppp = 0;
-	int mode = GDBM_WRITER;
-	signed int rcode;
-	int delete = 0;
-	int port;
-	int found = 0;
+	ippool_info	entry;
+	struct in_addr	ipaddr;
+	uint8_t		key_str[17];
+	char		hex_str[35];
+	int		num = 0;
+	int		mppp = 0;
+	int		mode = GDBM_WRITER;
+	int		rcode;
+	int		delete = 0;
+	uint16_t	port;
+	bool		found = false;
+
+	memset(&key, 0, sizeof(key));	/* -Winitialize */
 
 	sessiondb = gdbm_open(sessiondbname, 512, mode, 0,NULL);
 	indexdb = gdbm_open(indexdbname, 512, mode, 0,NULL);
@@ -157,9 +159,9 @@ void addip(char *sessiondbname, char *indexdbname, char *ipaddress,
 
 		snprintf(md5_input_str, MAX_STRING_LEN, "%s %s", NASname, NASport);
 
-		fr_MD5Init(&md5_context);
-		fr_MD5Update(&md5_context, (uint8_t *) md5_input_str, strlen(md5_input_str));
-		fr_MD5Final(key_str, &md5_context);
+		fr_md5_init(&md5_context);
+		fr_md5_update(&md5_context, (uint8_t *) md5_input_str, strlen(md5_input_str));
+		fr_md5_final(key_str, &md5_context);
 
 		memcpy(key.key, key_str, 16);
 		fr_bin2hex(hex_str, key_str, 16);
@@ -171,7 +173,7 @@ void addip(char *sessiondbname, char *indexdbname, char *ipaddress,
 
 	data_datum = gdbm_fetch(sessiondb, key_datum);
 	if (data_datum.dptr != NULL){
-		found = 1;
+		found = true;
 		memcpy(&entry, data_datum.dptr, sizeof(ippool_info));
 
 		if (entry.active){
@@ -386,9 +388,9 @@ void tonewformat(char *sessiondbname, char *newsessiondbname) {
 
 		snprintf(md5_input_str, MAX_STRING_LEN, "%s %d", old_key.nas, old_key.port);
 
-		fr_MD5Init(&md5_context);
-		fr_MD5Update(&md5_context, (uint8_t *) md5_input_str, strlen(md5_input_str));
-		fr_MD5Final(key_str, &md5_context);
+		fr_md5_init(&md5_context);
+		fr_md5_update(&md5_context, (uint8_t *) md5_input_str, strlen(md5_input_str));
+		fr_md5_final(key_str, &md5_context);
 
 		memcpy(key.key, key_str, 16);
 		fr_bin2hex(hex_str, key_str, 16);
@@ -591,14 +593,36 @@ int main(int argc, char **argv) {
 
 	while ((ch = getopt(argc, argv, "acrvnou"))!= -1)
 	switch (ch) {
-	case 'a': aflag++;break;
-	case 'c': cflag++;break;
-	case 'r': rflag++;break;
-	case 'v': vflag = 1;break;
-	case 'n': nflag = 1;break;
-	case 'o': oflag = 1;break;
-	case 'u': uflag = 1;break;
-	default: usage(argv0);
+	case 'a':
+		aflag++;
+		break;
+
+	case 'c':
+		cflag++;
+		break;
+
+	case 'r':
+		rflag++;
+		break;
+
+	case 'v':
+		vflag = 1;
+		break;
+
+	case 'n':
+		nflag = 1;
+		break;
+
+	case 'o':
+		oflag = 1;
+		break;
+
+	case 'u':
+		uflag = 1;
+		break;
+
+	default:
+		usage(argv0);
 	}
 	argc -= optind;
 	argv += optind;

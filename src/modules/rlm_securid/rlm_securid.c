@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -39,14 +40,10 @@ typedef enum {
 
 
 static const CONF_PARSER module_config[] = {
-	{ "timer_expire", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, timer_limit), NULL, "600"},
-	{ "max_sessions", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, max_sessions), NULL, "2048"},
-	{ "max_trips_per_session", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, max_trips_per_session), NULL, NULL},
-	{ "max_round_trips", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, max_trips_per_session), NULL, "6"},
+	{ "timer_expire", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, timer_limit), "600" },
+	{ "max_sessions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_sessions), "2048" },
+	{ "max_trips_per_session", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_trips_per_session), NULL },
+	{ "max_round_trips", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_trips_per_session), "6" },
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
@@ -440,9 +437,9 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 	 *	Lookup sessions in the tree.  We don't free them in
 	 *	the tree, as that's taken care of elsewhere...
 	 */
-	inst->session_tree = rbtree_create(securid_session_cmp, NULL, 0);
+	inst->session_tree = rbtree_create(NULL, securid_session_cmp, NULL, 0);
 	if (!inst->session_tree) {
-		ERROR("rlm_securid: Cannot initialize session tree.");
+		ERROR("rlm_securid: Cannot initialize session tree");
 		return -1;
 	}
 
@@ -467,12 +464,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	 *	a User-Name attribute.
 	 */
 	if (!request->username) {
-		AUTH("rlm_securid: Attribute \"User-Name\" is required for authentication.");
+		AUTH("rlm_securid: Attribute \"User-Name\" is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 
 	if (!request->password) {
-		RAUTH("Attribute \"Password\" is required for authentication.");
+		RAUTH("Attribute \"Password\" is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 
@@ -487,7 +484,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	/*
 	 *	The user MUST supply a non-zero-length password.
 	 */
-	if (request->password->length == 0) {
+	if (request->password->vp_length == 0) {
 		REDEBUG("Password should not be empty");
 		return RLM_MODULE_INVALID;
 	}
@@ -524,7 +521,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 
 		/* Mark the packet as a Acceess-Challenge Packet */
 		request->reply->code = PW_CODE_ACCESS_CHALLENGE;
-		RDEBUG("Sending Access-Challenge.");
+		RDEBUG("Sending Access-Challenge");
 		rcode = RLM_MODULE_HANDLED;
 		break;
 
@@ -551,22 +548,16 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_securid;
 module_t rlm_securid = {
-	RLM_MODULE_INIT,
-	"securid",
-	RLM_TYPE_HUP_SAFE,   	/* type */
-	sizeof(rlm_securid_t),
-	module_config,
-	mod_instantiate, 		/* instantiation */
-	mod_detach, 			/* detach */
-	{
-		mod_authenticate, 	/* authentication */
-		NULL, 			/* authorization */
-		NULL, 			/* preaccounting */
-		NULL, 			/* accounting */
-		NULL, 			/* checksimul */
-		NULL, 			/* pre-proxy */
-		NULL, 			/* post-proxy */
-		NULL			/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "securid",
+	.type		= RLM_TYPE_HUP_SAFE,
+	.inst_size	= sizeof(rlm_securid_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate
 	},
 };

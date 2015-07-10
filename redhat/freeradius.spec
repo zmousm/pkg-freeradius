@@ -7,15 +7,11 @@
 
 # experimental modules
 %bcond_with rlm_idn
-%bcond_with rlm_redis
-%bcond_with rlm_rest
 %bcond_with rlm_ruby
 %bcond_with rlm_sql_freetds
 %bcond_with rlm_sql_oracle
 %{?_with_rlm_idn: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_opendirectory: %global _with_experimental_modules --with-experimental-modules}
-%{?_with_rlm_redis: %global _with_experimental_modules --with-experimental-modules}
-%{?_with_rlm_rest: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_ruby: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_securid: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_sql_freetds: %global _with_experimental_modules --with-experimental-modules}
@@ -24,9 +20,6 @@
 %if %{?_with_experimental_modules:1}%{!?_with_experimental_modules:0}
 %{!?_with_rlm_idn: %global _without_rlm_idn --without-rlm_idn}
 %{!?_with_rlm_opendirectory: %global _without_rlm_opendirectory --without-rlm_opendirectory}
-%{!?_with_rlm_redis: %global _without_rlm_redis --without-rlm_redis}
-%{!?_with_rlm_redis: %global _without_rlm_rediswho --without-rlm_rediswho}
-%{!?_with_rlm_rest: %global _without_rlm_rest --without-rlm_rest}
 %{!?_with_rlm_ruby: %global _without_rlm_ruby --without-rlm_ruby}
 %{!?_with_rlm_securid: %global _without_rlm_securid --without-rlm_securid}
 %{!?_with_rlm_sql_freetds: %global _without_rlm_sql_freetds --without-rlm_sql_freetds}
@@ -35,8 +28,8 @@
 
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 3.0.3
-Release: 1%{?dist}
+Version: 3.0.9
+Release: 2%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -45,6 +38,7 @@ Source0: ftp://ftp.freeradius.org/pub/radius/freeradius-server-%{version}.tar.bz
 Source100: freeradius-radiusd-init
 Source102: freeradius-logrotate
 Source103: freeradius-pam-conf
+Source104: radiusd.service
 
 Obsoletes: freeradius-devel
 Obsoletes: freeradius-libs
@@ -66,15 +60,17 @@ BuildRequires: net-snmp-utils
 BuildRequires: readline-devel
 BuildRequires: libpcap-devel
 BuildRequires: libtalloc-devel
+BuildRequires: libcurl-devel
 
 Requires(pre): shadow-utils glibc-common
 Requires(post): /sbin/chkconfig
 Requires(preun): /sbin/chkconfig
+Requires: freeradius-config = %{version}-%{release}
 Requires: openssl
-Requires: libpcap 
-Requires: readline 
-Requires: libtalloc 
-Requires: net-snmp 
+Requires: libpcap
+Requires: readline
+Requires: libtalloc
+Requires: net-snmp
 Requires: zlib
 Requires: pam
 
@@ -97,6 +93,21 @@ also RADIUS clients available for Web servers, firewalls, Unix logins, and
 more.  Using RADIUS allows authentication and authorization for a network to
 be centralized, and minimizes the amount of re-configuration which has to be
 done when adding or deleting new users.
+
+# CentOS defines debug package by default. Only define it if not already defined
+%if 0%{!?_enable_debug_packages:1}
+%debug_package
+%endif
+
+%package config
+Group: System Environment/Daemons
+Summary: FreeRADIUS config files
+Provides: freeradius-config
+
+%description config
+FreeRADIUS default config files
+This package should be used as a base for a site local package
+to configure the FreeRADIUS server.
 
 %package utils
 Group: System Environment/Daemons
@@ -127,7 +138,7 @@ This plugin provides LDAP support for the FreeRADIUS server project.
 Summary: Kerberos 5 support for FreeRADIUS
 Group: System Environment/Daemons
 Requires: %{name} = %{version}-%{release}
-Requires: krb5
+Requires: krb5-libs
 BuildRequires: krb5-devel
 
 %description krb5
@@ -233,7 +244,6 @@ This plugin provides Oracle support for the FreeRADIUS server project.
 %endif
 %endif
 
-%if %{?_with_rlm_redis:1}%{!?_with_rlm_redis:0}
 %package redis
 Summary: Redis support for FreeRADIUS
 Group: System Environment/Daemons
@@ -243,19 +253,16 @@ BuildRequires: hiredis-devel
 
 %description redis
 This plugin provides Redis support for the FreeRADIUS server project.
-%endif
 
-%if %{?_with_rlm_rest:1}%{!?_with_rlm_rest:0}
 %package rest
 Summary: REST support for FreeRADIUS
 Group: System Environment/Daemons
 Requires: %{name} = %{version}-%{release}
-Requires: json-c >= 0.11
-BuildRequires: json-c-devel >= 0.11
+Requires: json-c >= 0.10
+BuildRequires: json-c-devel >= 0.10
 
 %description rest
 This plugin provides REST support for the FreeRADIUS server project.
-%endif
 
 %if %{?_with_rlm_ruby:1}%{!?_with_rlm_ruby:0}
 %package ruby
@@ -314,6 +321,8 @@ export CFLAGS="$RPM_OPT_FLAGS -fpic"
         --without-rlm_sql_iodbc \
         --without-rlm_sql_firebird \
         --without-rlm_sql_db2 \
+        --with-jsonc-lib-dir=%{_libdir} \
+        --with-jsonc-include-dir=/usr/include/json \
         %{?_with_rlm_yubikey} \
         %{?_without_rlm_yubikey} \
         %{?_with_rlm_sql_oracle} \
@@ -332,13 +341,6 @@ export CFLAGS="$RPM_OPT_FLAGS -fpic"
         %{?_without_rlm_securid} \
         %{?_with_rlm_sql_freetds} \
         %{?_without_rlm_sql_freetds} \
-        %{?_with_rlm_redis} \
-        %{?_without_rlm_redis} \
-        %{?_without_rlm_rediswho} \
-        %{?_with_rlm_rest} \
-        %{?_with_rlm_rest: --with-jsonc-lib-dir=%{_libdir}} \
-        %{?_with_rlm_rest: --with-jsonc-include-dir=/usr/include/json} \
-        %{?_without_rlm_rest} \
         %{?_with_rlm_ruby} \
         %{?_without_rlm_ruby}
 #        --with-modules="rlm_wimax" \
@@ -365,7 +367,14 @@ perl -i -pe 's/^#group =.*$/group = radiusd/' $RADDB/radiusd.conf
 mkdir -p $RPM_BUILD_ROOT/var/log/radius/radacct
 touch $RPM_BUILD_ROOT/var/log/radius/{radutmp,radius.log}
 
+# For systemd based systems, that define _unitdir, install the radiusd unit
+%if %{?_unitdir:1}%{!?_unitdir:0}
+install -D -m 755 %{SOURCE104} $RPM_BUILD_ROOT/%{_unitdir}/radiusd.service
+# For SystemV install the init script
+%else
 install -D -m 755 %{SOURCE100} $RPM_BUILD_ROOT/%{initddir}/radiusd
+%endif
+
 install -D -m 644 %{SOURCE102} $RPM_BUILD_ROOT/%{_sysconfdir}/logrotate.d/radiusd
 install -D -m 644 %{SOURCE103} $RPM_BUILD_ROOT/%{_sysconfdir}/pam.d/radiusd
 
@@ -390,13 +399,17 @@ rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/sql/ippool/oracle
 rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/sql/ippool-dhcp/oracle
 rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/sql/main/oracle
 %endif
-
-# remove header files, we don't ship a devel package and the 
+%if %{?_with_rlm_unbound:0}%{!?_with_rlm_unbound:1}
+rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/unbound
+%endif
+rm -rf $RPM_BUILD_ROOT/%{_libdir}/freeradius/rlm_test.so
+# remove header files, we don't ship a devel package and the
 # headers have multilib conflicts
 rm -rf $RPM_BUILD_ROOT/%{_includedir}
 
 # remove unsupported config files
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/experimental.conf
+rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/unbound
 
 # install doc files omitted by standard install
 for f in COPYRIGHT CREDITS INSTALL.rst README.rst; do
@@ -428,10 +441,20 @@ getent group  radiusd >/dev/null || /usr/sbin/groupadd -r -g 95 radiusd
 getent passwd radiusd >/dev/null || /usr/sbin/useradd  -r -g radiusd -u 95 -c "radiusd user" -s /sbin/nologin radiusd > /dev/null 2>&1
 exit 0
 
+# Make sure our user/group is present prior to any package or subpackage installation
+%pre config
+getent group  radiusd >/dev/null || /usr/sbin/groupadd -r -g 95 radiusd
+getent passwd radiusd >/dev/null || /usr/sbin/useradd  -r -g radiusd -u 95 -c "radiusd user" -s /sbin/nologin radiusd > /dev/null 2>&1
+exit 0
+
 
 %post
 if [ $1 = 1 ]; then
   /sbin/chkconfig --add radiusd
+fi
+
+%post config
+if [ $1 = 1 ]; then
   if [ ! -e /etc/raddb/certs/server.pem ]; then
     /sbin/runuser -g radiusd -c 'umask 007; /etc/raddb/certs/bootstrap' > /dev/null 2>&1 || :
   fi
@@ -456,50 +479,14 @@ fi
 %doc %{docdir}/
 %config(noreplace) %{_sysconfdir}/pam.d/radiusd
 %config(noreplace) %{_sysconfdir}/logrotate.d/radiusd
+
+%if %{?_unitdir:1}%{!?_unitdir:0}
+%{_unitdir}/radiusd.service
+%else
 %{initddir}/radiusd
+%endif
+
 %dir %attr(755,radiusd,radiusd) /var/lib/radiusd
-# configs
-%dir %attr(755,root,radiusd) /etc/raddb
-%defattr(-,root,radiusd)
-#%attr(640,root,radiusd) %config(noreplace) /etc/raddb/filter/*
-%attr(644,root,radiusd) %config(noreplace) /etc/raddb/dictionary
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/clients.conf
-%config(noreplace) /etc/raddb/hints
-%config(noreplace) /etc/raddb/huntgroups
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/panic.gdb
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/README.rst
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/proxy.conf
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/radiusd.conf
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/trigger.conf
-#%dir %attr(750,root,radiusd) /etc/raddb/sql
-#%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sql/oracle/*
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/users
-%dir %attr(770,root,radiusd) /etc/raddb/certs
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/certs/*
-%attr(750,root,radiusd) /etc/raddb/certs/bootstrap
-%dir %attr(750,root,radiusd) /etc/raddb/sites-available
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/*
-%dir %attr(750,root,radiusd) /etc/raddb/sites-enabled
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-enabled/*
-%dir %attr(750,root,radiusd) /etc/raddb/policy.d
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/*
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/templates.conf
-%dir %attr(750,root,radiusd) /etc/raddb/mods-available
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/README.rst
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/attr_filter
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/attr_filter/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/files
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/files/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/perl
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/perl/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/preprocess
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/preprocess/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/python
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/python/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-enabled
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-enabled/*
 %dir %attr(755,radiusd,radiusd) /var/run/radiusd/
 # binaries
 %defattr(-,root,root)
@@ -555,6 +542,7 @@ fi
 %{_libdir}/freeradius/rlm_always.so
 %{_libdir}/freeradius/rlm_attr_filter.so
 %{_libdir}/freeradius/rlm_cache.so
+%{_libdir}/freeradius/rlm_cache_rbtree.so
 %{_libdir}/freeradius/rlm_chap.so
 %{_libdir}/freeradius/rlm_counter.so
 %{_libdir}/freeradius/rlm_cram.so
@@ -591,10 +579,12 @@ fi
 %{_libdir}/freeradius/rlm_soh.so
 %{_libdir}/freeradius/rlm_sometimes.so
 %{_libdir}/freeradius/rlm_sql.so
+%{_libdir}/freeradius/rlm_sqlhpwippool.so
 %{_libdir}/freeradius/rlm_sql_null.so
 %{_libdir}/freeradius/rlm_sql_sqlite.so
 %{_libdir}/freeradius/rlm_sqlcounter.so
 %{_libdir}/freeradius/rlm_sqlippool.so
+%{_libdir}/freeradius/rlm_unpack.so
 %{_libdir}/freeradius/rlm_unix.so
 %{_libdir}/freeradius/rlm_utf8.so
 %{_libdir}/freeradius/rlm_wimax.so
@@ -602,39 +592,51 @@ fi
 %if %{?_with_experimental_modules:1}%{!?_with_experimental_modules:0}
 %{_libdir}/freeradius/rlm_example.so
 %{_libdir}/freeradius/rlm_smsotp.so
-%{_libdir}/freeradius/rlm_sqlhpwippool.so
 %endif
 
-%files utils
-%defattr(-,root,root)
-/usr/bin/*
-# man-pages
-%doc %{_mandir}/man1/radclient.1.gz
-%doc %{_mandir}/man1/radeapclient.1.gz
-%doc %{_mandir}/man1/radlast.1.gz
-%doc %{_mandir}/man1/radtest.1.gz
-%doc %{_mandir}/man1/radwho.1.gz
-%doc %{_mandir}/man1/radzap.1.gz
-%doc %{_mandir}/man8/radsqlrelay.8.gz
-%doc %{_mandir}/man8/rlm_ippool_tool.8.gz
-
-%files krb5
-%defattr(-,root,root)
-%{_libdir}/freeradius/rlm_krb5.so
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/krb5
-
-%files perl
-%defattr(-,root,root)
-%{_libdir}/freeradius/rlm_perl.so
-
-%files python
-%defattr(-,root,root)
-%{_libdir}/freeradius/rlm_python.so
-
-%files mysql
-%defattr(-,root,root)
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/sql*
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/cui
+%files config
+%dir %attr(755,root,radiusd) /etc/raddb
+%defattr(-,root,radiusd)
+#%attr(640,root,radiusd) %config(noreplace) /etc/raddb/filter/*
+%attr(644,root,radiusd) %config(noreplace) /etc/raddb/dictionary
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/clients.conf
+%config(noreplace) /etc/raddb/hints
+%config(noreplace) /etc/raddb/huntgroups
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/panic.gdb
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/README.rst
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/proxy.conf
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/radiusd.conf
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/trigger.conf
+#%dir %attr(750,root,radiusd) /etc/raddb/sql
+#%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sql/oracle/*
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/users
+%dir %attr(770,root,radiusd) /etc/raddb/certs
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/certs/*
+%attr(750,root,radiusd) /etc/raddb/certs/bootstrap
+%dir %attr(750,root,radiusd) /etc/raddb/sites-available
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/*
+%dir %attr(750,root,radiusd) /etc/raddb/sites-enabled
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-enabled/*
+%dir %attr(750,root,radiusd) /etc/raddb/policy.d
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/*
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/templates.conf
+%dir %attr(750,root,radiusd) /etc/raddb/mods-available
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/*
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/README.rst
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/attr_filter
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/attr_filter/*
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/files
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/files/*
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/perl
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/perl/*
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/preprocess
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/preprocess/*
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/python
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/python/*
+%dir %attr(750,root,radiusd) /etc/raddb/mods-enabled
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-enabled/*
+# mysql
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter/mysql
@@ -653,90 +655,39 @@ fi
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/mysql/*
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/ndb
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/ndb/*
-%{_libdir}/freeradius/rlm_sql_mysql.so
-
-%files postgresql
-%defattr(-,root,root)
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/sql*
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/cui
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter
+# postgres
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter/postgresql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/counter/postgresql/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/cui
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/cui/postgresql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/cui/postgresql/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool/postgresql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/postgresql/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/postgresql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/postgresql/*
-%{_libdir}/freeradius/rlm_sql_postgresql.so
-
-%files sqlite
-%defattr(-,root,root)
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/sql*
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/cui
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter
+# sqlite
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/counter/sqlite/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/cui
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/cui/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/cui/sqlite/*
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/sqlite/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/sqlite/*
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/sqlite/*
-%{_libdir}/freeradius/rlm_sql_sqlite.so
-
-%files ldap
-%defattr(-,root,root)
-%{_libdir}/freeradius/rlm_ldap.so
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/ldap
-
-%files unixODBC
-%defattr(-,root,root)
-%{_libdir}/freeradius/rlm_sql_unixodbc.so
-
-%if %{?_with_rlm_redis:1}%{!?_with_rlm_redis:0}
-%files redis
-%defattr(-,root,root)
-%{_libdir}/freeradius/rlm_redis.so
-%{_libdir}/freeradius/rlm_rediswho.so
-%endif
-
-%if %{?_with_rlm_rest:1}%{!?_with_rlm_rest:0}
-%files rest
-%defattr(-,root,root)
-%{_libdir}/freeradius/rlm_rest.so
-%endif
-
+# ruby
 %if %{?_with_rlm_ruby:1}%{!?_with_rlm_ruby:0}
-%files ruby
-%defattr(-,root,root)
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/ruby
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/ruby/*
-%{_libdir}/freeradius/rlm_ruby.so
 %endif
-
+# freetds
 %if %{?_with_rlm_sql_freetds:1}%{!?_with_rlm_sql_freetds:0}
-%files freetds
-%defattr(-,root,root)
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/mssql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/mssql/*
-%{_libdir}/freeradius/rlm_sql_freetds.so
 %endif
-
+# oracle
 %if %{?_with_rlm_sql_oracle:1}%{!?_with_rlm_sql_oracle:0}
-%files oracle
-%defattr(-,root,root)
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool/oracle
@@ -747,6 +698,77 @@ fi
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/oracle
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/oracle/*
+%endif
+
+%files utils
+%defattr(-,root,root)
+/usr/bin/*
+# man-pages
+%doc %{_mandir}/man1/radclient.1.gz
+%doc %{_mandir}/man1/radeapclient.1.gz
+%doc %{_mandir}/man1/radlast.1.gz
+%doc %{_mandir}/man1/radtest.1.gz
+%doc %{_mandir}/man1/radwho.1.gz
+%doc %{_mandir}/man1/radzap.1.gz
+%doc %{_mandir}/man8/radsqlrelay.8.gz
+%doc %{_mandir}/man8/rlm_ippool_tool.8.gz
+
+%files krb5
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_krb5.so
+
+%files perl
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_perl.so
+
+%files python
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_python.so
+
+%files mysql
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_sql_mysql.so
+
+%files postgresql
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_sql_postgresql.so
+
+%files sqlite
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_sql_sqlite.so
+
+%files ldap
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_ldap.so
+
+%files unixODBC
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_sql_unixodbc.so
+
+%files redis
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_redis.so
+%{_libdir}/freeradius/rlm_rediswho.so
+
+%files rest
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_rest.so
+
+%if %{?_with_rlm_ruby:1}%{!?_with_rlm_ruby:0}
+%files ruby
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_ruby.so
+%endif
+
+%if %{?_with_rlm_sql_freetds:1}%{!?_with_rlm_sql_freetds:0}
+%files freetds
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_sql_freetds.so
+%endif
+
+%if %{?_with_rlm_sql_oracle:1}%{!?_with_rlm_sql_oracle:0}
+%files oracle
+%defattr(-,root,root)
 %{_libdir}/freeradius/rlm_sql_oracle.so
 %endif
 

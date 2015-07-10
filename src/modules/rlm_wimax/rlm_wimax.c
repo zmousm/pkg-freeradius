@@ -1,12 +1,17 @@
 /*
- *   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- *   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- *   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
- *   OF THIRD PARTY RIGHTS. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
- *   HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
- *   IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
- *   IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- *   SOFTWARE.
+ *   This program is is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
 /**
@@ -44,8 +49,7 @@ typedef struct rlm_wimax_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-  { "delete_mppe_keys", PW_TYPE_BOOLEAN,
-    offsetof(rlm_wimax_t,delete_mppe_keys), NULL,   "no" },
+  { "delete_mppe_keys", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_wimax_t, delete_mppe_keys), "no" },
 
   { NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -56,7 +60,7 @@ static const CONF_PARSER module_config[] = {
  *	from the database. The authentication code only needs to check
  *	the password, the rest is done here.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
 {
 	VALUE_PAIR *vp;
 
@@ -64,14 +68,14 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED 
 	 *	Fix Calling-Station-Id.  Damn you, WiMAX!
 	 */
 	vp =  pairfind(request->packet->vps, PW_CALLING_STATION_ID, 0, TAG_ANY);
-	if (vp && (vp->length == 6)) {
+	if (vp && (vp->vp_length == 6)) {
 		int i;
 		char *p;
 		uint8_t buffer[6];
 
 		memcpy(buffer, vp->vp_strvalue, 6);
-		vp->length = (5*3)+2;
-		vp->vp_strvalue = p = talloc_array(vp, char, vp->length + 1);
+		vp->vp_length = (5*3)+2;
+		vp->vp_strvalue = p = talloc_array(vp, char, vp->vp_length + 1);
 		vp->type = VT_DATA;
 
 		/*
@@ -126,10 +130,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	uint8_t mip_rk_1[EVP_MAX_MD_SIZE], mip_rk_2[EVP_MAX_MD_SIZE];
 	uint8_t mip_rk[2 * EVP_MAX_MD_SIZE];
 
-	msk = pairfind(request->reply->vps, 1129, 0, TAG_ANY);
-	emsk = pairfind(request->reply->vps, 1130, 0, TAG_ANY);
+	msk = pairfind(request->reply->vps, PW_EAP_MSK, 0, TAG_ANY);
+	emsk = pairfind(request->reply->vps, PW_EAP_EMSK, 0, TAG_ANY);
 	if (!msk || !emsk) {
-		RDEBUG("No EAP-MSK or EAP-EMSK.  Cannot create WiMAX keys.");
+		RDEBUG("No EAP-MSK or EAP-EMSK.  Cannot create WiMAX keys");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -143,7 +147,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 
 		vp = pairmake_reply("WiMAX-MSK", NULL, T_OP_EQ);
 		if (vp) {
-			pairmemcpy(vp, msk->vp_octets, msk->length);
+			pairmemcpy(vp, msk->vp_octets, msk->vp_length);
 		}
 	}
 
@@ -159,7 +163,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	 *	MIP-RK-1 = HMAC-SSHA256(EMSK, usage-data | 0x01)
 	 */
 	HMAC_CTX_init(&hmac);
-	HMAC_Init_ex(&hmac, emsk->vp_octets, emsk->length, EVP_sha256(), NULL);
+	HMAC_Init_ex(&hmac, emsk->vp_octets, emsk->vp_length, EVP_sha256(), NULL);
 
 	HMAC_Update(&hmac, &usage_data[0], sizeof(usage_data));
 	HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
@@ -167,7 +171,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	/*
 	 *	MIP-RK-2 = HMAC-SSHA256(EMSK, MIP-RK-1 | usage-data | 0x01)
 	 */
-	HMAC_Init_ex(&hmac, emsk->vp_octets, emsk->length, EVP_sha256(), NULL);
+	HMAC_Init_ex(&hmac, emsk->vp_octets, emsk->vp_length, EVP_sha256(), NULL);
 
 	HMAC_Update(&hmac, (uint8_t const *) &mip_rk_1, rk1_len);
 	HMAC_Update(&hmac, &usage_data[0], sizeof(usage_data));
@@ -193,7 +197,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		   (mip_rk_1[2] << 8) | mip_rk_1[3]);
 	if (mip_spi < 256) mip_spi += 256;
 
-	if (debug_flag) {
+	if (rad_debug_lvl) {
 		int len = rk_len;
 		char buffer[512];
 
@@ -211,11 +215,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	/*
 	 *	Calculate mobility keys
 	 */
-	mn_nai = pairfind(request->packet->vps, 1900, 0, TAG_ANY);
-	if (!mn_nai) mn_nai = pairfind(request->reply->vps, 1900, 0, TAG_ANY);
+	mn_nai = pairfind(request->packet->vps, PW_WIMAX_MN_NAI, 0, TAG_ANY);
+	if (!mn_nai) mn_nai = pairfind(request->reply->vps, PW_WIMAX_MN_NAI, 0, TAG_ANY);
 	if (!mn_nai) {
-		RWDEBUG("WiMAX-MN-NAI was not found in the request or in the reply.");
-		RWDEBUG("We cannot calculate MN-HA keys.");
+		RWDEBUG("WiMAX-MN-NAI was not found in the request or in the reply");
+		RWDEBUG("We cannot calculate MN-HA keys");
 	}
 
 	/*
@@ -224,7 +228,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	vp = NULL;
 	if (mn_nai) vp = pairfind(request->reply->vps, 23, VENDORPEC_WIMAX, TAG_ANY);
 	if (!vp) {
-		RWDEBUG("WiMAX-IP-Technology not found in reply.");
+		RWDEBUG("WiMAX-IP-Technology not found in reply");
 		RWDEBUG("Not calculating MN-HA keys");
 	}
 
@@ -247,7 +251,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 
 		HMAC_Update(&hmac, (uint8_t const *) "PMIP4 MN HA", 11);
 		HMAC_Update(&hmac, (uint8_t const *) &ip->vp_ipaddr, 4);
-		HMAC_Update(&hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->length);
+		HMAC_Update(&hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->vp_length);
 		HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
 		/*
@@ -297,7 +301,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 
 		HMAC_Update(&hmac, (uint8_t const *) "CMIP4 MN HA", 11);
 		HMAC_Update(&hmac, (uint8_t const *) &ip->vp_ipaddr, 4);
-		HMAC_Update(&hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->length);
+		HMAC_Update(&hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->vp_length);
 		HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
 		/*
@@ -347,7 +351,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 
 		HMAC_Update(&hmac, (uint8_t const *) "CMIP6 MN HA", 11);
 		HMAC_Update(&hmac, (uint8_t const *) &ip->vp_ipv6addr, 16);
-		HMAC_Update(&hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->length);
+		HMAC_Update(&hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->vp_length);
 		HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
 		/*
@@ -389,7 +393,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	 *	FA-RK= H(MIP-RK, "FA-RK")
 	 */
 	fa_rk = pairfind(request->reply->vps, 14, VENDORPEC_WIMAX, TAG_ANY);
-	if (fa_rk && (fa_rk->length <= 1)) {
+	if (fa_rk && (fa_rk->vp_length <= 1)) {
 		HMAC_Init_ex(&hmac, mip_rk, rk_len, EVP_sha1(), NULL);
 
 		HMAC_Update(&hmac, (uint8_t const *) "FA-RK", 5);
@@ -423,7 +427,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	 */
 	vp = pairfind(request->packet->vps, 20, VENDORPEC_WIMAX, TAG_ANY);
 	if (vp) {
-		RDEBUG("Client requested MN-HA key: Should use SPI to look up key from storage.");
+		RDEBUG("Client requested MN-HA key: Should use SPI to look up key from storage");
 		if (!mn_nai) {
 			RWDEBUG("MN-NAI was not found!");
 		}
@@ -441,7 +445,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		 */
 		vp = pairfind(request->packet->vps, 58, VENDORPEC_WIMAX, TAG_ANY);
 		if (vp && (vp->vp_integer == 1)) {
-			RDEBUG("Client requested HA-RK: Should use IP to look it up from storage.");
+			RDEBUG("Client requested HA-RK: Should use IP to look it up from storage");
 		}
 	}
 
@@ -463,22 +467,17 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_wimax;
 module_t rlm_wimax = {
-	RLM_MODULE_INIT,
-	"wimax",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_wimax_t),
-	module_config,
-	NULL,			/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		mod_authorize,	/* authorization */
-		mod_preacct,		/* preaccounting */
-		mod_accounting,	/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		mod_post_auth 		/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "wimax",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_wimax_t),
+	.config		= module_config,
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_authorize,
+		[MOD_PREACCT]		= mod_preacct,
+		[MOD_ACCOUNTING]	= mod_accounting,
+		[MOD_POST_AUTH]		= mod_post_auth
 	},
 };

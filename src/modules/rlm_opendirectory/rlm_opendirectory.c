@@ -1,6 +1,6 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
+ *   it under the terms of the GNU General Public License, version 2 of the
  *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
@@ -45,10 +45,10 @@ USES_APPLE_DEPRECATED_API
 #include <membership.h>
 
 #ifndef HAVE_DECL_MBR_CHECK_SERVICE_MEMBERSHIP
-extern int mbr_check_service_membership(uuid_t const user, char const *servicename, int *ismember);
+int mbr_check_service_membership(uuid_t const user, char const *servicename, int *ismember);
 #endif
 #ifndef HAVE_DECL_MBR_CHECK_MEMBERSHIP_REFRESH
-extern int mbr_check_membership_refresh(uuid_t const user, uuid_t group, int *ismember);
+int mbr_check_membership_refresh(uuid_t const user, uuid_t group, int *ismember);
 #endif
 
 /* RADIUS service ACL constants */
@@ -299,14 +299,14 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, REQU
 	 *	Can't do OpenDirectory if there's no password.
 	 */
 	if (!request->password ||
-		(request->password->da->attr != PW_PASSWORD)) {
+		(request->password->da->attr != PW_USER_PASSWORD)) {
 		REDEBUG("You set 'Auth-Type = OpenDirectory' for a request that does not contain a User-Password attribute!");
 		return RLM_MODULE_INVALID;
 	}
 
 	odResult = od_check_passwd(request, request->username->vp_strvalue,
 				   request->password->vp_strvalue);
-	switch(odResult) {
+	switch (odResult) {
 		case eDSNoErr:
 			ret = RLM_MODULE_OK;
 			break;
@@ -343,7 +343,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, REQU
 static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
 {
 	struct passwd *userdata = NULL;
-	struct group *groupdata = NULL;
 	int ismember = 0;
 	RADCLIENT *rad_client = NULL;
 	uuid_t uuid;
@@ -351,24 +350,24 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
 	uuid_t guid_nasgroup;
 	int err;
 	char host_ipaddr[128] = {0};
+	gid_t gid;
 
 	if (!request->username) {
-		RDEBUG("OpenDirectory requires a User-Name attribute.");
+		RDEBUG("OpenDirectory requires a User-Name attribute");
 		return RLM_MODULE_NOOP;
 	}
 
 	/* resolve SACL */
 	uuid_clear(guid_sacl);
-	groupdata = getgrnam(kRadiusSACLName);
-	if (groupdata != NULL) {
-		err = mbr_gid_to_uuid(groupdata->gr_gid, guid_sacl);
+
+	if (rad_getgid(request, &gid, kRadiusSACLName) < 0) {
+		RDEBUG("The SACL group \"%s\" does not exist on this system.", kRadiusSACLName);
+	} else {
+		err = mbr_gid_to_uuid(gid, guid_sacl);
 		if (err != 0) {
 			ERROR("rlm_opendirectory: The group \"%s\" does not have a GUID.", kRadiusSACLName);
 			return RLM_MODULE_FAIL;
 		}
-	}
-	else {
-		RDEBUG("The SACL group \"%s\" does not exist on this system.", kRadiusSACLName);
 	}
 
 	/* resolve client access list */
@@ -412,8 +411,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
 	}
 
 	if (uuid_is_null(guid_sacl) && uuid_is_null(guid_nasgroup)) {
-		RDEBUG("no access control groups, all users allowed.");
-		if (pairfind(request->config_items, PW_AUTH_TYPE, 0, TAG_ANY) == NULL) {
+		RDEBUG("no access control groups, all users allowed");
+		if (pairfind(request->config, PW_AUTH_TYPE, 0, TAG_ANY) == NULL) {
 			pairmake_config("Auth-Type", kAuthType, T_OP_EQ);
 			RDEBUG("Setting Auth-Type = %s", kAuthType);
 		}
@@ -423,12 +422,13 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
 	/* resolve user */
 	uuid_clear(uuid);
 
-	userdata = getpwnam(request->username->vp_strvalue);
+	rad_getpwnam(request, &userdata, request->username->vp_strvalue);
 	if (userdata != NULL) {
 		err = mbr_uid_to_uuid(userdata->pw_uid, uuid);
 		if (err != 0)
 			uuid_clear(uuid);
 	}
+	talloc_free(userdata);
 
 	if (uuid_is_null(uuid)) {
 		REDEBUG("Could not get the user's uuid");
@@ -461,7 +461,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
 		}
 	}
 
-	if (pairfind(request->config_items, PW_AUTH_TYPE, 0, TAG_ANY) == NULL) {
+	if (pairfind(request->config, PW_AUTH_TYPE, 0, TAG_ANY) == NULL) {
 		pairmake_config("Auth-Type", kAuthType, T_OP_EQ);
 		RDEBUG("Setting Auth-Type = %s", kAuthType);
 	}
@@ -471,22 +471,13 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
 
 
 /* globally exported name */
+extern module_t rlm_opendirectory;
 module_t rlm_opendirectory = {
-	RLM_MODULE_INIT,
-	"opendirectory",
-	RLM_TYPE_THREAD_SAFE,	/* type */
-	0,
-	NULL,			/* CONF_PARSER */
-	NULL,			/* instantiation */
-	NULL,			   	/* detach */
-	{
-		mod_authenticate, /* authentication */
-		mod_authorize,	/* authorization */
-		NULL,		/* preaccounting */
-		NULL,		/* accounting */
-		NULL,		/* checksimul */
-		NULL,		/* pre-proxy */
-		NULL,		/* post-proxy */
-		NULL		/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "opendirectory",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize
 	},
 };

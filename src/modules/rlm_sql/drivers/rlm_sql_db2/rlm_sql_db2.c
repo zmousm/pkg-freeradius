@@ -31,6 +31,7 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/rad_assert.h>
 
 #include <sys/stat.h>
 
@@ -42,13 +43,10 @@ typedef struct rlm_sql_conn {
 	SQLHANDLE hdbc;
 	SQLHANDLE henv;
 	SQLHANDLE stmt;
-	char *error;
 } rlm_sql_db2_conn_t;
 
-static int sql_socket_destructor(void *c)
+static int _sql_socket_destructor(rlm_sql_db2_conn_t *conn)
 {
-	rlm_sql_db2_conn_t *conn = c;
-
 	DEBUG2("rlm_sql_db2: Socket destructor called, closing socket");
 
 	if (conn->hdbc) {
@@ -56,27 +54,18 @@ static int sql_socket_destructor(void *c)
 		SQLFreeHandle(SQL_HANDLE_DBC, conn->hdbc);
 	}
 
-	if (conn->henv) {
-		SQLFreeHandle(SQL_HANDLE_ENV, conn->henv);
-	}
+	if (conn->henv) SQLFreeHandle(SQL_HANDLE_ENV, conn->henv);
 
 	return RLM_SQL_OK;
 }
 
-/*************************************************************************
- *
- *	Function: sql_create_socket
- *
- *	Purpose: Establish connection to the db
- *
- *************************************************************************/
 static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 {
 	SQLRETURN retval;
 	rlm_sql_db2_conn_t *conn;
 
 	MEM(conn = handle->conn = talloc_zero(handle, rlm_sql_db2_conn_t));
-	talloc_set_destructor((void *) conn, sql_socket_destructor);
+	talloc_set_destructor(conn, _sql_socket_destructor);
 
 	/* allocate handles */
 	SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &(conn->henv));
@@ -98,8 +87,7 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 				    password, SQL_NTS);
 	}
 
-
-	if(retval != SQL_SUCCESS) {
+	if (retval != SQL_SUCCESS) {
 		ERROR("could not connect to DB2 server %s", config->sql_server);
 
 		return RLM_SQL_ERROR;
@@ -108,13 +96,6 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 	return RLM_SQL_OK;
 }
 
-/*************************************************************************
- *
- *	Function: sql_query
- *
- *	Purpose: Issue a query to the database
- *
- *************************************************************************/
 static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config, char const *query)
 {
 	SQLRETURN retval;
@@ -133,7 +114,7 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 		retval = SQLExecDirect(conn->stmt, db2_query, SQL_NTS);
 		if(retval != SQL_SUCCESS) {
 			/* XXX Check if retval means we should return RLM_SQL_RECONNECT */
-			ERROR("Could not execute statement \"%s\"\n", query);
+			ERROR("Could not execute statement \"%s\"", query);
 			return RLM_SQL_ERROR;
 		}
 	}
@@ -141,28 +122,11 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 	return RLM_SQL_OK;
 }
 
-
-/*************************************************************************
- *
- *	Function: sql_select_query
- *
- *	Purpose: Issue a select query to the database
- *
- *************************************************************************/
 static sql_rcode_t sql_select_query(rlm_sql_handle_t *handle, rlm_sql_config_t *config, char const *query)
 {
 	return sql_query(handle, config, query);
 }
 
-
-/*************************************************************************
- *
- *	Function: sql_num_fields
- *
- *	Purpose: database specific num_fields function. Returns number
- *	       of columns from query
- *
- *************************************************************************/
 static int sql_num_fields(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	SQLSMALLINT c;
@@ -173,16 +137,44 @@ static int sql_num_fields(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *con
 	return c;
 }
 
+static sql_rcode_t sql_fields(char const **out[], rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
+	rlm_sql_db2_conn_t *conn = handle->conn;
 
-/*************************************************************************
- *
- *	Function: sql_fetch_row
- *
- *	Purpose: database specific fetch_row. Returns a rlm_sql_row_t struct
- *	       with all the data for the query in 'handle->row'. Returns
- *		 0 on success, -1 on failure, RLM_SQL_RECONNECT if 'database is down'
- *
- *************************************************************************/
+	SQLSMALLINT	fields, len, i;
+
+	char const	**names;
+	char		field[128];
+
+	SQLNumResultCols(conn->stmt, &fields);
+	if (fields == 0) return RLM_SQL_ERROR;
+
+	MEM(names = talloc_array(handle, char const *, fields));
+
+	for (i = 0; i < fields; i++) {
+		char *p;
+
+		switch (SQLColAttribute(conn->stmt, i, SQL_DESC_BASE_COLUMN_NAME,
+					field, sizeof(field), &len, NULL)) {
+		case SQL_INVALID_HANDLE:
+		case SQL_ERROR:
+			ERROR("Failed retrieving field name at index %i", i);
+			talloc_free(names);
+			return RLM_SQL_ERROR;
+
+		default:
+			break;
+		}
+
+		MEM(p = talloc_array(names, char, (size_t)len + 1));
+		strlcpy(p, field, (size_t)len + 1);
+		names[i] = p;
+	}
+	*out = names;
+
+	return RLM_SQL_OK;
+}
+
 static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 {
 	int c, i;
@@ -227,14 +219,6 @@ error:
 	return RLM_SQL_ERROR;
 }
 
-/*************************************************************************
- *
- *	Function: sql_free_result
- *
- *	Purpose: database specific free_result. Frees memory allocated
- *	       for a result set
- *
- *************************************************************************/
 static sql_rcode_t sql_free_result(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	rlm_sql_db2_conn_t *conn;
@@ -244,67 +228,50 @@ static sql_rcode_t sql_free_result(rlm_sql_handle_t *handle, UNUSED rlm_sql_conf
 	return RLM_SQL_OK;
 }
 
-
-
-/*************************************************************************
+/** Retrieves any errors associated with the connection handle
  *
- *	Function: sql_error
+ * @note Caller will free any memory allocated in ctx.
  *
- *	Purpose: database specific error. Returns error associated with
- *	       connection
- *
- *************************************************************************/
-static char const *sql_error(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+ * @param ctx to allocate temporary error buffers in.
+ * @param out Array of sql_log_entrys to fill.
+ * @param outlen Length of out array.
+ * @param handle rlm_sql connection handle.
+ * @param config rlm_sql config.
+ * @return number of errors written to the sql_log_entry array.
+ */
+static size_t sql_error(TALLOC_CTX *ctx, sql_log_entry_t out[], size_t outlen,
+			rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
-	/* this should really be enough, if not, you still got the sqlstate */
-	char sqlstate[6];
-	char msg[1024];
-	SQLINTEGER err;
-	SQLSMALLINT rl;
-	rlm_sql_db2_conn_t *conn = handle->conn;
+	char			state[6];
+	char			errbuff[1024];
+	SQLINTEGER		err;
+	SQLSMALLINT		rl;
+	rlm_sql_db2_conn_t	*conn = handle->conn;
 
-	TALLOC_FREE(conn->error);
-	SQLGetDiagRec(SQL_HANDLE_STMT, conn->stmt, 1, (SQLCHAR *) sqlstate, &err, (SQLCHAR *) msg, sizeof(msg), &rl);
-	conn->error = talloc_typed_asprintf(conn, "sqlstate %s: %s", sqlstate, msg);
+	rad_assert(conn);
+	rad_assert(outlen > 0);
 
-	return conn->error;
+	errbuff[0] = '\0';
+	SQLGetDiagRec(SQL_HANDLE_STMT, conn->stmt, 1, (SQLCHAR *) state, &err,
+		      (SQLCHAR *) errbuff, sizeof(errbuff), &rl);
+	if (errbuff[0] == '\0') return 0;
+
+	out[0].type = L_ERR;
+	out[0].msg = talloc_asprintf(ctx, "%s: %s", state, errbuff);
+
+	return 1;
 }
 
-
-/*************************************************************************
- *
- *	Function: sql_finish_query
- *
- *	Purpose: End the query, such as freeing memory
- *
- *************************************************************************/
 static sql_rcode_t sql_finish_query(UNUSED rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	return RLM_SQL_OK;
 }
 
-
-
-/*************************************************************************
- *
- *	Function: sql_finish_select_query
- *
- *	Purpose: End the select query, such as freeing memory or result
- *
- *************************************************************************/
 static sql_rcode_t sql_finish_select_query(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 {
 	return sql_finish_query(handle, config);
 }
 
-
-/*************************************************************************
- *
- *	Function: sql_affected_rows
- *
- *	Purpose: Return the number of rows affected by the last query.
- *
- *************************************************************************/
 static int sql_affected_rows(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	SQLINTEGER c;
@@ -316,19 +283,18 @@ static int sql_affected_rows(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 }
 
 /* Exported to rlm_sql */
+extern rlm_sql_module_t rlm_sql_db2;
 rlm_sql_module_t rlm_sql_db2 = {
-	"rlm_sql_db2",
-	NULL,
-	sql_socket_init,
-	sql_query,
-	sql_select_query,
-	NULL, /* sql_store_result */
-	sql_num_fields,
-	NULL, /* sql_num_rows */
-	sql_fetch_row,
-	sql_free_result,
-	sql_error,
-	sql_finish_query,
-	sql_finish_select_query,
-	sql_affected_rows,
+	.name				= "rlm_sql_db2",
+	.sql_socket_init		= sql_socket_init,
+	.sql_query			= sql_query,
+	.sql_select_query		= sql_select_query,
+	.sql_num_fields			= sql_num_fields,
+	.sql_affected_rows		= sql_affected_rows,
+	.sql_fields			= sql_fields,
+	.sql_fetch_row			= sql_fetch_row,
+	.sql_free_result		= sql_free_result,
+	.sql_error			= sql_error,
+	.sql_finish_query		= sql_finish_query,
+	.sql_finish_select_query	= sql_finish_select_query
 };

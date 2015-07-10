@@ -1,7 +1,8 @@
  /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -26,6 +27,7 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/rad_assert.h>
 
 #include <sys/stat.h>
 
@@ -145,8 +147,7 @@ static CS_RETCODE CS_PUBLIC csmsg_callback(CS_CONTEXT *context, CS_CLIENTMSG *em
  * @param msgp Pointer to the error structure.
  * @return CS_SUCCEED
  */
-static CS_RETCODE CS_PUBLIC servermsg_callback(UNUSED CS_CONTEXT *context, UNUSED CS_CONNECTION *conn,
-					       CS_SERVERMSG *msgp)
+static CS_RETCODE CS_PUBLIC servermsg_callback(CS_CONTEXT *context, UNUSED CS_CONNECTION *conn, CS_SERVERMSG *msgp)
 {
 	rlm_sql_freetds_conn_t *this = NULL;
 	int len = 0;
@@ -169,12 +170,12 @@ static CS_RETCODE CS_PUBLIC servermsg_callback(UNUSED CS_CONTEXT *context, UNUSE
 	} else {
 		if (this->error) TALLOC_FREE(this->error);
 
-		this->error = talloc_typed_asprintf(this, "server msg from \"%s\": severity(%ld), number(%ld), origin(%ld), "
-					      "layer(%ld), procedure \"%s\": %s",
-					      (msgp->svrnlen > 0) ? msgp->svrname : "unknown",
-					      (long)msgp->msgnumber, (long)msgp->severity, (long)msgp->state,
-					      (long)msgp->line,
-					      (msgp->proclen > 0) ? msgp->proc : "none", msgp->text);
+		this->error = talloc_typed_asprintf(this, "Server msg from \"%s\": severity(%ld), number(%ld), "
+						    "origin(%ld), layer(%ld), procedure \"%s\": %s",
+					      	    (msgp->svrnlen > 0) ? msgp->svrname : "unknown",
+					      	    (long)msgp->msgnumber, (long)msgp->severity, (long)msgp->state,
+					      	    (long)msgp->line,
+						    (msgp->proclen > 0) ? msgp->proc : "none", msgp->text);
 	}
 
 	return CS_SUCCEED;
@@ -192,23 +193,23 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 {
 	rlm_sql_freetds_conn_t *conn = handle->conn;
 
-	CS_RETCODE	ret, results_ret;
+	CS_RETCODE	results_ret;
 	CS_INT		result_type;
 
 	if (ct_cmd_alloc(conn->db, &conn->command) != CS_SUCCEED) {
-		ERROR("rlm_sql_freetds: unable to allocate command structure (ct_cmd_alloc())");
+		ERROR("rlm_sql_freetds: Unable to allocate command structure (ct_cmd_alloc())");
 
 		return RLM_SQL_ERROR;
 	}
 
 	if (ct_command(conn->command, CS_LANG_CMD, query, CS_NULLTERM, CS_UNUSED) != CS_SUCCEED) {
-		ERROR("rlm_sql_freetds: unable to initialise command structure (ct_command())");
+		ERROR("rlm_sql_freetds: Unable to initialise command structure (ct_command())");
 
 		return RLM_SQL_ERROR;
 	}
 
 	if (ct_send(conn->command) != CS_SUCCEED) {
-		ERROR("rlm_sql_freetds: unable to send command (ct_send())");
+		ERROR("rlm_sql_freetds: Unable to send command (ct_send())");
 
 		return RLM_SQL_ERROR;
 	}
@@ -227,17 +228,17 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 				ERROR("rlm_sql_freetds: sql_query processed a query returning rows. "
 				      "Use sql_select_query instead!");
 			}
-			ERROR("rlm_sql_freetds: result failure or unexpected result type from query");
+			ERROR("rlm_sql_freetds: Result failure or unexpected result type from query");
 
 			return RLM_SQL_ERROR;
 		}
 	} else {
 		switch (results_ret) {
 		case CS_FAIL: /* Serious failure, freetds requires us to cancel and maybe even close db */
-			ERROR("rlm_sql_freetds: failure retrieving query results");
+			ERROR("rlm_sql_freetds: Failure retrieving query results");
 
-			if ((ret = ct_cancel(NULL, conn->command, CS_CANCEL_ALL)) == CS_FAIL) {
-				INFO("rlm_sql_freetds: cleaning up");
+			if (ct_cancel(NULL, conn->command, CS_CANCEL_ALL) == CS_FAIL) {
+				INFO("rlm_sql_freetds: Cleaning up");
 
 				return RLM_SQL_RECONNECT;
 			}
@@ -245,7 +246,7 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 
 			return RLM_SQL_ERROR;
 		default:
-			ERROR("rlm_sql_freetds: unexpected return value from ct_results()");
+			ERROR("rlm_sql_freetds: Unexpected return value from ct_results()");
 
 			return RLM_SQL_ERROR;
 		}
@@ -257,24 +258,21 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 	 */
 	if ((results_ret = ct_results(conn->command, &result_type)) == CS_SUCCEED) {
 		if (result_type != CS_CMD_DONE) {
-			ERROR("rlm_sql_freetds: result failure or unexpected result type from query");
+			ERROR("rlm_sql_freetds: Result failure or unexpected result type from query");
 
 			return RLM_SQL_ERROR;
 		}
 	} else {
 		switch (results_ret) {
 		case CS_FAIL: /* Serious failure, freetds requires us to cancel and maybe even close db */
-			ERROR("rlm_sql_freetds: failure retrieving query results");
-			if ((ret = ct_cancel(NULL, conn->command, CS_CANCEL_ALL)) == CS_FAIL) {
-				INFO("rlm_sql_freetds: cleaning up");
+			ERROR("rlm_sql_freetds: Failure retrieving query results");
+			if (ct_cancel(NULL, conn->command, CS_CANCEL_ALL) == CS_FAIL) return RLM_SQL_RECONNECT;
 
-				return RLM_SQL_RECONNECT;
-			}
 			conn->command = NULL;
 			return RLM_SQL_ERROR;
 
 		default:
-			ERROR("rlm_sql_freetds: unexpected return value from ct_results()");
+			ERROR("rlm_sql_freetds: Unexpected return value from ct_results()");
 
 			return RLM_SQL_ERROR;
 		}
@@ -286,12 +284,8 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 	results_ret = ct_results(conn->command, &result_type);
 	switch (results_ret) {
 	case CS_FAIL: /* Serious failure, freetds requires us to cancel and maybe even close db */
-		ERROR("rlm_sql_freetds: failure retrieving query results");
-		if ((ret = ct_cancel(NULL, conn->command, CS_CANCEL_ALL)) == CS_FAIL) {
-			INFO("rlm_sql_freetds: cleaning up.");
-
-			return RLM_SQL_RECONNECT;
-		}
+		ERROR("rlm_sql_freetds: Failure retrieving query results");
+		if (ct_cancel(NULL, conn->command, CS_CANCEL_ALL) == CS_FAIL) return RLM_SQL_RECONNECT;
 		conn->command = NULL;
 
 		return RLM_SQL_ERROR;
@@ -322,7 +316,7 @@ static int sql_num_fields(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *con
 	int num = 0;
 
 	if (ct_res_info(conn->command, CS_NUMDATA, (CS_INT *)&num, CS_UNUSED, NULL) != CS_SUCCEED) {
-		ERROR("rlm_sql_freetds: error retrieving column count");
+		ERROR("rlm_sql_freetds: Error retrieving column count");
 
 		return RLM_SQL_ERROR;
 	}
@@ -330,32 +324,33 @@ static int sql_num_fields(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *con
 	return num;
 }
 
-/*************************************************************************
+/** Retrieves any errors associated with the connection handle
  *
- *	Function: sql_error
+ * @note Caller will free any memory allocated in ctx.
  *
- *	Purpose: database specific error. Returns error associated with
- *	       connection
- *
- *************************************************************************/
-static char const *sql_error(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+ * @param ctx to allocate temporary error buffers in.
+ * @param out Array of sql_log_entrys to fill.
+ * @param outlen Length of out array.
+ * @param handle rlm_sql connection handle.
+ * @param config rlm_sql config.
+ * @return number of errors written to the sql_log_entry array.
+ */
+static size_t sql_error(UNUSED TALLOC_CTX *ctx, sql_log_entry_t out[], size_t outlen,
+			rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	rlm_sql_freetds_conn_t *conn = handle->conn;
 
-	if (!conn || !conn->db) {
-		return "rlm_sql_freetds: no connection to db";
-	}
+	rad_assert(conn && conn->db);
+	rad_assert(outlen > 0);
 
-	return conn->error;
+	if (!conn->error) return 0;
+
+	out[0].type = L_ERR;
+	out[0].msg = conn->error;
+
+	return 1;
 }
 
-/*************************************************************************
- *
- *	Function: sql_finish_select_query
- *
- *	Purpose: End the select query, such as freeing memory or result
- *
- *************************************************************************/
 static sql_rcode_t sql_finish_select_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	rlm_sql_freetds_conn_t *conn = handle->conn;
@@ -374,22 +369,17 @@ static sql_rcode_t sql_finish_select_query(rlm_sql_handle_t *handle, UNUSED rlm_
 
 }
 
-/*************************************************************************
+/** Execute a query when we expected a result set
  *
- *	Function: sql_select_query
+ * @note Only the first row from queries returning several rows will be returned by this function,
+ * consecutive rows will be discarded.
  *
- *	Purpose: Issue a select query to the database
- *
- *	Note: Only the first row from queries returning several rows
- *	      will be returned by this function, consequitive rows will
- *	      be discarded.
- *
- *************************************************************************/
+ */
 static sql_rcode_t sql_select_query(rlm_sql_handle_t *handle, rlm_sql_config_t *config, char const *query)
 {
 	rlm_sql_freetds_conn_t *conn = handle->conn;
 
-	CS_RETCODE	ret, results_ret;
+	CS_RETCODE	results_ret;
 	CS_INT		result_type;
 	CS_DATAFMT	descriptor;
 
@@ -489,8 +479,8 @@ static sql_rcode_t sql_select_query(rlm_sql_handle_t *handle, rlm_sql_config_t *
 
 		ERROR("rlm_sql_freetds: failure retrieving query results");
 
-		if ((ret = ct_cancel(NULL, conn->command, CS_CANCEL_ALL)) == CS_FAIL) {
-			ERROR("rlm_sql_freetds: cleaning up.");
+		if (ct_cancel(NULL, conn->command, CS_CANCEL_ALL) == CS_FAIL) {
+			ERROR("rlm_sql_freetds: cleaning up");
 
 			return RLM_SQL_RECONNECT;
 		}
@@ -507,31 +497,6 @@ static sql_rcode_t sql_select_query(rlm_sql_handle_t *handle, rlm_sql_config_t *
 	return RLM_SQL_OK;
 }
 
-
-/*************************************************************************
- *
- *	Function: sql_store_result
- *
- *	Purpose: database specific store_result function. Returns a result
- *	       set for the query.
- *
- *************************************************************************/
-static sql_rcode_t sql_store_result(UNUSED rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
-{
-	/*
-	 *	Not needed for freetds, code that may have gone here iS in sql_select_query and sql_fetch_row
-	 */
-	return RLM_SQL_OK;
-}
-
-/*************************************************************************
- *
- *	Function: sql_num_rows
- *
- *	Purpose: database specific num_rows. Returns number of rows in
- *	       query
- *
- *************************************************************************/
 static int sql_num_rows(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	rlm_sql_freetds_conn_t *conn = handle->conn;
@@ -546,16 +511,6 @@ static int sql_num_rows(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *confi
 	return num;
 }
 
-
-/*************************************************************************
- *
- *	Function: sql_fetch_row
- *
- *	Purpose: database specific fetch_row. Returns a rlm_sql_row_t struct
- *	       with all the data for the query in 'handle->row'. Returns
- *		 0 on success, -1 on failure, RLM_SQL_RECONNECT if 'database is down'.
- *
- *************************************************************************/
 static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	rlm_sql_freetds_conn_t *conn = handle->conn;
@@ -570,8 +525,8 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, UNUSED rlm_sql_config
 		 *	Serious failure, freetds requires us to cancel the results and maybe even close the db.
 		 */
 		ERROR("rlm_sql_freetds: failure fetching row data");
-		if ((ret = ct_cancel(NULL, conn->command, CS_CANCEL_ALL)) == CS_FAIL) {
-			ERROR("rlm_sql_freetds: cleaning up.");
+		if (ct_cancel(NULL, conn->command, CS_CANCEL_ALL) == CS_FAIL) {
+			ERROR("rlm_sql_freetds: cleaning up");
 		} else {
 			conn->command = NULL;
 		}
@@ -598,14 +553,6 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, UNUSED rlm_sql_config
 	}
 }
 
-/*************************************************************************
- *
- *	Function: sql_free_result
- *
- *	Purpose: database specific free_result. Frees memory allocated
- *	       for a result set
- *
- *************************************************************************/
 static sql_rcode_t sql_free_result(UNUSED rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 
@@ -617,13 +564,6 @@ static sql_rcode_t sql_free_result(UNUSED rlm_sql_handle_t *handle, UNUSED rlm_s
 
 }
 
-/*************************************************************************
- *
- *	Function: sql_finish_query
- *
- *	Purpose: End the query, such as freeing memory
- *
- *************************************************************************/
 static sql_rcode_t sql_finish_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	rlm_sql_freetds_conn_t *conn = handle->conn;
@@ -639,24 +579,14 @@ static sql_rcode_t sql_finish_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_con
 	return RLM_SQL_OK;
 }
 
-/*************************************************************************
- *
- *	Function: sql_affected_rows
- *
- *	Purpose: Return the number of rows affected by the query (update,
- *	       or insert)
- *
- *************************************************************************/
 static int sql_affected_rows(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 {
 	return sql_num_rows(handle, config);
 }
 
 
-static int sql_socket_destructor(void *c)
+static int _sql_socket_destructor(rlm_sql_freetds_conn_t *conn)
 {
-	rlm_sql_freetds_conn_t *conn = c;
-
 	DEBUG2("rlm_sql_freetds: socket destructor called, closing socket");
 
 	if (conn->command) {
@@ -692,19 +622,12 @@ static int sql_socket_destructor(void *c)
 	return RLM_SQL_OK;
 }
 
-/*************************************************************************
- *
- *	Function: sql_socket_init
- *
- *	Purpose: Establish db to the db
- *
- *************************************************************************/
 static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 {
 	rlm_sql_freetds_conn_t *conn;
 
 	MEM(conn = handle->conn = talloc_zero(handle, rlm_sql_freetds_conn_t));
-	talloc_set_destructor((void *) conn, sql_socket_destructor);
+	talloc_set_destructor(conn, _sql_socket_destructor);
 
 	/*
 	 *	Allocate a CS context structure. This should really only be done once, but because of
@@ -810,32 +733,29 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 
 	return RLM_SQL_OK;
 
-	error:
+error:
 	if (conn->context) {
-		char const *error;
-		error = sql_error(handle, config);
-		if (error) {
-			ERROR("rlm_sql_freetds: %s", error);
-		}
+		sql_log_entry_t	error;
+
+		if (sql_error(NULL, &error, 1, handle, config) > 0) ERROR("rlm_sql_freetds: %s", error.msg);
 	}
 
 	return RLM_SQL_ERROR;
 }
 
 /* Exported to rlm_sql */
+extern rlm_sql_module_t rlm_sql_freetds;
 rlm_sql_module_t rlm_sql_freetds = {
-	"rlm_sql_freetds",
-	NULL,
-	sql_socket_init,
-	sql_query,
-	sql_select_query,
-	sql_store_result,
-	sql_num_fields,
-	sql_num_rows,
-	sql_fetch_row,
-	sql_free_result,
-	sql_error,
-	sql_finish_query,
-	sql_finish_select_query,
-	sql_affected_rows
+	.name				= "rlm_sql_freetds",
+	.sql_socket_init		= sql_socket_init,
+	.sql_query			= sql_query,
+	.sql_select_query		= sql_select_query,
+	.sql_num_fields			= sql_num_fields,
+	.sql_num_rows			= sql_num_rows,
+	.sql_affected_rows		= sql_affected_rows,
+	.sql_fetch_row			= sql_fetch_row,
+	.sql_free_result		= sql_free_result,
+	.sql_error			= sql_error,
+	.sql_finish_query		= sql_finish_query,
+	.sql_finish_select_query	= sql_finish_select_query
 };

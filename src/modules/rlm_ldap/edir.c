@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -31,14 +32,10 @@ RCSID("$Id$")
 #include	<freeradius-devel/radiusd.h>
 #include	<freeradius-devel/rad_assert.h>
 
-#include <ldap.h>
-#include <lber.h>
 #include "ldap.h"
 
 /* NMAS error codes */
 #define NMAS_E_BASE	(-1600)
-
-#define NMAS_SUCCESS	0
 
 #define NMAS_E_FRAG_FAILURE		(NMAS_E_BASE-31)	/* -1631 0xFFFFF9A1 */
 #define NMAS_E_BUFFER_OVERFLOW		(NMAS_E_BASE-33)	/* -1633 0xFFFFF99F */
@@ -66,7 +63,9 @@ RCSID("$Id$")
  *
  * @param[out] request_bv where to write the request BER value (must be freed with ber_bvfree).
  * @param[in] dn to query for.
- * @return 0 on success, and < 0 on error.
+ * @return
+ *	- 0 on success.
+ *	- < 0 on error.
  */
 static int ber_encode_request_data(char const *dn, struct berval **request_bv)
 {
@@ -122,7 +121,9 @@ finish:
  * @param[out] server_version that responded.
  * @param[out] out data.
  * @param[out] outlen Length of data written to out.
- * @return 0 on success, and < 0 on error.
+ * @return
+ *	- 0 on success.
+ *	- < 0 on error.
  */
 static int ber_decode_login_data(struct berval *reply_bv, int *server_version, void *out, size_t *outlen)
 {
@@ -157,7 +158,9 @@ finish:
  * @param[in] dn of user we want to retrieve the password for.
  * @param[out] password Where to write the retrieved password.
  * @param[out] passlen Length of data written to the password buffer.
- * @return 0 on success and < 0 on failure.
+ * @return
+ *	- 0 on success.
+ *	- < 0 on failure.
  */
 int nmasldap_get_password(LDAP *ld, char const *dn, char *password, size_t *passlen)
 {

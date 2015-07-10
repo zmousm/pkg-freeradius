@@ -30,26 +30,26 @@ typedef struct rlm_eap_ttls_t {
 	/*
 	 *	TLS configuration
 	 */
-	char	*tls_conf_name;
+	char const *tls_conf_name;
 	fr_tls_server_conf_t *tls_conf;
 
 	/*
 	 *	Default tunneled EAP type
 	 */
-	char	*default_method_name;
-	int	default_method;
+	char const *default_method_name;
+	int default_method;
 
 	/*
 	 *	Use the reply attributes from the tunneled session in
 	 *	the non-tunneled reply to the client.
 	 */
-	bool	use_tunneled_reply;
+	bool use_tunneled_reply;
 
 	/*
 	 *	Use SOME of the request attributes from outside of the
 	 *	tunneled session in the tunneled request
 	 */
-	bool	copy_request_to_tunnel;
+	bool copy_request_to_tunnel;
 
 	/*
 	 *	RFC 5281 (TTLS) says that the length field MUST NOT be
@@ -60,41 +60,28 @@ typedef struct rlm_eap_ttls_t {
 	 *	RFC, we add the option here.  If set to "no", it sends
 	 *	the length field in ONLY the first fragment.
 	 */
-	bool	include_length;
+	bool include_length;
 
 	/*
 	 *	Virtual server for inner tunnel session.
 	 */
-	char	*virtual_server;
+	char const *virtual_server;
 
 	/*
 	 * 	Do we do require a client cert?
 	 */
-	bool	req_client_cert;
+	bool req_client_cert;
 } rlm_eap_ttls_t;
 
 
 static CONF_PARSER module_config[] = {
-	{ "tls", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_ttls_t, tls_conf_name), NULL, NULL },
-
-	{ "default_eap_type", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_ttls_t, default_method_name), NULL, "md5" },
-
-	{ "copy_request_to_tunnel", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_ttls_t, copy_request_to_tunnel), NULL, "no" },
-
-	{ "use_tunneled_reply", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_ttls_t, use_tunneled_reply), NULL, "no" },
-
-	{ "virtual_server", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_ttls_t, virtual_server), NULL, NULL },
-
-	{ "include_length", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_ttls_t, include_length), NULL, "yes" },
-
-	{ "require_client_cert", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_ttls_t, req_client_cert), NULL, "no" },
+	{ "tls", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_ttls_t, tls_conf_name), NULL },
+	{ "default_eap_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_ttls_t, default_method_name), "md5" },
+	{ "copy_request_to_tunnel", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ttls_t, copy_request_to_tunnel), "no" },
+	{ "use_tunneled_reply", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ttls_t, use_tunneled_reply), "no" },
+	{ "virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_ttls_t, virtual_server), NULL },
+	{ "include_length", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ttls_t, include_length), "yes" },
+	{ "require_client_cert", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ttls_t, req_client_cert), "no" },
 
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
@@ -103,7 +90,7 @@ static CONF_PARSER module_config[] = {
 /*
  *	Attach the module.
  */
-static int eapttls_attach(CONF_SECTION *cs, void **instance)
+static int mod_instantiate(CONF_SECTION *cs, void **instance)
 {
 	rlm_eap_ttls_t		*inst;
 
@@ -142,39 +129,14 @@ static int eapttls_attach(CONF_SECTION *cs, void **instance)
 	return 0;
 }
 
-
-/*
- *	Free the TTLS per-session data
- */
-static void ttls_free(void *p)
-{
-	ttls_tunnel_t *t = (ttls_tunnel_t *) p;
-
-	if (!t) return;
-
-	rad_assert(talloc_get_type_abort(t, ttls_tunnel_t) != NULL);
-
-	if (t->username) {
-		DEBUG2("rlm_eap_ttls: Freeing handler for user %s",
-		       t->username->vp_strvalue);
-	}
-
-	pairfree(&t->username);
-	pairfree(&t->state);
-	pairfree(&t->accept_vps);
-	talloc_free(t);
-}
-
-
 /*
  *	Allocate the TTLS per-session data
  */
-static ttls_tunnel_t *ttls_alloc(rlm_eap_ttls_t *inst,
-				 eap_handler_t *handler)
+static ttls_tunnel_t *ttls_alloc(TALLOC_CTX *ctx, rlm_eap_ttls_t *inst)
 {
 	ttls_tunnel_t *t;
 
-	t = talloc_zero(handler, ttls_tunnel_t);
+	t = talloc_zero(ctx, ttls_tunnel_t);
 
 	t->default_method = inst->default_method;
 	t->copy_request_to_tunnel = inst->copy_request_to_tunnel;
@@ -187,7 +149,7 @@ static ttls_tunnel_t *ttls_alloc(rlm_eap_ttls_t *inst,
 /*
  *	Send an initial eap-tls request to the peer, using the libeap functions.
  */
-static int eapttls_initiate(void *type_arg, eap_handler_t *handler)
+static int mod_session_init(void *type_arg, eap_handler_t *handler)
 {
 	int		status;
 	tls_session_t	*ssn;
@@ -199,7 +161,6 @@ static int eapttls_initiate(void *type_arg, eap_handler_t *handler)
 	inst = type_arg;
 
 	handler->tls = true;
-	handler->finished = false;
 
 	/*
 	 *	Check if we need a client certificate.
@@ -209,20 +170,19 @@ static int eapttls_initiate(void *type_arg, eap_handler_t *handler)
 	 * EAP-TLS-Require-Client-Cert attribute will override
 	 * the require_client_cert configuration option.
 	 */
-	vp = pairfind(handler->request->config_items, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
+	vp = pairfind(handler->request->config, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
 	if (vp) {
-		client_cert = vp->vp_integer;
+		client_cert = vp->vp_integer ? true : false;
 	} else {
 		client_cert = inst->req_client_cert;
 	}
 
-	ssn = eaptls_session(inst->tls_conf, handler, client_cert);
+	ssn = eaptls_session(handler, inst->tls_conf, client_cert);
 	if (!ssn) {
 		return 0;
 	}
 
 	handler->opaque = ((void *)ssn);
-	handler->free_opaque = session_free;
 
 	/*
 	 *	Set up type-specific information.
@@ -234,15 +194,17 @@ static int eapttls_initiate(void *type_arg, eap_handler_t *handler)
 	 *	related handshaking or application data.
 	 */
 	status = eaptls_start(handler->eap_ds, ssn->peap_flag);
-	RDEBUG2("Start returned %d", status);
-	if (status == 0) {
-		return 0;
+	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
+		REDEBUG("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	} else {
+		RDEBUG2("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
 	}
+	if (status == 0) return 0;
 
 	/*
 	 *	The next stage to process the packet.
 	 */
-	handler->stage = AUTHENTICATE;
+	handler->stage = PROCESS;
 
 	return 1;
 }
@@ -251,7 +213,7 @@ static int eapttls_initiate(void *type_arg, eap_handler_t *handler)
 /*
  *	Do authentication, by letting EAP-TLS do most of the work.
  */
-static int mod_authenticate(void *arg, eap_handler_t *handler)
+static int mod_process(void *arg, eap_handler_t *handler)
 {
 	int rcode;
 	fr_tls_status_t	status;
@@ -268,15 +230,20 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	 *	Process TLS layer until done.
 	 */
 	status = eaptls_process(handler);
-	RDEBUG2("eaptls_process returned %d\n", status);
+	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
+		REDEBUG("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	} else {
+		RDEBUG2("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	}
+
 	switch (status) {
-		/*
-		 *	EAP-TLS handshake was successful, tell the
-		 *	client to keep talking.
-		 *
-		 *	If this was EAP-TLS, we would just return
-		 *	an EAP-TLS-Success packet here.
-		 */
+	/*
+	 *	EAP-TLS handshake was successful, tell the
+	 *	client to keep talking.
+	 *
+	 *	If this was EAP-TLS, we would just return
+	 *	an EAP-TLS-Success packet here.
+	 */
 	case FR_TLS_SUCCESS:
 		if (SSL_session_reused(tls_session->ssl)) {
 			RDEBUG("Skipping Phase2 due to session resumption");
@@ -284,11 +251,16 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 		}
 
 		if (t && t->authenticated) {
-			RDEBUG2("Using saved attributes from the original Access-Accept");
-			debug_pair_list(t->accept_vps);
-			pairfilter(handler->request->reply,
-				  &handler->request->reply->vps,
-				  &t->accept_vps, 0, 0, TAG_ANY);
+			if (t->accept_vps) {
+				RDEBUG2("Using saved attributes from the original Access-Accept");
+				rdebug_pair_list(L_DBG_LVL_2, request, t->accept_vps, NULL);
+				pairfilter(handler->request->reply,
+					   &handler->request->reply->vps,
+					   &t->accept_vps, 0, 0, TAG_ANY);
+			} else if (t->use_tunneled_reply) {
+				RDEBUG2("No saved attributes in the original Access-Accept");
+			}
+
 		do_keys:
 			/*
 			 *	Success: Automatically return MPPE keys.
@@ -299,24 +271,24 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 		}
 		return 1;
 
-		/*
-		 *	The TLS code is still working on the TLS
-		 *	exchange, and it's a valid TLS request.
-		 *	do nothing.
-		 */
+	/*
+	 *	The TLS code is still working on the TLS
+	 *	exchange, and it's a valid TLS request.
+	 *	do nothing.
+	 */
 	case FR_TLS_HANDLED:
 		return 1;
 
-		/*
-		 *	Handshake is done, proceed with decoding tunneled
-		 *	data.
-		 */
+	/*
+	 *	Handshake is done, proceed with decoding tunneled
+	 *	data.
+	 */
 	case FR_TLS_OK:
 		break;
 
-		/*
-		 *	Anything else: fail.
-		 */
+	/*
+	 *	Anything else: fail.
+	 */
 	default:
 		return 0;
 	}
@@ -325,15 +297,14 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	 *	Session is established, proceed with decoding
 	 *	tunneled data.
 	 */
-	RDEBUG2("Session established.  Proceeding to decode tunneled attributes.");
+	RDEBUG2("Session established.  Proceeding to decode tunneled attributes");
 
 	/*
 	 *	We may need TTLS data associated with the session, so
 	 *	allocate it here, if it wasn't already alloacted.
 	 */
 	if (!tls_session->opaque) {
-		tls_session->opaque = ttls_alloc(inst, handler);
-		tls_session->free_opaque = ttls_free;
+		tls_session->opaque = ttls_alloc(tls_session, inst);
 	}
 
 	/*
@@ -341,7 +312,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	 */
 	rcode = eapttls_process(handler, tls_session);
 	switch (rcode) {
-	case PW_CODE_AUTHENTICATION_REJECT:
+	case PW_CODE_ACCESS_REJECT:
 		eaptls_fail(handler, 0);
 		return 0;
 
@@ -355,7 +326,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 		/*
 		 *	Success: Automatically return MPPE keys.
 		 */
-	case PW_CODE_AUTHENTICATION_ACK:
+	case PW_CODE_ACCESS_ACCEPT:
 		return eaptls_success(handler, 0);
 
 		/*
@@ -369,7 +340,6 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 		rad_assert(handler->request->proxy != NULL);
 #endif
 		return 1;
-		break;
 
 	default:
 		break;
@@ -386,11 +356,10 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
+extern rlm_eap_module_t rlm_eap_ttls;
 rlm_eap_module_t rlm_eap_ttls = {
-	"eap_ttls",
-	eapttls_attach,			/* attach */
-	eapttls_initiate,		/* Start the initial request */
-	NULL,				/* authorization */
-	mod_authenticate,		/* authentication */
-	NULL				/* detach */
+	.name		= "eap_ttls",
+	.instantiate	= mod_instantiate,	/* Create new submodule instance */
+	.session_init	= mod_session_init,	/* Initialise a new EAP session */
+	.process	= mod_process		/* Process next round of EAP method */
 };

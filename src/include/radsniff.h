@@ -1,6 +1,6 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
+ *   it under the terms of the GNU General Public License, version 2 of the
  *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
@@ -26,9 +26,7 @@
 RCSIDH(radsniff_h, "$Id$")
 
 #include <sys/types.h>
-#include <netinet/in.h>
 
-#include <pcap/pcap.h>
 #include <freeradius-devel/libradius.h>
 #include <freeradius-devel/pcap.h>
 #include <freeradius-devel/event.h>
@@ -49,22 +47,22 @@ RCSIDH(radsniff_h, "$Id$")
  *	Logging macros
  */
 #undef DEBUG2
-#define DEBUG2(fmt, ...)	if (fr_debug_flag > 2) fprintf(fr_log_fp , fmt "\n", ## __VA_ARGS__)
+#define DEBUG2(fmt, ...)	if (fr_debug_lvl > 2) fprintf(fr_log_fp , fmt "\n", ## __VA_ARGS__)
 #undef DEBUG
-#define DEBUG(fmt, ...)		if (fr_debug_flag > 1) fprintf(fr_log_fp , fmt "\n", ## __VA_ARGS__)
+#define DEBUG(fmt, ...)		if (fr_debug_lvl > 1) fprintf(fr_log_fp , fmt "\n", ## __VA_ARGS__)
 #undef INFO
-#define INFO(fmt, ...)		if (fr_debug_flag > 0) fprintf(fr_log_fp , fmt "\n", ## __VA_ARGS__)
+#define INFO(fmt, ...)		if (fr_debug_lvl > 0) fprintf(fr_log_fp , fmt "\n", ## __VA_ARGS__)
 
 #define ERROR(fmt, ...)		fr_perror("radsniff: " fmt, ## __VA_ARGS__)
 
-#define RIDEBUG_ENABLED()	(conf->print_packet && (fr_debug_flag > 0))
-#define RDEBUG_ENABLED()	(conf->print_packet && (fr_debug_flag > 1))
-#define RDEBUG_ENABLED2()	(conf->print_packet && (fr_debug_flag > 2))
+#define RIDEBUG_ENABLED()	(conf->print_packet && (fr_debug_lvl > 0))
+#define RDEBUG_ENABLED()	(conf->print_packet && (fr_debug_lvl > 1))
+#define RDEBUG_ENABLED2()	(conf->print_packet && (fr_debug_lvl > 2))
 
 #define REDEBUG(fmt, ...)	if (conf->print_packet) fr_perror("%s (%" PRIu64 ") " fmt , timestr, count, ## __VA_ARGS__)
-#define RIDEBUG(fmt, ...)	if (conf->print_packet && (fr_debug_flag > 0)) fprintf(fr_log_fp , "%s (%" PRIu64 ") " fmt "\n", timestr, count, ## __VA_ARGS__)
-#define RDEBUG(fmt, ...)	if (conf->print_packet && (fr_debug_flag > 1)) fprintf(fr_log_fp , "%s (%" PRIu64 ") " fmt "\n", timestr, count, ## __VA_ARGS__)
-#define RDEBUG2(fmt, ...)	if (conf->print_packet && (fr_debug_flag > 2)) fprintf(fr_log_fp , "%s (%" PRIu64 ") " fmt "\n", timestr, count, ## __VA_ARGS__)
+#define RIDEBUG(fmt, ...)	if (conf->print_packet && (fr_debug_lvl > 0)) fprintf(fr_log_fp , "%s (%" PRIu64 ") " fmt "\n", timestr, count, ## __VA_ARGS__)
+#define RDEBUG(fmt, ...)	if (conf->print_packet && (fr_debug_lvl > 1)) fprintf(fr_log_fp , "%s (%" PRIu64 ") " fmt "\n", timestr, count, ## __VA_ARGS__)
+#define RDEBUG2(fmt, ...)	if (conf->print_packet && (fr_debug_lvl > 2)) fprintf(fr_log_fp , "%s (%" PRIu64 ") " fmt "\n", timestr, count, ## __VA_ARGS__)
 
 typedef enum {
 	RS_NORMAL	= 0x01,
@@ -161,6 +159,11 @@ typedef struct rs_stats {
 							//!< dropping packets, or we run out of memory.
 } rs_stats_t;
 
+typedef struct rs_capture {
+	struct pcap_pkthdr	*header;		//!< PCAP packet header.
+	uint8_t			*data;			//!< PCAP packet data.
+} rs_capture_t;
+
 /** Wrapper for RADIUS_PACKET
  *
  * Allows an event to be associated with a request packet.  This is required because we need to disarm
@@ -170,6 +173,8 @@ typedef struct rs_request {
 	uint64_t		id;			//!< Monotonically increasing packet counter.
 	fr_event_t		*event;			//!< Event created when we received the original request.
 
+	bool			logged;			//!< Whether any messages regarding this request were logged.
+
 	struct timeval		when;			//!< Time when the packet was received, or next time an event
 							//!< is scheduled.
 	fr_pcap_t		*in;			//!< PCAP handle the original request was received on.
@@ -177,6 +182,11 @@ typedef struct rs_request {
 	RADIUS_PACKET		*expect;		//!< Request/response.
 	RADIUS_PACKET		*linked;		//!< The subsequent response or forwarded request the packet
 							//!< was linked against.
+
+
+	rs_capture_t		capture[RS_RETRANSMIT_MAX];	//!< Buffered request packets (if a response filter
+								//!< has been applied).
+	rs_capture_t		*capture_p;			//!< Next packet slot.
 
 	uint64_t		rt_req;			//!< Number of times we saw the same request packet.
 	uint64_t		rt_rsp;			//!< Number of times we saw a retransmitted response

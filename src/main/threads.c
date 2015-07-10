@@ -43,6 +43,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include <mach/mach_init.h>
 #include <mach/semaphore.h>
 
+#ifndef WITH_GCD
 #undef sem_t
 #define sem_t semaphore_t
 #undef sem_init
@@ -51,7 +52,8 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #define sem_wait(s) semaphore_wait(*s)
 #undef sem_post
 #define sem_post(s) semaphore_signal(*s)
-#endif
+#endif	/* WITH_GCD */
+#endif	/* __APPLE__ */
 
 #ifdef HAVE_SYS_WAIT_H
 #include <sys/wait.h>
@@ -71,7 +73,6 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 
 #ifndef WITH_GCD
 #define SEMAPHORE_LOCKED	(0)
-#define SEMAPHORE_UNLOCKED	(1)
 
 #define THREAD_RUNNING		(1)
 #define THREAD_CANCELLED	(2)
@@ -82,40 +83,35 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 /*
  *  A data structure which contains the information about
  *  the current thread.
- *
- *  pthread_id     pthread id
- *  thread_num     server thread number, 1...number of threads
- *  semaphore     used to block the thread until a request comes in
- *  status	is the thread running or exited?
- *  request_count the number of requests that this thread has handled
- *  timestamp     when the thread started executing.
  */
 typedef struct THREAD_HANDLE {
-	struct THREAD_HANDLE *prev;
-	struct THREAD_HANDLE *next;
-	pthread_t	    pthread_id;
-	int		  thread_num;
-	int		  status;
-	unsigned int	 request_count;
-	time_t	       timestamp;
-	REQUEST		     *request;
+	struct THREAD_HANDLE	*prev;		//!< Previous thread handle (in the linked list).
+	struct THREAD_HANDLE	*next;		//!< Next thread handle (int the linked list).
+	pthread_t		pthread_id;	//!< pthread_id.
+	int			thread_num;	//!< Server thread number, 1...number of threads.
+	int			status;		//!< Is the thread running or exited?
+	unsigned int		request_count;	//!< The number of requests that this thread has handled.
+	time_t			timestamp;	//!< When the thread started executing.
+	REQUEST			*request;
 } THREAD_HANDLE;
 
 #endif	/* WITH_GCD */
 
+#ifdef WNOHANG
 typedef struct thread_fork_t {
 	pid_t		pid;
 	int		status;
 	int		exited;
 } thread_fork_t;
+#endif
 
 
 #ifdef WITH_STATS
 typedef struct fr_pps_t {
-	int	pps_old;
-	int	pps_now;
-	int	pps;
-	time_t	time_old;
+	uint32_t	pps_old;
+	uint32_t	pps_now;
+	uint32_t	pps;
+	time_t		time_old;
 } fr_pps_t;
 #endif
 
@@ -127,24 +123,25 @@ typedef struct fr_pps_t {
  */
 typedef struct THREAD_POOL {
 #ifndef WITH_GCD
-	THREAD_HANDLE *head;
-	THREAD_HANDLE *tail;
+	THREAD_HANDLE	*head;
+	THREAD_HANDLE	*tail;
 
-	int active_threads;	/* protected by queue_mutex */
-	int exited_threads;
-	int total_threads;
-	int max_thread_num;
-	int start_threads;
-	int max_threads;
-	int min_spare_threads;
-	int max_spare_threads;
-	unsigned int max_requests_per_thread;
-	unsigned long request_count;
-	time_t time_last_spawned;
-	int cleanup_delay;
-	int stop_flag;
+	uint32_t	active_threads;	/* protected by queue_mutex */
+	uint32_t	total_threads;
+
+	uint32_t	exited_threads;
+	uint32_t	max_thread_num;
+	uint32_t	start_threads;
+	uint32_t	max_threads;
+	uint32_t	min_spare_threads;
+	uint32_t	max_spare_threads;
+	uint32_t	max_requests_per_thread;
+	uint32_t	request_count;
+	time_t		time_last_spawned;
+	uint32_t	cleanup_delay;
+	bool		stop_flag;
 #endif	/* WITH_GCD */
-	bool spawn_flag;
+	bool		spawn_flag;
 
 #ifdef WNOHANG
 	pthread_mutex_t	wait_mutex;
@@ -173,8 +170,8 @@ typedef struct THREAD_POOL {
 	 */
 	pthread_mutex_t	queue_mutex;
 
-	int		max_queue_size;
-	int		num_queued;
+	uint32_t	max_queue_size;
+	uint32_t	num_queued;
 	fr_fifo_t	*fifo[NUM_FIFOS];
 #endif	/* WITH_GCD */
 } THREAD_POOL;
@@ -193,16 +190,16 @@ static void thread_pool_manage(time_t now);
  *	A mapping of configuration file names to internal integers
  */
 static const CONF_PARSER thread_config[] = {
-	{ "start_servers",	   PW_TYPE_INTEGER, 0, &thread_pool.start_threads,	   "5" },
-	{ "max_servers",	     PW_TYPE_INTEGER, 0, &thread_pool.max_threads,	     "32" },
-	{ "min_spare_servers",       PW_TYPE_INTEGER, 0, &thread_pool.min_spare_threads,       "3" },
-	{ "max_spare_servers",       PW_TYPE_INTEGER, 0, &thread_pool.max_spare_threads,       "10" },
-	{ "max_requests_per_server", PW_TYPE_INTEGER, 0, &thread_pool.max_requests_per_thread, "0" },
-	{ "cleanup_delay",	   PW_TYPE_INTEGER, 0, &thread_pool.cleanup_delay,	   "5" },
-	{ "max_queue_size",	  PW_TYPE_INTEGER, 0, &thread_pool.max_queue_size,	  "65536" },
+	{ "start_servers", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.start_threads), "5" },
+	{ "max_servers", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.max_threads), "32" },
+	{ "min_spare_servers", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.min_spare_threads), "3" },
+	{ "max_spare_servers", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.max_spare_threads), "10" },
+	{ "max_requests_per_server", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.max_requests_per_thread), "0" },
+	{ "cleanup_delay", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.cleanup_delay), "5" },
+	{ "max_queue_size", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.max_queue_size), "65536" },
 #ifdef WITH_STATS
 #ifdef WITH_ACCOUNTING
-	{ "auto_limit_acct",	     PW_TYPE_BOOLEAN, 0, &thread_pool.auto_limit_acct, NULL },
+	{ "auto_limit_acct", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &thread_pool.auto_limit_acct), NULL },
 #endif
 #endif
 	{ NULL, -1, 0, NULL, NULL }
@@ -227,7 +224,16 @@ static pthread_mutex_t *ssl_mutexes = NULL;
 
 static unsigned long ssl_id_function(void)
 {
-	return (unsigned long) pthread_self();
+	unsigned long ret;
+	pthread_t thread = pthread_self();
+
+	if (sizeof(ret) >= sizeof(thread)) {
+		memcpy(&ret, &thread, sizeof(thread));
+	} else {
+		memcpy(&ret, &thread, sizeof(ret));
+	}
+
+	return ret;
 }
 
 static void ssl_locking_function(int mode, int n, UNUSED char const *file, UNUSED int line)
@@ -369,7 +375,7 @@ int request_enqueue(REQUEST *request)
 		    (thread_pool.num_queued > (thread_pool.max_queue_size / 2)) &&
 		    (thread_pool.pps_in.pps_now > thread_pool.pps_out.pps_now)) {
 			uint32_t prob;
-			int keep;
+			uint32_t keep;
 
 			/*
 			 *	Take a random value of how full we
@@ -460,9 +466,9 @@ static int request_dequeue(REQUEST **prequest)
 	time_t blocked;
 	static time_t last_complained = 0;
 	static time_t total_blocked = 0;
-	int num_blocked;
+	int num_blocked = 0;
 	RAD_LISTEN_TYPE i, start;
-	REQUEST *request;
+	REQUEST *request = NULL;
 	reap_children();
 
 	rad_assert(pool_initialized == true);
@@ -600,7 +606,7 @@ static int request_dequeue(REQUEST **prequest)
  */
 static void *request_handler_thread(void *arg)
 {
-	THREAD_HANDLE	  *self = (THREAD_HANDLE *) arg;
+	THREAD_HANDLE *self = (THREAD_HANDLE *) arg;
 
 	/*
 	 *	Loop forever, until told to exit.
@@ -633,7 +639,7 @@ static void *request_handler_thread(void *arg)
 		/*
 		 *	Clear the error queue for the current thread.
 		 */
-		ERR_clear_error ();
+		ERR_clear_error();
 #endif
 
 		/*
@@ -663,15 +669,15 @@ static void *request_handler_thread(void *arg)
 			VALUE_PAIR *vp;
 			REQUEST *request = self->request;
 
-			vp = radius_paircreate(request, &request->config_items,
+			vp = radius_paircreate(request, &request->config,
 					       181, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
 
-			vp = radius_paircreate(request, &request->config_items,
+			vp = radius_paircreate(request, &request->config,
 					       182, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
 
-			vp = radius_paircreate(request, &request->config_items,
+			vp = radius_paircreate(request, &request->config,
 					       183, VENDORPEC_FREERADIUS);
 			if (vp) {
 				vp->vp_integer = thread_pool.max_queue_size - thread_pool.num_queued;
@@ -790,7 +796,6 @@ static THREAD_HANDLE *spawn_thread(time_t now, int do_trigger)
 	 */
 	if (thread_pool.total_threads >= thread_pool.max_threads) {
 		DEBUG2("Thread spawn failed.  Maximum number of threads (%d) already running.", thread_pool.max_threads);
-		exec_trigger(NULL, NULL, "server.thread.max_threads", true);
 		return NULL;
 	}
 
@@ -813,8 +818,7 @@ static THREAD_HANDLE *spawn_thread(time_t now, int do_trigger)
 	 *	Note that the function returns non-zero on error, NOT
 	 *	-1.  The return code is the error, and errno isn't set.
 	 */
-	rcode = pthread_create(&handle->pthread_id, 0,
-			request_handler_thread, handle);
+	rcode = pthread_create(&handle->pthread_id, 0, request_handler_thread, handle);
 	if (rcode != 0) {
 		free(handle);
 		ERROR("Thread create failed: %s",
@@ -848,6 +852,12 @@ static THREAD_HANDLE *spawn_thread(time_t now, int do_trigger)
 	thread_pool.time_last_spawned = now;
 
 	/*
+	 * Fire trigger if maximum number of threads reached
+	 */
+	if (thread_pool.total_threads >= thread_pool.max_threads)
+		exec_trigger(NULL, NULL, "server.thread.max_threads", true);
+
+	/*
 	 *	And return the new handle to the caller.
 	 */
 	return handle;
@@ -878,12 +888,13 @@ static int pid_cmp(void const *one, void const *two)
  *
  *	FIXME: What to do on a SIGHUP???
  */
-int thread_pool_init(UNUSED CONF_SECTION *cs, bool *spawn_flag)
+int thread_pool_init(CONF_SECTION *cs, bool *spawn_flag)
 {
 #ifndef WITH_GCD
-	int		i, rcode;
-	CONF_SECTION	*pool_cf;
+	uint32_t	i;
+	int		rcode;
 #endif
+	CONF_SECTION	*pool_cf;
 	time_t		now;
 
 	now = time(NULL);
@@ -892,8 +903,10 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, bool *spawn_flag)
 	rad_assert(*spawn_flag == true);
 	rad_assert(pool_initialized == false); /* not called on HUP */
 
-#ifndef WITH_GCD
 	pool_cf = cf_subsection_find_next(cs, NULL, "thread");
+#ifdef WITH_GCD
+	if (pool_cf) WARN("Built with Grand Central Dispatch.  Ignoring 'thread' subsection");
+#else
 	if (!pool_cf) *spawn_flag = false;
 #endif
 
@@ -907,7 +920,7 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, bool *spawn_flag)
 	thread_pool.total_threads = 0;
 	thread_pool.max_thread_num = 1;
 	thread_pool.cleanup_delay = 5;
-	thread_pool.stop_flag = 0;
+	thread_pool.stop_flag = false;
 #endif
 	thread_pool.spawn_flag = *spawn_flag;
 
@@ -995,7 +1008,7 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, bool *spawn_flag)
 	 *	Allocate multiple fifos.
 	 */
 	for (i = 0; i < RAD_LISTEN_MAX; i++) {
-		thread_pool.fifo[i] = fr_fifo_create(thread_pool.max_queue_size, NULL);
+		thread_pool.fifo[i] = fr_fifo_create(NULL, thread_pool.max_queue_size, NULL);
 		if (!thread_pool.fifo[i]) {
 			ERROR("FATAL: Failed to set up request fifo");
 			return -1;
@@ -1056,7 +1069,7 @@ void thread_pool_stop(void)
 	/*
 	 *	Set pool stop flag.
 	 */
-	thread_pool.stop_flag = 1;
+	thread_pool.stop_flag = true;
 
 	/*
 	 *	Wakeup all threads to make them see stop flag.
@@ -1074,6 +1087,26 @@ void thread_pool_stop(void)
 		pthread_join(handle->pthread_id, NULL);
 		delete_thread(handle);
 	}
+
+	for (i = 0; i < RAD_LISTEN_MAX; i++) {
+		fr_fifo_free(thread_pool.fifo[i]);
+	}
+
+#ifdef WNOHANG
+	fr_hash_table_free(thread_pool.waiters);
+#endif
+
+#ifdef HAVE_OPENSSL_CRYPTO_H
+	/*
+	 *	We're no longer threaded.  Remove the mutexes and free
+	 *	the memory.
+	 */
+	CRYPTO_set_id_callback(NULL);
+	CRYPTO_set_locking_callback(NULL);
+
+	free(ssl_mutexes);
+#endif
+
 #endif
 }
 
@@ -1102,10 +1135,10 @@ int request_enqueue(REQUEST *request)
  */
 static void thread_pool_manage(time_t now)
 {
-	int spare;
+	uint32_t spare;
 	int i, total;
 	THREAD_HANDLE *handle, *next;
-	int active_threads;
+	uint32_t active_threads;
 
 	/*
 	 *	Loop over the thread pool, deleting exited threads.
@@ -1134,14 +1167,13 @@ static void thread_pool_manage(time_t now)
 	 */
 	active_threads = thread_pool.active_threads;
 	spare = thread_pool.total_threads - active_threads;
-	if (debug_flag) {
-		static int old_total = -1;
-		static int old_active = -1;
+	if (rad_debug_lvl) {
+		static uint32_t old_total = 0;
+		static uint32_t old_active = 0;
 
-		if ((old_total != thread_pool.total_threads) ||
-				(old_active != active_threads)) {
+		if ((old_total != thread_pool.total_threads) || (old_active != active_threads)) {
 			DEBUG2("Threads: total/active/spare threads = %d/%d/%d",
-					thread_pool.total_threads, active_threads, spare);
+			       thread_pool.total_threads, active_threads, spare);
 			old_total = thread_pool.total_threads;
 			old_active = active_threads;
 		}
@@ -1187,7 +1219,7 @@ static void thread_pool_manage(time_t now)
 	 *	passed since we last created one.  This helps to minimize
 	 *	the amount of create/delete cycles.
 	 */
-	if ((now - thread_pool.time_last_spawned) < thread_pool.cleanup_delay) {
+	if ((now - thread_pool.time_last_spawned) < (int)thread_pool.cleanup_delay) {
 		return;
 	}
 
@@ -1385,6 +1417,7 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 	char const *attr;
 	char const *value;
 	VALUE_PAIR *vp;
+	bool alloc = false;
 
 	/*
 	 *	Use global "trigger" section if no local config is given.
@@ -1428,7 +1461,7 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 		return;
 	}
 
-	cp = cf_itemtopair(ci);
+	cp = cf_item_to_pair(ci);
 	if (!cp) return;
 
 	value = cf_pair_value(cp);
@@ -1471,6 +1504,17 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 		}
 	}
 
+	/*
+	 *	radius_exec_program always needs a request.
+	 */
+	if (!request) {
+		request = request_alloc(NULL);
+		alloc = true;
+	}
+
 	DEBUG("Trigger %s -> %s", name, value);
-	radius_exec_program(request, value, false, true, NULL, 0, EXEC_TIMEOUT, vp, NULL);
+
+	radius_exec_program(request, NULL, 0, NULL, request, value, vp, false, true, EXEC_TIMEOUT);
+
+	if (alloc) talloc_free(request);
 }

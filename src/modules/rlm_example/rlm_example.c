@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -25,6 +26,7 @@ RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
+#include <freeradius-devel/rad_assert.h>
 
 /*
  *	Define a structure for our module configuration.
@@ -35,23 +37,33 @@ RCSID("$Id$")
  */
 typedef struct rlm_example_t {
 	bool		boolean;
-	int		value;
-	char		*string;
-	uint32_t	ipaddr;
+	uint32_t	value;
+	char const	*string;
+	fr_ipaddr_t	ipaddr;
 } rlm_example_t;
 
 /*
  *	A mapping of configuration file names to internal variables.
  */
 static const CONF_PARSER module_config[] = {
-  { "integer", PW_TYPE_INTEGER,    offsetof(rlm_example_t,value), NULL,   "1" },
-  { "boolean", PW_TYPE_BOOLEAN,    offsetof(rlm_example_t,boolean), NULL, "no"},
-  { "string",  PW_TYPE_STRING_PTR, offsetof(rlm_example_t,string), NULL,  NULL},
-  { "ipaddr",  PW_TYPE_IPADDR,     offsetof(rlm_example_t,ipaddr), NULL,  "*" },
+	{ "integer", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_example_t, value), "1" },
+	{ "boolean", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_example_t, boolean), "no" },
+	{ "string", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_example_t, string), NULL },
+	{ "ipaddr", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR, rlm_example_t, ipaddr), "*" },
 
-  { NULL, -1, 0, NULL, NULL }		/* end the list */
+	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
+static int rlm_example_cmp(UNUSED void *instance, REQUEST *request, UNUSED VALUE_PAIR *thing, VALUE_PAIR *check,
+			   UNUSED VALUE_PAIR *check_pairs, UNUSED VALUE_PAIR **reply_pairs)
+{
+	rad_assert(check->da->type == PW_TYPE_STRING);
+
+	RINFO("Example-Paircmp called with \"%s\"", check->vp_strvalue);
+
+	if (strcmp(check->vp_strvalue, "yes") == 0) return 0;
+	return 1;
+}
 
 /*
  *	Do any per-module initialization that is separate to each
@@ -66,7 +78,9 @@ static const CONF_PARSER module_config[] = {
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	rlm_example_t *inst = instance;
+	ATTR_FLAGS flags;
 
+	memset(&flags, 0, sizeof(flags));
 	/*
 	 *	Do more work here
 	 */
@@ -74,6 +88,15 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		cf_log_err_cs(conf, "Boolean is false: forcing error!");
 		return -1;
 	}
+
+	if (dict_addattr("Example-Paircmp", -1, 0, PW_TYPE_STRING, flags) < 0) {
+		ERROR("Failed creating paircmp attribute: %s", fr_strerror());
+
+		return -1;
+	}
+
+	paircompare_register(dict_attrbyname("Example-Paircmp"), dict_attrbyvalue(PW_USER_NAME, 0), false,
+			     rlm_example_cmp, inst);
 
 	return 0;
 }
@@ -84,14 +107,14 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
  *	from the database. The authentication code only needs to check
  *	the password, the rest is done here.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
 {
 	VALUE_PAIR *state;
 
 	/*
 	 *  Look for the 'state' attribute.
 	 */
-	state =  pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY);
+	state = pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY);
 	if (state != NULL) {
 		RDEBUG("Found reply to access challenge");
 		return RLM_MODULE_OK;
@@ -109,7 +132,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED 
 	 *  The server will take care of sending it to the user.
 	 */
 	request->reply->code = PW_CODE_ACCESS_CHALLENGE;
-	RDEBUG("Sending Access-Challenge.");
+	RDEBUG("Sending Access-Challenge");
 
 	return RLM_MODULE_HANDLED;
 }
@@ -149,11 +172,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(UNUSED void *instance, UNUSED
  *	max. number of logins, do a second pass and validate all
  *	logins by querying the terminal server (using eg. SNMP).
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(UNUSED void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(UNUSED void *instance, REQUEST *request)
 {
-  request->simul_count=0;
+	request->simul_count=0;
 
-  return RLM_MODULE_OK;
+	return RLM_MODULE_OK;
 }
 #endif
 
@@ -177,26 +200,22 @@ static int mod_detach(UNUSED void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_example;
 module_t rlm_example = {
-	RLM_MODULE_INIT,
-	"example",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_example_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	mod_detach,			/* detach */
-	{
-		mod_authenticate,	/* authentication */
-		mod_authorize,	/* authorization */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "example",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_example_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize,
 #ifdef WITH_ACCOUNTING
-		mod_preacct,	/* preaccounting */
-		mod_accounting,	/* accounting */
-		mod_checksimul,	/* checksimul */
-#else
-		NULL, NULL, NULL,
+		[MOD_PREACCT]		= mod_preacct,
+		[MOD_ACCOUNTING]	= mod_accounting,
+		[MOD_SESSION]		= mod_checksimul
 #endif
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
 	},
 };

@@ -16,7 +16,7 @@
 #ifndef FR_TOKEN_H
 #define FR_TOKEN_H
 
-/*
+/**
  * $Id$
  *
  * @file token.h
@@ -32,36 +32,36 @@ extern "C" {
 #endif
 
 typedef enum fr_token_t {
-  T_OP_INVALID = 0,		/* invalid token */
-  T_EOL,			/* end of line */
-  T_LCBRACE,			/* { */
-  T_RCBRACE,			/* } */
-  T_LBRACE,			/* ( */
-  T_RBRACE,			/* ) 		 5 */
-  T_COMMA,			/* , */
-  T_SEMICOLON,			/* ; */
+	T_INVALID = 0,			/* invalid token */
+	T_EOL,				/* end of line */
+	T_LCBRACE,			/* { */
+	T_RCBRACE,			/* } */
+	T_LBRACE,			/* ( */
+	T_RBRACE,			/* ) 		 5 */
+	T_COMMA,			/* , */
+	T_SEMICOLON,			/* ; */
 
-  T_OP_INCRM,			/* ++ */
-  T_OP_ADD,			/* += */
-  T_OP_SUB,			/* -=  		10 */
-  T_OP_SET,			/* := */
-  T_OP_EQ,			/* = */
-  T_OP_NE,			/* != */
-  T_OP_GE,			/* >= */
-  T_OP_GT,			/* > 		15 */
-  T_OP_LE,			/* <= */
-  T_OP_LT,			/* < */
-  T_OP_REG_EQ,			/* =~ */
-  T_OP_REG_NE,			/* !~ */
-  T_OP_CMP_TRUE,		/* =* 		20 */
-  T_OP_CMP_FALSE,	       /* !* */
-  T_OP_CMP_EQ,			/* == */
-  T_HASH,			/* # */
-  T_BARE_WORD,			/* bare word */
-  T_DOUBLE_QUOTED_STRING,	/* "foo" 	25 */
-  T_SINGLE_QUOTED_STRING,	/* 'foo' */
-  T_BACK_QUOTED_STRING,		/* `foo` */
-  T_TOKEN_LAST
+	T_OP_INCRM,			/* ++ */
+	T_OP_ADD,			/* += */
+	T_OP_SUB,			/* -=  		10 */
+	T_OP_SET,			/* := */
+	T_OP_EQ,			/* = */
+	T_OP_NE,			/* != */
+	T_OP_GE,			/* >= */
+	T_OP_GT,			/* > 		15 */
+	T_OP_LE,			/* <= */
+	T_OP_LT,			/* < */
+	T_OP_REG_EQ,			/* =~ */
+	T_OP_REG_NE,			/* !~ */
+	T_OP_CMP_TRUE,			/* =* 		20 */
+	T_OP_CMP_FALSE,			/* !* */
+	T_OP_CMP_EQ,			/* == */
+	T_HASH,				/* # */
+	T_BARE_WORD,			/* bare word */
+	T_DOUBLE_QUOTED_STRING,		/* "foo" 	25 */
+	T_SINGLE_QUOTED_STRING,		/* 'foo' */
+	T_BACK_QUOTED_STRING,		/* `foo` */
+	T_TOKEN_LAST
 } FR_TOKEN;
 
 #define T_EQSTART	T_OP_ADD
@@ -73,15 +73,17 @@ typedef struct FR_NAME_NUMBER {
 } FR_NAME_NUMBER;
 
 extern const FR_NAME_NUMBER fr_tokens[];
+extern const bool fr_assignment_op[];
+extern const bool fr_equality_op[];
+extern const bool fr_str_tok[];
 
 int fr_str2int(FR_NAME_NUMBER const *table, char const *name, int def);
 int fr_substr2int(FR_NAME_NUMBER const *table, char const *name, int def, int len);
-char const *fr_int2str(FR_NAME_NUMBER const *table, int number,
-			 char const *def);
-
+char const *fr_int2str(FR_NAME_NUMBER const *table, int number, char const *def);
 
 int		getword (char const **ptr, char *buf, int buflen, bool unescape);
 FR_TOKEN	gettoken(char const **ptr, char *buf, int buflen, bool unescape);
+FR_TOKEN	getop(char const **ptr);
 FR_TOKEN	getstring(char const **ptr, char *buf, int buflen, bool unescape);
 char const	*fr_token_name(int);
 

@@ -45,6 +45,19 @@ our (%RAD_REQUEST, %RAD_REPLY, %RAD_CHECK);
 # This is configuration items from "config" perl module configuration section
 #my %RAD_PERLCONF;
 
+# Multi-value attributes are mapped to perl arrayrefs.
+#
+#  update request {
+#    Filter-Id := 'foo'
+#    Filter-Id += 'bar'
+#  }
+#
+# This results to the following entry in %RAD_REQUEST:
+#
+#  $RAD_REQUEST{'Filter-Id'} = [ 'foo', 'bar' ];
+#
+# Likewise, you can assign an arrayref to return multi-value attributes
+
 #
 # This the remapping of return values
 #
@@ -183,9 +196,6 @@ sub xlat {
 sub detach {
 	# For debugging purposes only
 #	&log_request_attributes;
-
-	# Do some logging.
-	&radiusd::radlog(L_DBG,"rlm_perl::Detaching. Reloading. Done.");
 }
 
 #

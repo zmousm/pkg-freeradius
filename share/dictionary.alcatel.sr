@@ -1,5 +1,5 @@
 # -*- text -*-
-# Copyright (C) 2012 The FreeRADIUS Server project and contributors
+# Copyright (C) 2015 The FreeRADIUS Server project and contributors
 ##############################################################################
 #
 #	Alcatel-Lucent Service Router dictionary.
@@ -74,6 +74,13 @@ ATTRIBUTE	Alc-PPPoE-Service-Name			35	string
 ATTRIBUTE	Alc-DHCP-Vendor-Class-Id		36	string
 
 # RADIUS subscriber accounting VSAs (HSMDA override counters)
+#
+#  In a stupid format.  These attributes are 10 octets long, in the
+#  following format:
+#
+#	2 octets - Queue ID
+#	8 octets - 64-bit counter.
+#
 ATTRIBUTE	Alc-Acct-OC-I-Inprof-Octets-64		37	octets
 ATTRIBUTE	Alc-Acct-OC-I-Outprof-Octets-64		38	octets
 ATTRIBUTE	Alc-Acct-OC-O-Inprof-Octets-64		39	octets
@@ -332,5 +339,26 @@ VALUE	Alc-Acct-Triggered-Reason	Delegated-IPv6-Prefix-up 8
 VALUE	Alc-Acct-Triggered-Reason	Delegated-IPv6-Prefix-down 9
 VALUE	Alc-Acct-Triggered-Reason	Framed-IPv6-Prefix-up	10
 VALUE	Alc-Acct-Triggered-Reason	Framed-IPv6-Prefix-down	11
+
+# Used when authenticating migrant hosts
+ATTRIBUTE   Alc-Wlan-Portal-Redirect                  172 string
+
+# If a migrant host is redirected, specifies the URL
+ATTRIBUTE   Alc-Wlan-Portal-Url                       173 string
+
+# Defines the lease-time in seconds for RADIUS proxy and create-host-CoA
+# scenarios only.
+ATTRIBUTE   Alc-Lease-Time                            174 integer
+
+# The URL to which traffic matching the host IPv4 filter entry with http-redirect
+# action is redirected to
+ATTRIBUTE   Alc-Portal-Url                            177 string
+
+# names longer than the allowed maximum are treated as host setup failures
+ATTRIBUTE   Alc-SLAAC-IPv6-Pool                       181 string
+
+# The VLAN is transparently taken from the UE’s Ethernet layer and can be reflected
+# in both authentication and accounting
+ATTRIBUTE   Alc-Wlan-SSID-VLAN                        206 string
 
 END-VENDOR	Alcatel-Lucent-Service-Router

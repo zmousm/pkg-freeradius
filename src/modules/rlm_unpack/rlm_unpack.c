@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -99,7 +100,7 @@ static ssize_t unpack_xlat(UNUSED void *instance, REQUEST *request, char const *
 			goto nothing;
 		}
 		input = vp->vp_octets;
-		input_len = vp->length;
+		input_len = vp->vp_length;
 
 	} else if ((data_name[0] == '0') && (data_name[1] == 'x')) {
 		/*
@@ -111,7 +112,7 @@ static ssize_t unpack_xlat(UNUSED void *instance, REQUEST *request, char const *
 			goto nothing;
 		}
 		input = blob;
-		input_len = fr_hex2bin(blob, data_name + 2, sizeof(blob));
+		input_len = fr_hex2bin(blob, sizeof(blob), data_name + 2, len);
 
 	} else {
 		GOTO_ERROR;
@@ -153,7 +154,7 @@ static ssize_t unpack_xlat(UNUSED void *instance, REQUEST *request, char const *
 	if (!cast) goto nothing;
 
 	memcpy(&(cast->data), input + offset, dict_attr_sizes[type][0]);
-	cast->length = dict_attr_sizes[type][0];
+	cast->vp_length = dict_attr_sizes[type][0];
 
 	/*
 	 *	Hacks
@@ -191,8 +192,10 @@ static ssize_t unpack_xlat(UNUSED void *instance, REQUEST *request, char const *
 /*
  *	Register the xlats
  */
-static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 {
+	if (cf_section_name2(conf)) return 0;
+
 	xlat_register("unpack", unpack_xlat, NULL, instance);
 
 	return 0;
@@ -207,20 +210,10 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_unpack;
 module_t rlm_unpack = {
-	RLM_MODULE_INIT,
-	"unpack",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	0,
-	NULL,
-	mod_instantiate,		/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		NULL,			/* authorization */
-		NULL, NULL, NULL,
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
-	},
+	.magic		= RLM_MODULE_INIT,
+	.name		= "unpack",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.bootstrap	= mod_bootstrap
 };

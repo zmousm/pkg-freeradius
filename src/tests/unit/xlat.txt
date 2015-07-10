@@ -11,11 +11,8 @@ data %{test:bar}
 xlat %{1}
 data %{1}
 
-xlat %{9}
-data ERROR offset 2 'Invalid regex reference'
-
-xlat %{10}
-data ERROR offset 2 'Unknown attribute'
+xlat %{33}
+data ERROR offset 2 'Invalid regex reference.  Must be in range 0-32'
 
 xlat %{%{foo}:-%{bar}}
 data ERROR offset 4 'Unknown attribute'
@@ -102,7 +99,7 @@ xlat %{}
 data ERROR offset 2 'Empty expression is invalid'
 
 xlat %{ }
-data ERROR offset 2 'Unknown attribute'
+data ERROR offset 2 'Invalid attribute name'
 
 xlat %{%{User-Name}:-}
 data %{%{User-Name}:-}
@@ -125,3 +122,9 @@ data "%{reply:3GPP-IMSI}"
 
 xlat "%{reply:3GPP-IMSI[2]}"
 data "%{reply:3GPP-IMSI[2]}"
+
+xlat /([A-Z0-9\-]*)_%{Calling-Station-Id}/
+data /([A-Z0-9\-]*)_%{Calling-Station-Id}/
+
+xlat %{length:1 + 2
+data ERROR offset 14 'Missing closing brace at end of string'

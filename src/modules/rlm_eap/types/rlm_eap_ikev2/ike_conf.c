@@ -28,6 +28,7 @@
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/rad_assert.h>
+
 #include "ike_conf.h"
 #include "eap.h"
 #include "logging_impl.h"
@@ -50,8 +51,6 @@ enum {
 
 };
 
-
-
 static struct config_transform config_transforms[] =
 {
 	 {"integrity",	IKEv2_TRT_INTEGRITY_ALGORITHM,		OPT_INTEGRITY},
@@ -61,8 +60,6 @@ static struct config_transform config_transforms[] =
 	 {NULL, 0, 0} /* end of list */
 
 };
-
-
 
 /*
  *	Copied from rlm_files, and NOT under the same copyright
@@ -85,7 +82,7 @@ int getusersfile(TALLOC_CTX *ctx, char const *filename, PAIR_LIST **pair_list, c
 	 *	Walk through the 'users' file list, if we're debugging,
 	 *	or if we're in compat_mode.
 	 */
-	if ((debug_flag) ||
+	if ((rad_debug_lvl) ||
 		(strcmp(compat_mode_str, "cistron") == 0)) {
 		PAIR_LIST *entry;
 		VALUE_PAIR *vp;
@@ -326,15 +323,15 @@ void rad_update_shared_seclist(struct sharedSecList **list, char const *id, VALU
 
 	//secret
 	vp = pairfind(items, RAD_EAP_IKEV2_SECRET, 0, TAG_ANY);
-	if (!vp || !vp->length) {
+	if (!vp || !vp->vp_length) {
 		DEBUG(IKEv2_LOG_PREFIX "[%s] -- Secret not set", id);
 	} else {
-		secret = vp->vp_strvalue;
+		memcpy(&secret, &vp->vp_strvalue, sizeof(secret));
 	}
 
 	//authtype
 	vp = pairfind(items, RAD_EAP_IKEV2_AUTHTYPE, 0, TAG_ANY);
-	if (vp && vp->length) {
+	if (vp && vp->vp_length) {
 		authtype = AuthtypeFromName(vp->vp_strvalue);
 
 		if (authtype == -1) {

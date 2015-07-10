@@ -41,22 +41,43 @@ int fr_packet_cmp(RADIUS_PACKET const *a, RADIUS_PACKET const *b)
 {
 	int rcode;
 
-	rcode = a->id - b->id;
-	if (rcode != 0) return rcode;
+	/*
+	 *	256-way fanout.
+	 */
+	if (a->id < b->id) return -1;
+	if (a->id > b->id) return +1;
 
+	/*
+	 *	Source ports are pretty much random.
+	 */
 	rcode = (int) a->src_port - (int) b->src_port;
 	if (rcode != 0) return rcode;
 
+	/*
+	 *	Usually many client IPs, and few server IPs
+	 */
+	rcode = fr_ipaddr_cmp(&a->src_ipaddr, &b->src_ipaddr);
+	if (rcode != 0) return rcode;
+
+	/*
+	 *	One socket can receive packets for multiple
+	 *	destination IPs, so we check that before checking the
+	 *	file descriptor.
+	 */
+	rcode = fr_ipaddr_cmp(&a->dst_ipaddr, &b->dst_ipaddr);
+	if (rcode != 0) return rcode;
+
+	/*
+	 *	At this point, the order of comparing socket FDs
+	 *	and/or destination ports doesn't matter.  One of those
+	 *	fields will make the socket unique, and the other is
+	 *	pretty much redundant.
+	 */
 	rcode = (int) a->dst_port - (int) b->dst_port;
 	if (rcode != 0) return rcode;
 
 	rcode = a->sockfd - b->sockfd;
-	if (rcode != 0) return rcode;
-
-	rcode = fr_ipaddr_cmp(&a->src_ipaddr, &b->src_ipaddr);
-	if (rcode != 0) return rcode;
-
-	return fr_ipaddr_cmp(&a->dst_ipaddr, &b->dst_ipaddr);
+	return rcode;
 }
 
 int fr_inaddr_any(fr_ipaddr_t *ipaddr)
@@ -97,45 +118,14 @@ void fr_request_from_reply(RADIUS_PACKET *request,
 	request->dst_ipaddr = reply->src_ipaddr;
 }
 
-#ifdef O_NONBLOCK
-int fr_nonblock(int fd)
-{
-	int flags;
-
-	flags = fcntl(fd, F_GETFL, NULL);
-	if (flags < 0)  {
-		fr_strerror_printf("Failure getting socket flags: %s", fr_syserror(errno));
-		return -1;
-	}
-
-	flags |= O_NONBLOCK;
-	if (fcntl(fd, F_SETFL, flags) < 0) {
-		fr_strerror_printf("Failure setting socket flags: %s", fr_syserror(errno));
-		return -1;
-	}
-
-	return flags;
-}
-#else
-int fr_nonblock(UNUSED int fd)
-{
-	return 0;
-}
-#endif
-
 /*
  *	Open a socket on the given IP and port.
  */
-int fr_socket(fr_ipaddr_t *ipaddr, int port)
+int fr_socket(fr_ipaddr_t *ipaddr, uint16_t port)
 {
 	int sockfd;
 	struct sockaddr_storage salocal;
 	socklen_t	salen;
-
-	if ((port < 0) || (port > 65535)) {
-		fr_strerror_printf("Port %d is out of allowed bounds", port);
-		return -1;
-	}
 
 	sockfd = socket(ipaddr->af, SOCK_DGRAM, 0);
 	if (sockfd < 0) {
@@ -184,10 +174,12 @@ int fr_socket(fr_ipaddr_t *ipaddr, int port)
 	}
 #endif /* HAVE_STRUCT_SOCKADDR_IN6 */
 
+#if (defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_DONT)) || defined(IP_DONTFRAG)
 	if (ipaddr->af == AF_INET) {
-		UNUSED int flag;
+		int flag;
 
 #if defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_DONT)
+
 		/*
 		 *	Disable PMTU discovery.  On Linux, this
 		 *	also makes sure that the "don't fragment"
@@ -219,6 +211,7 @@ int fr_socket(fr_ipaddr_t *ipaddr, int port)
 		}
 #endif
 	}
+#endif
 
 	if (bind(sockfd, (struct sockaddr *) &salocal, salen) < 0) {
 		close(sockfd);
@@ -237,17 +230,17 @@ typedef struct fr_packet_socket_t {
 	int		sockfd;
 	void		*ctx;
 
-	int		num_outgoing;
+	uint32_t	num_outgoing;
 
 	int		src_any;
 	fr_ipaddr_t	src_ipaddr;
-	int		src_port;
+	uint16_t	src_port;
 
 	int		dst_any;
 	fr_ipaddr_t	dst_ipaddr;
-	int		dst_port;
+	uint16_t	dst_port;
 
-	int		dont_use;
+	bool		dont_use;
 
 #ifdef WITH_TCP
 	int		proto;
@@ -262,8 +255,6 @@ typedef struct fr_packet_socket_t {
 #define SOCKOFFSET_MASK (MAX_SOCKETS - 1)
 #define SOCK2OFFSET(sockfd) ((sockfd * FNV_MAGIC_PRIME) & SOCKOFFSET_MASK)
 
-#define MAX_QUEUES (8)
-
 /*
  *	Structure defining a list of packets (incoming or outgoing)
  *	that should be managed.
@@ -272,7 +263,7 @@ struct fr_packet_list_t {
 	rbtree_t	*tree;
 
 	int		alloc_id;
-	int		num_outgoing;
+	uint32_t	num_outgoing;
 	int		last_recv;
 	int		num_sockets;
 
@@ -314,7 +305,7 @@ bool fr_packet_list_socket_freeze(fr_packet_list_t *pl, int sockfd)
 		return false;
 	}
 
-	ps->dont_use = 1;
+	ps->dont_use = true;
 	return true;
 }
 
@@ -327,7 +318,7 @@ bool fr_packet_list_socket_thaw(fr_packet_list_t *pl, int sockfd)
 	ps = fr_socket_find(pl, sockfd);
 	if (!ps) return false;
 
-	ps->dont_use = 0;
+	ps->dont_use = false;
 	return true;
 }
 
@@ -354,7 +345,7 @@ bool fr_packet_list_socket_del(fr_packet_list_t *pl, int sockfd)
 
 
 bool fr_packet_list_socket_add(fr_packet_list_t *pl, int sockfd, int proto,
-			      fr_ipaddr_t *dst_ipaddr, int dst_port,
+			      fr_ipaddr_t *dst_ipaddr, uint16_t dst_port,
 			      void *ctx)
 {
 	int i, start;
@@ -470,7 +461,7 @@ fr_packet_list_t *fr_packet_list_create(int alloc_id)
 	if (!pl) return NULL;
 	memset(pl, 0, sizeof(*pl));
 
-	pl->tree = rbtree_create(packet_entry_cmp, NULL, 0);
+	pl->tree = rbtree_create(NULL, packet_entry_cmp, NULL, 0);
 	if (!pl->tree) {
 		fr_packet_list_free(pl);
 		return NULL;
@@ -568,7 +559,7 @@ bool fr_packet_list_yank(fr_packet_list_t *pl, RADIUS_PACKET *request)
 	return true;
 }
 
-int fr_packet_list_num_elements(fr_packet_list_t *pl)
+uint32_t fr_packet_list_num_elements(fr_packet_list_t *pl)
 {
 	if (!pl) return 0;
 
@@ -600,7 +591,7 @@ bool fr_packet_list_id_alloc(fr_packet_list_t *pl, int proto,
 {
 	int i, j, k, fd, id, start_i, start_j, start_k;
 	int src_any = 0;
-	fr_packet_socket_t *ps;
+	fr_packet_socket_t *ps= NULL;
 	RADIUS_PACKET *request = *request_p;
 
 	VERIFY_PACKET(request);
@@ -902,7 +893,7 @@ RADIUS_PACKET *fr_packet_list_recv(fr_packet_list_t *pl, fd_set *set)
 			packet = fr_tcp_recv(pl->sockets[start].sockfd, 0);
 		} else
 #endif
-		packet = rad_recv(pl->sockets[start].sockfd, 0);
+		packet = rad_recv(NULL, pl->sockets[start].sockfd, 0);
 		if (!packet) continue;
 
 		/*
@@ -917,9 +908,9 @@ RADIUS_PACKET *fr_packet_list_recv(fr_packet_list_t *pl, fd_set *set)
 	return NULL;
 }
 
-int fr_packet_list_num_incoming(fr_packet_list_t *pl)
+uint32_t fr_packet_list_num_incoming(fr_packet_list_t *pl)
 {
-	int num_elements;
+	uint32_t num_elements;
 
 	if (!pl) return 0;
 
@@ -929,9 +920,58 @@ int fr_packet_list_num_incoming(fr_packet_list_t *pl)
 	return num_elements - pl->num_outgoing;
 }
 
-int fr_packet_list_num_outgoing(fr_packet_list_t *pl)
+uint32_t fr_packet_list_num_outgoing(fr_packet_list_t *pl)
 {
 	if (!pl) return 0;
 
 	return pl->num_outgoing;
 }
+
+/*
+ *	Debug the packet if requested.
+ */
+void fr_packet_header_print(FILE *fp, RADIUS_PACKET *packet, bool received)
+{
+	char src_ipaddr[128];
+	char dst_ipaddr[128];
+
+	if (!fp) return;
+	if (!packet) return;
+
+	/*
+	 *	Client-specific debugging re-prints the input
+	 *	packet into the client log.
+	 *
+	 *	This really belongs in a utility library
+	 */
+	if (is_radius_code(packet->code)) {
+		fprintf(fp, "%s %s Id %i from %s:%i to %s:%i length %zu\n",
+		        received ? "Received" : "Sent",
+		        fr_packet_codes[packet->code],
+		        packet->id,
+		        inet_ntop(packet->src_ipaddr.af,
+				  &packet->src_ipaddr.ipaddr,
+				  src_ipaddr, sizeof(src_ipaddr)),
+		        packet->src_port,
+		        inet_ntop(packet->dst_ipaddr.af,
+				  &packet->dst_ipaddr.ipaddr,
+				  dst_ipaddr, sizeof(dst_ipaddr)),
+		        packet->dst_port,
+		        packet->data_len);
+	} else {
+		fprintf(fp, "%s code %u Id %i from %s:%i to %s:%i length %zu\n",
+		        received ? "Received" : "Sent",
+		        packet->code,
+		        packet->id,
+		        inet_ntop(packet->src_ipaddr.af,
+				  &packet->src_ipaddr.ipaddr,
+				  src_ipaddr, sizeof(src_ipaddr)),
+		        packet->src_port,
+		        inet_ntop(packet->dst_ipaddr.af,
+				  &packet->dst_ipaddr.ipaddr,
+				  dst_ipaddr, sizeof(dst_ipaddr)),
+		        packet->dst_port,
+		        packet->data_len);
+	}
+}
+

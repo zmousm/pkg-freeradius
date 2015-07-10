@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -28,27 +29,27 @@ RCSID("$Id$")
 #include <sys/un.h>
 
 typedef struct rlm_smsotp_t {
-	char		*socket;
-	char		*challenge;
-	char		*authtype;
+	char const	*socket;
+	char const	*challenge;
+	char const	*authtype;
 	fr_connection_pool_t *pool;
 } rlm_smsotp_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "socket", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_smsotp_t, socket),
-	  NULL, "/var/run/smsotp_socket" },
-	{ "challenge_message", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_smsotp_t, challenge), NULL, "Enter Mobile PIN" },
-	{ "challenge_type", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_smsotp_t, authtype),
-	  NULL, "smsotp-reply" },
+	{ "socket", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, socket), "/var/run/smsotp_socket" },
+	{ "challenge_message", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, challenge), "Enter Mobile PIN" },
+	{ "challenge_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, authtype), "smsotp-reply" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
+static int _mod_conn_free(int *fdp)
+{
+	close(*fdp);
+	return 0;
+}
 
-static void *mod_conn_create(void *instance)
+static void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 {
 	int fd;
 	struct sockaddr_un sa;
@@ -72,21 +73,12 @@ static void *mod_conn_create(void *instance)
 		return NULL;
 	}
 
-	fdp = talloc_zero(instance, int);
+	fdp = talloc_zero(ctx, int);
+	talloc_set_destructor(fdp, _mod_conn_free);
 	*fdp = fd;
 
 	return fdp;
 }
-
-static int mod_conn_delete(UNUSED void *instance, void *handle)
-{
-	int *fdp = handle;
-
-	close(*fdp);
-	talloc_free(fdp);
-	return 0;
-}
-
 
 /*
  * Full read with logging, and close on failure.
@@ -181,7 +173,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	/*
 	 *	Initialize the socket pool.
 	 */
-	inst->pool = fr_connection_pool_init(conf, inst, mod_conn_create, NULL, mod_conn_delete, NULL);
+	inst->pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, NULL, NULL);
 	if (!inst->pool) {
 		return -1;
 	}
@@ -289,7 +281,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	 *  The server will take care of sending it to the user.
 	 */
 	request->reply->code = PW_CODE_ACCESS_CHALLENGE;
-	DEBUG("rlm_smsotp: Sending Access-Challenge.");
+	DEBUG("rlm_smsotp: Sending Access-Challenge");
 
 	rcode = RLM_MODULE_HANDLED;
 
@@ -304,7 +296,7 @@ done:
  *	from the database. The authentication code only needs to check
  *	the password, the rest is done here.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *request)
 {
 	VALUE_PAIR *state;
 	rlm_smsotp_t *inst = instance;
@@ -316,7 +308,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED 
 	if (state != NULL) {
 		DEBUG("rlm_smsotp: Found reply to access challenge (AUTZ), Adding Auth-Type '%s'",inst->authtype);
 
-		pairdelete(&request->config_items, PW_AUTH_TYPE, 0, TAG_ANY); /* delete old auth-type */
+		pairdelete(&request->config, PW_AUTH_TYPE, 0, TAG_ANY); /* delete old auth-type */
 		pairmake_config("Auth-Type", inst->authtype, T_OP_SET);
 	}
 
@@ -333,22 +325,16 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED 
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_smsotp;
 module_t rlm_smsotp = {
-	RLM_MODULE_INIT,
-	"smsotp",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_smsotp_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	NULL,				/* detach */
-	{
-		mod_authenticate,	/* authentication */
-		mod_authorize,	/* authorization */
-		NULL,	/* preaccounting */
-		NULL,	/* accounting */
-		NULL,	/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "smsotp",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_smsotp_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize
 	},
 };

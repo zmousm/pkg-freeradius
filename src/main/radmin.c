@@ -24,39 +24,37 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/md5.h>
+#include <freeradius-devel/channel.h>
 
-#ifdef HAVE_SYS_UN_H
-#include <sys/un.h>
-#ifndef SUN_LEN
-#define SUN_LEN(su)  (sizeof(*(su)) - sizeof((su)->sun_path) + strlen((su)->sun_path))
-#endif
-#endif
+#include <pwd.h>
+#include <grp.h>
 
 #ifdef HAVE_GETOPT_H
-#include <getopt.h>
+#  include <getopt.h>
 #endif
 
 #ifdef HAVE_SYS_STAT_H
-#include <sys/stat.h>
+#  include <sys/stat.h>
 #endif
 
 #ifdef HAVE_LIBREADLINE
 
 #if defined(HAVE_READLINE_READLINE_H)
-#include <readline/readline.h>
-#define USE_READLINE (1)
+#  include <readline/readline.h>
+#  define USE_READLINE (1)
 #elif defined(HAVE_READLINE_H)
-#include <readline.h>
-#define USE_READLINE (1)
+#  include <readline.h>
+#  define USE_READLINE (1)
 #endif /* !defined(HAVE_READLINE_H) */
 
 #ifdef HAVE_READLINE_HISTORY
-#if defined(HAVE_READLINE_HISTORY_H)
-#include <readline/history.h>
-#define USE_READLINE_HISTORY (1)
-#elif defined(HAVE_HISTORY_H)
-#include <history.h>
-#define USE_READLINE_HISTORY (1)
+#  if defined(HAVE_READLINE_HISTORY_H)
+#    include <readline/history.h>
+#    define USE_READLINE_HISTORY (1)
+#  elif defined(HAVE_HISTORY_H)
+#    include <history.h>
+#    define USE_READLINE_HISTORY (1)
 #endif /* defined(HAVE_READLINE_HISTORY_H) */
 
 #endif /* HAVE_READLINE_HISTORY */
@@ -67,7 +65,7 @@ RCSID("$Id$")
  *	For configuration file stuff.
  */
 char const *progname = "radmin";
-char const *radmin_version = "radmin version " RADIUSD_VERSION_STRING
+static char const *radmin_version = "radmin version " RADIUSD_VERSION_STRING
 #ifdef RADIUSD_VERSION_COMMIT
 " (git #" STRINGIFY(RADIUSD_VERSION_COMMIT) ")"
 #endif
@@ -79,12 +77,10 @@ char const *radmin_version = "radmin version " RADIUSD_VERSION_STRING
  *	they're running inside of the server.  And we don't (yet)
  *	have a "libfreeradius-server", or "libfreeradius-util".
  */
-log_debug_t debug_flag = 0;
-struct main_config_t main_config;
+main_config_t main_config;
 
 bool check_config = false;
 
-static FILE *outputfp = NULL;
 static bool echo = false;
 static char const *secret = "testing123";
 
@@ -113,83 +109,15 @@ static void NEVER_RETURNS usage(int status)
 	fprintf(output, "  -h              Print usage help information.\n");
 	fprintf(output, "  -i input_file   Read commands from 'input_file'.\n");
 	fprintf(output, "  -n name         Read raddb/name.conf instead of raddb/radiusd.conf\n");
-	fprintf(output, "  -o output_file  Write commands to 'output_file'.\n");
 	fprintf(output, "  -q              Quiet mode.\n");
 
 	exit(status);
 }
 
-static int fr_domain_socket(char const *path)
-{
-	int sockfd = -1;
-#ifdef HAVE_SYS_UN_H
-	size_t len;
-	socklen_t socklen;
-	struct sockaddr_un saremote;
-
-	len = strlen(path);
-	if (len >= sizeof(saremote.sun_path)) {
-		fprintf(stderr, "%s: Path too long in filename\n", progname);
-		return -1;
-	}
-
-	if ((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
-		fprintf(stderr, "%s: Failed creating socket: %s\n",
-			progname, fr_syserror(errno));
-		return -1;
-	}
-
-	saremote.sun_family = AF_UNIX;
-	memcpy(saremote.sun_path, path, len + 1); /* SUN_LEN does strlen */
-
-	socklen = SUN_LEN(&saremote);
-
-	if (connect(sockfd, (struct sockaddr *)&saremote, socklen) < 0) {
-		struct stat buf;
-
-		close(sockfd);
-		fprintf(stderr, "%s: Failed connecting to %s: %s\n",
-			progname, path, fr_syserror(errno));
-
-		/*
-		 *	The file doesn't exist.  Tell the user how to
-		 *	fix it.
-		 */
-		if ((stat(path, &buf) < 0) &&
-		    (errno == ENOENT)) {
-			fprintf(stderr, "  Perhaps you need to run the commands:\n\tcd /etc/raddb\n\tln -s sites-available/control-socket sites-enabled/control-socket\n  and then re-start the server?\n");
-		}
-
-		return -1;
-	}
-
-#ifdef O_NONBLOCK
-	{
-		int flags;
-
-		if ((flags = fcntl(sockfd, F_GETFL, NULL)) < 0)  {
-			fprintf(stderr, "%s: Failure getting socket flags: %s",
-				progname, fr_syserror(errno));
-			close(sockfd);
-			return -1;
-		}
-
-		flags |= O_NONBLOCK;
-		if( fcntl(sockfd, F_SETFL, flags) < 0) {
-			fprintf(stderr, "%s: Failure setting socket flags: %s",
-				progname, fr_syserror(errno));
-			close(sockfd);
-			return -1;
-		}
-	}
-#endif
-#endif
-	return sockfd;
-}
-
 static int client_socket(char const *server)
 {
-	int sockfd, port;
+	int sockfd;
+	uint16_t port;
 	fr_ipaddr_t ipaddr;
 	char *p, buffer[1024];
 
@@ -203,13 +131,13 @@ static int client_socket(char const *server)
 		*p = '\0';
 	}
 
-	if (ip_hton(buffer, AF_INET, &ipaddr) < 0) {
+	if (ip_hton(&ipaddr, AF_INET, buffer, false) < 0) {
 		fprintf(stderr, "%s: Failed looking up host %s: %s\n",
 			progname, buffer, fr_syserror(errno));
 		exit(1);
 	}
 
-	sockfd = fr_tcp_client_socket(NULL, &ipaddr, port);
+	sockfd = fr_socket_client_tcp(NULL, &ipaddr, port, false);
 	if (sockfd < 0) {
 		fprintf(stderr, "%s: Failed opening socket %s: %s\n",
 			progname, server, fr_syserror(errno));
@@ -219,138 +147,176 @@ static int client_socket(char const *server)
 	return sockfd;
 }
 
-static void do_challenge(int sockfd)
+static ssize_t do_challenge(int sockfd)
 {
-	size_t total;
 	ssize_t r;
+	fr_channel_type_t channel;
 	uint8_t challenge[16];
 
-	for (total = 0; total < sizeof(challenge); ) {
-		r = read(sockfd, challenge + total, sizeof(challenge) - total);
-		if (r == 0) exit(1);
+	challenge[0] = 0;
 
-		if (r < 0) {
-#ifdef ECONNRESET
-			if (errno == ECONNRESET) {
-				fprintf(stderr, "%s: Connection reset",
-					progname);
-				exit(1);
-			}
-#endif
-			if (errno == EINTR) continue;
+	/*
+	 *	When connecting over a socket, the server challenges us.
+	 */
+	r = fr_channel_read(sockfd, &channel, challenge, sizeof(challenge));
+	if (r <= 0) return r;
 
-			fprintf(stderr, "%s: Failed reading data: %s\n",
-				progname, fr_syserror(errno));
-			exit(1);
-		}
-		total += r;
-		fflush(stdout);
+	if ((r != 16) || (channel != FR_CHANNEL_AUTH_CHALLENGE)) {
+		fprintf(stderr, "%s: Failed to read challenge.\n",
+			progname);
+		exit(1);
 	}
 
-	fr_hmac_md5((uint8_t const *) secret, strlen(secret),
-		    challenge, sizeof(challenge), challenge);
+	fr_hmac_md5(challenge, (uint8_t const *) secret, strlen(secret),
+		    challenge, sizeof(challenge));
 
-	if (write(sockfd, challenge, sizeof(challenge)) < 0) {
-		fprintf(stderr, "%s: Failed writing challenge data: %s\n",
-			progname, fr_syserror(errno));
-	}
+	r = fr_channel_write(sockfd, FR_CHANNEL_AUTH_RESPONSE, challenge, sizeof(challenge));
+	if (r <= 0) return r;
+
+	/*
+	 *	If the server doesn't like us, he just closes the
+	 *	socket.  So we don't look for an ACK.
+	 */
+
+	return r;
 }
 
+
+/*
+ *	Returns -1 on error.  0 on connection failed.  +1 on OK.
+ */
 static ssize_t run_command(int sockfd, char const *command,
 			   char *buffer, size_t bufsize)
 {
-	char *p;
-	ssize_t size, len;
+	ssize_t r;
+	uint32_t status;
+	fr_channel_type_t channel;
 
 	if (echo) {
-		fprintf(outputfp, "%s\n", command);
+		fprintf(stdout, "%s\n", command);
 	}
 
 	/*
 	 *	Write the text to the socket.
 	 */
-	if (write(sockfd, command, strlen(command)) < 0) return -1;
-	if (write(sockfd, "\r\n", 2) < 0) return -1;
+	r = fr_channel_write(sockfd, FR_CHANNEL_STDIN, command, strlen(command));
+	if (r <= 0) return r;
 
-	/*
-	 *	Read the response
-	 */
-	size = 0;
-	buffer[0] = '\0';
+	while (true) {
+		r = fr_channel_read(sockfd, &channel, buffer, bufsize - 1);
+		if (r <= 0) return r;
 
-	memset(buffer, 0, bufsize);
+		buffer[r] = '\0';	/* for C strings */
 
-	while (1) {
-		int rcode;
-		fd_set readfds;
-
-		FD_ZERO(&readfds);
-		FD_SET(sockfd, &readfds);
-
-		rcode = select(sockfd + 1, &readfds, NULL, NULL, NULL);
-		if (rcode < 0) {
-			if (errno == EINTR) continue;
-
-			fprintf(stderr, "%s: Failed selecting: %s\n",
-				progname, fr_syserror(errno));
-			exit(1);
-		}
-
-		if (rcode == 0) {
-			fprintf(stderr, "%s: Server closed the connection.\n",
-				progname);
-			exit(1);
-		}
-
-#ifdef MSG_DONTWAIT
-		len = recv(sockfd, buffer + size,
-			   bufsize - size - 1, MSG_DONTWAIT);
-#else
-		/*
-		 *	Read one byte at a time (ugh)
-		 */
-		len = recv(sockfd, buffer + size, 1, 0);
-#endif
-		if (len < 0) {
-			/*
-			 *	No data: keep looping
-			 */
-			if ((errno == EAGAIN) || (errno == EINTR)) {
-				continue;
-			}
-
-			fprintf(stderr, "%s: Error reading socket: %s\n",
-				progname, fr_syserror(errno));
-			exit(1);
-		}
-		if (len == 0) return 0;	/* clean exit */
-
-		size += len;
-		buffer[size] = '\0';
-
-		/*
-		 *	There really is a better way of doing this.
-		 */
-		p = strstr(buffer, "radmin> ");
-		if (p &&
-		    ((p == buffer) ||
-		     (p[-1] == '\n') ||
-		     (p[-1] == '\r'))) {
-			*p = '\0';
-
-			if (p[-1] == '\n') p[-1] = '\0';
+		switch (channel) {
+		case FR_CHANNEL_STDOUT:
+			fprintf(stdout, "%s", buffer);
 			break;
+
+		case FR_CHANNEL_STDERR:
+			fprintf(stderr, "ERROR: %s", buffer);
+			break;
+
+		case FR_CHANNEL_CMD_STATUS:
+			if (r < 4) return 1;
+
+			memcpy(&status, buffer, sizeof(status));
+			status = ntohl(status);
+			return status;
+
+		default:
+			fprintf(stderr, "Unexpected response\n");
+			return -1;
 		}
 	}
 
+	/* never gets here */
+}
+
+static int do_connect(int *out, char const *file, char const *server)
+{
+	int sockfd;
+	ssize_t r;
+	fr_channel_type_t channel;
+	char buffer[65536];
+
+	uint32_t magic;
+
 	/*
-	 *	Blank prompt.  Go get another command.
+	 *	Close stale file descriptors
 	 */
-	if (!buffer[0]) return 1;
+	if (*out != -1) {
+		close(*out);
+		*out = -1;
+	}
 
-	buffer[size] = '\0'; /* this is at least right */
+	if (file) {
+		/*
+		 *	FIXME: Get destination from command line, if possible?
+		 */
+		sockfd = fr_socket_client_unix(file, false);
+		if (sockfd < 0) {
+			fr_perror("radmin");
+			if (errno == ENOENT) {
+					fprintf(stderr, "Perhaps you need to run the commands:");
+					fprintf(stderr, "\tcd /etc/raddb\n");
+					fprintf(stderr, "\tln -s sites-available/control-socket "
+						"sites-enabled/control-socket\n");
+					fprintf(stderr, "and then re-start the server?\n");
+			}
+			return -1;
+		}
+	} else {
+		sockfd = client_socket(server);
+	}
 
-	return 2;
+	/*
+	 *	Only works for BSD, but Linux allows us
+	 *	to mask SIGPIPE, so that's fine.
+	 */
+#ifdef SO_NOSIGPIPE
+	{
+		int set = 1;
+
+		setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int));
+	}
+#endif
+
+	/*
+	 *	Set up the initial header data.
+	 */
+	magic = 0xf7eead16;
+	magic = htonl(magic);
+	memcpy(buffer, &magic, sizeof(magic));
+	memset(buffer + sizeof(magic), 0, sizeof(magic));
+
+	r = fr_channel_write(sockfd, FR_CHANNEL_INIT_ACK, buffer, 8);
+	if (r <= 0) {
+	do_close:
+		fprintf(stderr, "%s: Error in socket: %s\n",
+			progname, fr_syserror(errno));
+		close(sockfd);
+			return -1;
+	}
+
+	r = fr_channel_read(sockfd, &channel, buffer + 8, 8);
+	if (r <= 0) goto do_close;
+
+	if ((r != 8) || (channel != FR_CHANNEL_INIT_ACK) ||
+	    (memcmp(buffer, buffer + 8, 8) != 0)) {
+		fprintf(stderr, "%s: Incompatible versions\n", progname);
+		close(sockfd);
+		return -1;
+	}
+
+	if (server && secret) {
+		r = do_challenge(sockfd);
+		if (r <= 0) goto do_close;
+	}
+
+	*out = sockfd;
+
+	return 0;
 }
 
 #define MAX_COMMANDS (4)
@@ -359,17 +325,14 @@ int main(int argc, char **argv)
 {
 	int		argval;
 	bool		quiet = false;
-	bool		done_license = false;
-	int		sockfd;
-	uint32_t	magic, needed;
+	int		sockfd = -1;
 	char		*line = NULL;
-	ssize_t		len, size;
+	ssize_t		len;
 	char const	*file = NULL;
 	char const	*name = "radiusd";
 	char		*p, buffer[65536];
 	char const	*input_file = NULL;
 	FILE		*inputfp = stdin;
-	char const	*output_file = NULL;
 	char const	*server = NULL;
 
 	char const	*radius_dir = RADIUS_DIR;
@@ -377,6 +340,8 @@ int main(int argc, char **argv)
 
 	char *commands[MAX_COMMANDS];
 	int num_commands = -1;
+
+	int exit_status = EXIT_SUCCESS;
 
 #ifndef NDEBUG
 	if (fr_fault_setup(getenv("PANIC_ACTION"), argv[0]) < 0) {
@@ -387,16 +352,14 @@ int main(int argc, char **argv)
 
 	talloc_set_log_stderr();
 
-	outputfp = stdout;	/* stdout is not a constant value... */
-
 	if ((progname = strrchr(argv[0], FR_DIR_SEP)) == NULL) {
 		progname = argv[0];
 	} else {
 		progname++;
 	}
 
-	while ((argval = getopt(argc, argv, "d:D:hi:e:Ef:n:o:qs:S")) != EOF) {
-		switch(argval) {
+	while ((argval = getopt(argc, argv, "d:D:hi:e:Ef:n:qs:S")) != EOF) {
+		switch (argval) {
 		case 'd':
 			if (file) {
 				fprintf(stderr, "%s: -d and -f cannot be used together.\n", progname);
@@ -420,6 +383,7 @@ int main(int argc, char **argv)
 					progname);
 				exit(1);
 			}
+
 			commands[num_commands] = optarg;
 			break;
 
@@ -434,8 +398,7 @@ int main(int argc, char **argv)
 
 		default:
 		case 'h':
-			usage(0);
-			break;
+			usage(0);	/* never returns */
 
 		case 'i':
 			if (strcmp(optarg, "-") != 0) {
@@ -446,13 +409,6 @@ int main(int argc, char **argv)
 
 		case 'n':
 			name = optarg;
-			break;
-
-		case 'o':
-			if (strcmp(optarg, "-") != 0) {
-				output_file = optarg;
-			}
-			quiet = true;
 			break;
 
 		case 'q':
@@ -485,6 +441,12 @@ int main(int argc, char **argv)
 	if (radius_dir) {
 		int rcode;
 		CONF_SECTION *cs, *subcs;
+		uid_t		uid;
+		gid_t		gid;
+		char const	*uid_name = NULL;
+		char const	*gid_name = NULL;
+		struct passwd	*pwd;
+		struct group	*grp;
 
 		file = NULL;	/* MUST read it from the conffile now */
 
@@ -504,11 +466,17 @@ int main(int argc, char **argv)
 			exit(64);
 		}
 
-		cs = cf_file_read(buffer);
-		if (!cs) {
+		cs = cf_section_alloc(NULL, "main", NULL);
+		if (!cs) exit(1);
+
+		if (cf_file_read(cs, buffer) < 0) {
 			fprintf(stderr, "%s: Errors reading or parsing %s\n", progname, buffer);
+			talloc_free(cs);
 			usage(1);
 		}
+
+		uid = getuid();
+		gid = getgid();
 
 		subcs = NULL;
 		while ((subcs = cf_subsection_find_next(cs, subcs, "listen")) != NULL) {
@@ -525,11 +493,9 @@ int main(int argc, char **argv)
 			/*
 			 *	Now find the socket name (sigh)
 			 */
-			rcode = cf_item_parse(subcs, "socket",
-					      PW_TYPE_STRING_PTR,
-					      &file, NULL);
+			rcode = cf_item_parse(subcs, "socket", FR_ITEM_POINTER(PW_TYPE_STRING, &file), NULL);
 			if (rcode < 0) {
-				fprintf(stderr, "%s: Failed parsing listen section\n", progname);
+				fprintf(stderr, "%s: Failed parsing listen section 'socket'\n", progname);
 				exit(1);
 			}
 
@@ -537,6 +503,47 @@ int main(int argc, char **argv)
 				fprintf(stderr, "%s: No path given for socket\n", progname);
 				usage(1);
 			}
+
+			/*
+			 *	If we're root, just use the first one we find
+			 */
+			if (uid == 0) break;
+
+			/*
+			 *	Check UID and GID.
+			 */
+			rcode = cf_item_parse(subcs, "uid", FR_ITEM_POINTER(PW_TYPE_STRING, &uid_name), NULL);
+			if (rcode < 0) {
+				fprintf(stderr, "%s: Failed parsing listen section 'uid'\n", progname);
+				exit(1);
+			}
+
+			if (!uid_name) break;
+
+			pwd = getpwnam(uid_name);
+			if (!pwd) {
+				fprintf(stderr, "%s: Failed getting UID for user %s: %s\n", progname, uid_name, strerror(errno));
+				exit(1);
+			}
+
+			if (uid != pwd->pw_uid) continue;
+
+			rcode = cf_item_parse(subcs, "gid", FR_ITEM_POINTER(PW_TYPE_STRING, &gid_name), NULL);
+			if (rcode < 0) {
+				fprintf(stderr, "%s: Failed parsing listen section 'gid'\n", progname);
+				exit(1);
+			}
+
+			if (!gid_name) break;
+
+			grp = getgrnam(gid_name);
+			if (!grp) {
+				fprintf(stderr, "%s: Failed getting GID for group %s: %s\n", progname, gid_name, strerror(errno));
+				exit(1);
+			}
+
+			if (gid != grp->gr_gid) continue;
+
 			break;
 		}
 
@@ -550,14 +557,6 @@ int main(int argc, char **argv)
 		inputfp = fopen(input_file, "r");
 		if (!inputfp) {
 			fprintf(stderr, "%s: Failed opening %s: %s\n", progname, input_file, fr_syserror(errno));
-			exit(1);
-		}
-	}
-
-	if (output_file) {
-		outputfp = fopen(output_file, "w");
-		if (!outputfp) {
-			fprintf(stderr, "%s: Failed creating %s: %s\n", progname, output_file, fr_syserror(errno));
 			exit(1);
 		}
 	}
@@ -582,54 +581,12 @@ int main(int argc, char **argv)
 	}
 #endif
 
- reconnect:
-	if (file) {
-		/*
-		 *	FIXME: Get destination from command line, if possible?
-		 */
-		sockfd = fr_domain_socket(file);
-		if (sockfd < 0) {
-			exit(1);
-		}
-	} else {
-		sockfd = client_socket(server);
-	}
-
 	/*
-	 *	Read initial magic && version information.
+	 *	Prevent SIGPIPEs from terminating the process
 	 */
-	for (size = 0; size < 8; size += len) {
-		len = read(sockfd, buffer + size, 8 - size);
-		if (len < 0) {
-			fprintf(stderr, "%s: Error reading initial data from socket: %s\n",
-				progname, fr_syserror(errno));
-			exit(1);
-		}
-	}
+	signal(SIGPIPE, SIG_IGN);
 
-	memcpy(&magic, buffer, 4);
-	magic = ntohl(magic);
-	if (magic != 0xf7eead15) {
-		fprintf(stderr, "%s: Socket %s is not FreeRADIUS administration socket\n", progname, file);
-		exit(1);
-	}
-
-	memcpy(&magic, buffer + 4, 4);
-	magic = ntohl(magic);
-
-	if (!server) {
-		needed = 1;
-	} else {
-		needed = 2;
-	}
-
-	if (magic != needed) {
-		fprintf(stderr, "%s: Socket version mismatch: Need %d, got %d\n",
-			progname, needed, magic);
-		exit(1);
-	}
-
-	if (server && secret) do_challenge(sockfd);
+	if (do_connect(&sockfd, file, server) < 0) exit(1);
 
 	/*
 	 *	Run one command.
@@ -638,28 +595,21 @@ int main(int argc, char **argv)
 		int i;
 
 		for (i = 0; i <= num_commands; i++) {
-			size = run_command(sockfd, commands[i],
-					   buffer, sizeof(buffer));
-			if (size < 0) exit(1);
+			len = run_command(sockfd, commands[i], buffer, sizeof(buffer));
+			if (len < 0) exit(1);
 
-			if (buffer[0]) {
-				fputs(buffer, outputfp);
-				fprintf(outputfp, "\n");
-				fflush(outputfp);
-			}
+			if (len == FR_CHANNEL_FAIL) exit_status = EXIT_FAILURE;
 		}
-		exit(0);
+		exit(exit_status);
 	}
 
-	if (!done_license && !quiet) {
+	if (!quiet) {
 		printf("%s - FreeRADIUS Server administration tool.\n", radmin_version);
-		printf("Copyright (C) 2008-2014 The FreeRADIUS server project and contributors.\n");
+		printf("Copyright (C) 2008-2015 The FreeRADIUS server project and contributors.\n");
 		printf("There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A\n");
 		printf("PARTICULAR PURPOSE.\n");
 		printf("You may redistribute copies of FreeRADIUS under the terms of the\n");
 		printf("GNU General Public License v2.\n");
-
-		done_license = true;
 	}
 
 	/*
@@ -667,6 +617,8 @@ int main(int argc, char **argv)
 	 */
 
 	while (1) {
+		int retries;
+
 #ifndef USE_READLINE
 		if (!quiet) {
 			printf("radmin> ");
@@ -737,9 +689,9 @@ int main(int argc, char **argv)
 		}
 
 		if (strcmp(line, "reconnect") == 0) {
-			close(sockfd);
+			if (do_connect(&sockfd, file, server) < 0) exit(1);
 			line = NULL;
-			goto reconnect;
+			continue;
 		}
 
 		if (memcmp(line, "secret ", 7) == 0) {
@@ -765,18 +717,34 @@ int main(int argc, char **argv)
 			continue;
 		}
 
-		size = run_command(sockfd, line, buffer, sizeof(buffer));
-		if (size <= 0) break; /* error, or clean exit */
+		retries = 0;
+	retry:
+		len = run_command(sockfd, line, buffer, sizeof(buffer));
+		if (len < 0) {
+			if (!quiet) fprintf(stderr, "... reconnecting ...\n");
 
-		if (size == 1) continue; /* no output. */
+			if (do_connect(&sockfd, file, server) < 0) {
+				exit(1);
+			}
 
-		fputs(buffer, outputfp);
-		fflush(outputfp);
-		fprintf(outputfp, "\n");
+			retries++;
+			if (retries < 2) goto retry;
+
+			fprintf(stderr, "Failed to connect to server\n");
+			exit(1);
+
+		} else if (len == FR_CHANNEL_SUCCESS) {
+			break;
+
+		} else if (len == FR_CHANNEL_FAIL) {
+			exit_status = EXIT_FAILURE;
+		}
 	}
 
-	fprintf(outputfp, "\n");
+	fprintf(stdout, "\n");
 
-	return 0;
+	if (inputfp != stdin) fclose(inputfp);
+
+	return exit_status;
 }
 

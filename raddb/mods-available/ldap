@@ -9,24 +9,64 @@ ldap {
 	#  Note that this needs to match the name(s) in the LDAP server
 	#  certificate, if you're using ldaps.  See OpenLDAP documentation
 	#  for the behavioral semantics of specifying more than one host.
-	server = "ldap.rrdns.example.org ldap.rrdns.example.org ldap.example.org"
+	#
+	#  Depending on the libldap in use, server may be an LDAP URI.
+	#  In the case of OpenLDAP this allows additional the following
+	#  additional schemes:
+	#  - ldaps:// (LDAP over SSL)
+	#  - ldapi:// (LDAP over Unix socket)
+	#  - ldapc:// (Connectionless LDAP)
+	server = 'localhost'
+#	server = 'ldap.rrdns.example.org'
+#	server = 'ldap.rrdns.example.org'
 
-	#  Port to connect on, defaults to 389. Setting this to 636 will enable
-	#  LDAPS if start_tls (see below) is not able to be used.
+	#  Port to connect on, defaults to 389, will be ignored for LDAP URIs.
 #	port = 389
 
 	#  Administrator account for searching and possibly modifying.
-#	identity = "cn=admin,dc=example,dc=org"
+	#  If using SASL + KRB5 these should be commented out.
+#	identity = 'cn=admin,dc=example,dc=org'
 #	password = mypass
 
 	#  Unless overridden in another section, the dn from which all
 	#  searches will start from.
-#	base_dn = "dc=example,dc=org"
+	base_dn = 'dc=example,dc=org'
+
+	#
+	#  SASL parameters to use for admin binds
+	#
+	#  When we're prompted by the SASL library, these control
+	#  the responses given, as well as the identity and password
+	#  directives above.
+	#
+	#  If any directive is commented out, a NULL response will be
+	#  provided to cyrus-sasl.
+	#
+	#  Unfortunately the only way to control Keberos here is through
+	#  environmental variables, as cyrus-sasl provides no API to
+	#  set the krb5 config directly.
+	#
+	#  Full documentation for MIT krb5 can be found here:
+	#
+	#	http://web.mit.edu/kerberos/krb5-devel/doc/admin/env_variables.html
+	#
+	#  At a minimum you probably want to set KRB5_CLIENT_KTNAME.
+	#
+	sasl {
+		# SASL mechanism
+#		mech = 'PLAIN'
+
+		# SASL authorisation identity to proxy.
+#		proxy = 'autz_id'
+
+		# SASL realm. Used for kerberos.
+#		realm = 'example.org'
+	}
 
 	#
 	#  Generic valuepair attribute
 	#
-	
+
 	#  If set, this will attribute will be retrieved in addition to any
 	#  mapped attributes.
 	#
@@ -36,16 +76,16 @@ ldap {
 	#  Where:
 	#  	<radius attr>:	Is the attribute you wish to create
 	# 			with any valid list and request qualifiers.
-	#  	<op>: 		Is any assignment attribute (=, :=, +=, -=).
+	#  	<op>: 		Is any assignment operator (=, :=, +=, -=).
 	#  	<value>:	Is the value to parse into the new valuepair.
-	# 			If the attribute name is wrapped in double
-	# 			quotes it will be xlat expanded.
-#	valuepair_attribute = "radiusAttribute"
+	# 			If the value is wrapped in double quotes it
+	#			will be xlat expanded.
+#	valuepair_attribute = 'radiusAttribute'
 
 	#
 	#  Mapping of LDAP directory attributes to RADIUS dictionary attributes.
 	#
-	
+
 	#  WARNING: Although this format is almost identical to the unlang
 	#  update section format, it does *NOT* mean that you can use other
 	#  unlang constructs in module configuration files.
@@ -77,12 +117,12 @@ ldap {
 #		reply:Tunnel-Medium-Type	:= 'radiusTunnelMediumType'
 #		reply:Tunnel-Private-Group-ID	:= 'radiusTunnelPrivategroupId'
 
-		#  These are provided for backwards compatibility.
 		#  Where only a list is specified as the RADIUS attribute,
 		#  the value of the LDAP attribute is parsed as a valuepair
 		#  in the same format as the 'valuepair_attribute' (above).
-#		control:			+= 'radiusCheckAttributes'
-#		reply:				+= 'radiusReplyAttributes'
+		control:			+= 'radiusControlAttribute'
+		request:			+= 'radiusRequestAttribute'
+		reply:				+= 'radiusReplyAttribute'
 	}
 
 	#  Set to yes if you have eDirectory and want to use the universal
@@ -104,7 +144,7 @@ ldap {
 	#            control:Auth-Type := ldap
 	#        }
 	#    }
-	
+
 	#
 	#  User object identification.
 	#
@@ -116,33 +156,66 @@ ldap {
 		#  to identify a single user object.
 		filter = "(uid=%{%{Stripped-User-Name}:-%{User-Name}})"
 
+		#  SASL parameters to use for user binds
+		#
+		#  When we're prompted by the SASL library, these control
+		#  the responses given.
+		#
+		#  Any of the config items below may be an attribute ref
+		#  or and expansion, so different SASL mechs, proxy IDs
+		#  and realms may be used for different users.
+		sasl {
+			# SASL mechanism
+#			mech = 'PLAIN'
+
+			# SASL authorisation identity to proxy.
+#			proxy = &User-Name
+
+			# SASL realm. Used for kerberos.
+#			realm = 'example.org'
+		}
+
 		#  Search scope, may be 'base', 'one', sub' or 'children'
 #		scope = 'sub'
+
+		#  Server side result sorting
+		#
+		#  A list of space delimited attributes to order the result
+		#  set by, if the filter matches multiple objects.
+		#  Only the first result in the set will be processed.
+		#
+		#  If the attribute name is prefixed with a hyphen '-' the
+		#  sorting order will be reversed for that attribute.
+		#
+		#  If sort_by is set, and the server does not support sorting
+		#  the search will fail.
+#		sort_by = '-uid'
 
 		#  If this is undefined, anyone is authorised.
 		#  If it is defined, the contents of this attribute
 		#  determine whether or not the user is authorised
-#		access_attribute = "dialupAccess"
+#		access_attribute = 'dialupAccess'
 
-		#  Control whether the presence of "access_attribute"
+		#  Control whether the presence of 'access_attribute'
 		#  allows access, or denys access.
 		#
-		#  If "yes", and the access_attribute is present, or
-		#  "no" and the access_attribute is absent then access
+		#  If 'yes', and the access_attribute is present, or
+		#  'no' and the access_attribute is absent then access
 		#  will be allowed.
 		#
-		#  If "yes", and the access_attribute is absent, or
-		#  "no" and the access_attribute is present, then
+		#  If 'yes', and the access_attribute is absent, or
+		#  'no' and the access_attribute is present, then
 		#  access will not be allowed.
 		#
-		#  If the value of the access_attribute is "false", it
+		#  If the value of the access_attribute is 'false', it
 		#  will negate the result.
 		#
 		#  e.g.
 		#    access_positive = yes
 		#    access_attribute = userAccessAllowed
 		#
-		#    userAccessAllowed = false
+		#  With an LDAP object containing:
+		#    userAccessAllowed: false
 		#
 		#  Will result in the user being locked out.
 #		access_positive = yes
@@ -157,7 +230,7 @@ ldap {
 
 		#  Filter for group objects, should match all available
 		#  group objects a user might be a member of.
-		filter = "(objectClass=posixGroup)"
+		filter = '(objectClass=posixGroup)'
 
 		# Search scope, may be 'base', 'one', sub' or 'children'
 #		scope = 'sub'
@@ -178,7 +251,7 @@ ldap {
 		#  Unless a conversion between group name and group DN is
 		#  needed, there's no requirement for the group objects
 		#  referenced to actually exist.
-		membership_attribute = "memberOf"
+		membership_attribute = 'memberOf'
 
 		#  If cacheable_name or cacheable_dn are enabled,
 		#  all group information for the user will be
@@ -194,13 +267,14 @@ ldap {
 		#  the type that matches the format of your check items
 		#  i.e. if your groups are specified as DNs then enable
 		#  cacheable_dn else enable cacheable_name.
-#		cacheable_name = "no"
-#		cacheable_dn = "no"
+#		cacheable_name = 'no'
+#		cacheable_dn = 'no'
 
-		#  Override the normal cache attribute (<inst>-LDAP-Group)
-		#  and create a custom attribute.  This can help if multiple
-		#  module instances are used in fail-over.
-#		cache_attribute = "LDAP-Cached-Membership"
+		#  Override the normal cache attribute (<inst>-LDAP-Group or
+		#  LDAP-Group if using the default instance) and create a
+		#  custom attribute.  This can help if multiple module instances
+		#  are used in fail-over.
+#		cache_attribute = 'LDAP-Cached-Membership'
 	}
 
 	#
@@ -210,16 +284,16 @@ ldap {
 	#
 	profile {
 		#  Filter for RADIUS profile objects
-#		filter = "(objectclass=radiusprofile)"
+#		filter = '(objectclass=radiusprofile)'
 
 		#  The default profile applied to all users.
-#		default = "cn=radprofile,dc=example,dc=org"
+#		default = 'cn=radprofile,dc=example,dc=org'
 
 		#  The list of profiles which are applied (after the default)
 		#  to all users.
-		#  The "User-Profile" attribute in the control list
+		#  The 'User-Profile' attribute in the control list
 		#  will override this setting at run-time.
-#		attribute = "radiusProfileDn"
+#		attribute = 'radiusProfileDn'
 	}
 
 	#
@@ -232,32 +306,42 @@ ldap {
 		#
 		#  Filter to match client objects
 		#
-		filter = '(objectClass=frClient)'
+		filter = '(objectClass=radiusClient)'
 
 		# Search scope, may be 'base', 'one', 'sub' or 'children'
 #		scope = 'sub'
 
 		#
+		#  Sets default values (not obtained from LDAP) for new client entries
+		#
+		template {
+#			login				= 'test'
+#			password			= 'test'
+#			proto	 			= tcp
+#			require_message_authenticator	= yes
+
+			# Uncomment to add a home_server with the same
+			# attributes as the client.
+#			coa_server {
+#				response_window = 2.0
+#			}
+		}
+
+		#
 		#  Client attribute mappings are in the format:
 		#      <client attribute> = <ldap attribute>
 		#
-		#  Arbitrary attributes (accessible by %{client:<attr>}) are not yet supported.
-		#
 		#  The following attributes are required:
-		#    * identifier - IPv4 address, or IPv4 address with prefix, or hostname.
+		#    * ipaddr | ipv4addr | ipv6addr - Client IP Address.
 		#    * secret - RADIUS shared secret.
 		#
-		#  The following attributes are optional:
-		#    * shortname - Friendly name associated with the client
-		#    * nas_type - NAS Type
-		#    * virtual_server - Virtual server to associate the client with
-		#    * require_message_authenticator - Whether we require the Message-Authenticator
-		#      attribute to be present in requests from the client.
+		#  All other attributes usually supported in a client
+		#  definition are also supported here.
 		#
 		#  Schemas are available in doc/schemas/ldap for openldap and eDirectory
 		#
 		attribute {
-			identifier			= 'radiusClientIdentifier'
+			ipaddr				= 'radiusClientIdentifier'
 			secret				= 'radiusClientSecret'
 #			shortname			= 'radiusClientShortname'
 #			nas_type			= 'radiusClientType'
@@ -328,23 +412,31 @@ ldap {
 	#  These options set timeouts, keep-alives, etc. for the connections.
 	#
 	options {
+		#  Control under which situations aliases are followed.
+		#  May be one of 'never', 'searching', 'finding' or 'always'
+		#  default: libldap's default which is usually 'never'.
 		#
-		#  The following two configuration items are for Active Directory
-		#  compatibility.  If you set these to "no", then searches
-		#  will likely return "operations error", instead of a
-		#  useful result.
+		#  LDAP_OPT_DEREF is set to this value.
+#		dereference = 'always'
+
+		#
+		#  The following two configuration items control whether the
+		#  server follows references returned by LDAP directory.
+		#  They are  mostly for Active Directory compatibility.
+		#  If you set these to 'no', then searches will likely return
+		#  'operations error', instead of a useful result.
 		#
 		chase_referrals = yes
 		rebind = yes
 
 		#  Seconds to wait for LDAP query to finish. default: 20
-		timeout = 10
+		res_timeout = 10
 
 		#  Seconds LDAP server has to process the query (server-side
 		#  time limit). default: 20
 		#
 		#  LDAP_OPT_TIMELIMIT is set to this value.
-		timelimit = 3
+		srv_timelimit = 3
 
 		#  Seconds to wait for response of the server. (network
 		#  failures) default: 10
@@ -374,7 +466,7 @@ ldap {
 	#
 	#  This subsection configures the tls related items
 	#  that control how FreeRADIUS connects to an LDAP
-	#  server.  It contains all of the "tls_*" configuration
+	#  server.  It contains all of the 'tls_*' configuration
 	#  entries used in older versions of FreeRADIUS.  Those
 	#  configuration entries can still be used, but we recommend
 	#  using these.
@@ -394,20 +486,20 @@ ldap {
 #		ca_path	= ${certdir}
 #		certificate_file = /path/to/radius.crt
 #		private_key_file = /path/to/radius.key
-#		random_file = ${certdir}/random
+#		random_file = /dev/urandom
 
 		#  Certificate Verification requirements.  Can be:
-		#    "never" (don't even bother trying)
-		#    "allow" (try, but don't fail if the certificate
+		#    'never' (don't even bother trying)
+		#    'allow' (try, but don't fail if the certificate
 		#		can't be verified)
-		#    "demand" (fail if the certificate doesn't verify.)
+		#    'demand' (fail if the certificate doesn't verify.)
 		#
-		#  The default is "allow"
-#		require_cert	= "demand"
+		#  The default is 'allow'
+#		require_cert	= 'demand'
 	}
 
 
-	#  As of version 3.0, the "pool" section has replaced the
+	#  As of version 3.0, the 'pool' section has replaced the
 	#  following configuration items:
 	#
 	#  ldap_connections_number
@@ -418,11 +510,15 @@ ldap {
 	#  When the server is not threaded, the connection pool
 	#  limits are ignored, and only one connection is used.
 	pool {
-		#  Number of connections to start
-		start = 5
+		#  Connections to create during module instantiation.
+		#  If the server cannot create specified number of
+		#  connections during instantiation it will exit.
+		#  Set to 0 to allow the server to start without the
+		#  directory being available.
+		start = ${thread[pool].start_servers}
 
 		#  Minimum number of connections to keep open
-		min = 4
+		min = ${thread[pool].min_spare_servers}
 
 		#  Maximum number of connections
 		#
@@ -431,7 +527,7 @@ ldap {
 		#
 		#  Setting 'max' to LESS than the number of threads means
 		#  that some threads may starve, and you will see errors
-		#  like "No connections available and at max connection limit"
+		#  like 'No connections available and at max connection limit'
 		#
 		#  Setting 'max' to MORE than the number of threads means
 		#  that there are more connections than necessary.
@@ -440,13 +536,18 @@ ldap {
 		#  Spare connections to be left idle
 		#
 		#  NOTE: Idle connections WILL be closed if "idle_timeout"
-		#  is set.
-		spare = 3
+		#  is set.  This should be less than or equal to "max" above.
+		spare = ${thread[pool].max_spare_servers}
 
 		#  Number of uses before the connection is closed
 		#
 		#  0 means "infinite"
 		uses = 0
+
+		#  The number of seconds to wait after the server tries
+		#  to open a connection, and fails.  During this time,
+		#  no new connections will be opened.
+		retry_delay = 30
 
 		#  The lifetime (in seconds) of the connection
 		lifetime = 0
@@ -456,13 +557,13 @@ ldap {
 		idle_timeout = 60
 
 		#  NOTE: All configuration settings are enforced.  If a
-		#  connection is closed because of "idle_timeout",
-		#  "uses", or "lifetime", then the total number of
-		#  connections MAY fall below "min".  When that
+		#  connection is closed because of 'idle_timeout',
+		#  'uses', or 'lifetime', then the total number of
+		#  connections MAY fall below 'min'.  When that
 		#  happens, it will open a new connection.  It will
 		#  also log a WARNING message.
 		#
-		#  The solution is to either lower the "min" connections,
+		#  The solution is to either lower the 'min' connections,
 		#  or increase lifetime/idle_timeout.
 	}
 }

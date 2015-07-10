@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -50,8 +51,6 @@ RCSID("$Id$")
 #define GDBM_IPPOOL_OPTS (GDBM_SYNCOPT)
 #endif
 
-#define MAX_NAS_NAME_SIZE 64
-
 /*
  *	Define a structure for our module configuration.
  *
@@ -60,15 +59,20 @@ RCSID("$Id$")
  *	be used as the instance handle.
  */
 typedef struct rlm_ippool_t {
-	char		*filename;
-	char		*ip_index;
-	char		*name;
-	char		*key;
+	char const	*filename;
+	char const	*ip_index;
+	char const	*name;
+	char const	*key;
+
+	fr_ipaddr_t	range_start_addr;
+	fr_ipaddr_t	range_stop_addr;
+	fr_ipaddr_t	netmask_addr;
 	uint32_t	range_start;
 	uint32_t	range_stop;
 	uint32_t	netmask;
-	time_t		max_timeout;
-	int		cache_size;
+
+	uint32_t	max_timeout;
+	uint32_t	cache_size;
 	bool		override;
 	GDBM_FILE	gdbm;
 	GDBM_FILE	ip;
@@ -101,30 +105,29 @@ typedef struct ippool_key {
 } ippool_key;
 
 static const CONF_PARSER module_config[] = {
-	{ "session-db", PW_TYPE_FILE_OUTPUT | PW_TYPE_DEPRECATED, offsetof(rlm_ippool_t,filename), NULL, NULL },
-	{ "filename", PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, offsetof(rlm_ippool_t,filename), NULL, NULL },
+	{ "session-db", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_DEPRECATED, rlm_ippool_t, filename), NULL },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, rlm_ippool_t, filename), NULL },
 
-	{ "ip-index", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_ippool_t,ip_index), NULL, NULL },
-	{ "ip_index", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED, offsetof(rlm_ippool_t,ip_index), NULL, NULL },
+	{ "ip-index", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_ippool_t, ip_index), NULL },
+	{ "ip_index", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_ippool_t, ip_index), NULL },
 
-	{ "key", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_ippool_t,key), NULL, "%{NAS-IP-Address} %{NAS-Port}" },
+	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED | PW_TYPE_XLAT, rlm_ippool_t, key), "%{NAS-IP-Address} %{NAS-Port}" },
 
-	{ "range-start", PW_TYPE_IPADDR | PW_TYPE_DEPRECATED, offsetof(rlm_ippool_t,range_start), NULL, NULL },
-	{ "range_start", PW_TYPE_IPADDR, offsetof(rlm_ippool_t,range_start), NULL, "0" },
+	{ "range-start", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR | PW_TYPE_DEPRECATED, rlm_ippool_t, range_start_addr), NULL },
+	{ "range_start", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR, rlm_ippool_t, range_start_addr), "0" },
 
-	{ "range-stop", PW_TYPE_IPADDR | PW_TYPE_DEPRECATED, offsetof(rlm_ippool_t,range_stop), NULL, NULL },
-	{ "range_stop", PW_TYPE_IPADDR, offsetof(rlm_ippool_t,range_stop), NULL, "0" },
+	{ "range-stop", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR | PW_TYPE_DEPRECATED, rlm_ippool_t, range_stop_addr), NULL },
+	{ "range_stop", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR, rlm_ippool_t, range_stop_addr), "0" },
 
-	{ "netmask", PW_TYPE_IPADDR, offsetof(rlm_ippool_t,netmask), NULL, "0" },
+	{ "netmask", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR, rlm_ippool_t, netmask_addr), "0" },
 
-	{ "cache-size", PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, offsetof(rlm_ippool_t,cache_size), NULL, NULL },
-	{ "cache_size", PW_TYPE_INTEGER, offsetof(rlm_ippool_t,cache_size), NULL, "1000" },
+	{ "cache-size", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, rlm_ippool_t, cache_size), NULL },
+	{ "cache_size", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_ippool_t, cache_size), "1000" },
 
-	{ "override", PW_TYPE_BOOLEAN, offsetof(rlm_ippool_t,override), NULL, "no" },
+	{ "override", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_ippool_t, override), "no" },
 
-	{ "maximum-timeout", PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, offsetof(rlm_ippool_t,max_timeout), NULL, NULL },
-	{ "maximum_timeout", PW_TYPE_INTEGER, offsetof(rlm_ippool_t,max_timeout), NULL, "0" },
+	{ "maximum-timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, rlm_ippool_t, max_timeout), NULL },
+	{ "maximum_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_ippool_t, max_timeout), "0" },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -171,24 +174,37 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	rad_assert(inst->filename && *inst->filename);
 	rad_assert(inst->ip_index && *inst->ip_index);
 
-	inst->range_start = htonl(inst->range_start);
-	inst->range_stop = htonl(inst->range_stop);
-	inst->netmask = htonl(inst->netmask);
+	inst->range_start = htonl(*((uint32_t *)(&(inst->range_start_addr.ipaddr.ip4addr))));
+	inst->range_stop = htonl(*((uint32_t *)(&(inst->range_stop_addr.ipaddr.ip4addr))));
+	inst->netmask = htonl(*((uint32_t *)(&(inst->netmask_addr.ipaddr.ip4addr))));
 	if (inst->range_start == 0 || inst->range_stop == 0 || \
 	    inst->range_start >= inst->range_stop ) {
 		cf_log_err_cs(conf, "Invalid data range");
 		return -1;
 	}
 
-	inst->gdbm = gdbm_open(inst->filename, sizeof(int),
-			       GDBM_WRCREAT | GDBM_IPPOOL_OPTS, 0600, NULL);
+	{
+		char *file;
+
+		memcpy(&file, &inst->filename, sizeof(file));
+		inst->gdbm = gdbm_open(file, sizeof(int),
+				       GDBM_WRCREAT | GDBM_IPPOOL_OPTS, 0600, NULL);
+	}
+
 	if (!inst->gdbm) {
 		ERROR("rlm_ippool: Failed to open file %s: %s", inst->filename, fr_syserror(errno));
 
 		return -1;
 	}
-	inst->ip = gdbm_open(inst->ip_index, sizeof(int),
-			     GDBM_WRCREAT | GDBM_IPPOOL_OPTS, 0600, NULL);
+
+	{
+		char *file;
+
+		memcpy(&file, &inst->ip_index, sizeof(file));
+		inst->ip = gdbm_open(file, sizeof(int),
+				     GDBM_WRCREAT | GDBM_IPPOOL_OPTS, 0600, NULL);
+	}
+
 	if (!inst->ip) {
 		ERROR("rlm_ippool: Failed to open file %s: %s", inst->ip_index, fr_syserror(errno));
 
@@ -337,9 +353,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 			return RLM_MODULE_FAIL;
 		}
 
-		fr_MD5Init(&md5_context);
-		fr_MD5Update(&md5_context, (uint8_t *)xlat_str, strlen(xlat_str));
-		fr_MD5Final(key_str, &md5_context);
+		fr_md5_init(&md5_context);
+		fr_md5_update(&md5_context, (uint8_t *)xlat_str, strlen(xlat_str));
+		fr_md5_final(key_str, &md5_context);
 
 		key_str[16] = '\0';
 		fr_bin2hex(hex_str, key_str, 16);
@@ -409,7 +425,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	return RLM_MODULE_OK;
 }
 
-static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(UNUSED void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
 {
 	rlm_ippool_t *inst = instance;
 
@@ -446,12 +462,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(UNUSED void *instance, UNUSED 
 	 *  Check if Pool-Name attribute exists. If it exists check our name and
 	 *  run only if they match
 	 */
-	vp = pairfind(request->config_items, PW_POOL_NAME, 0, TAG_ANY);
+	vp = pairfind(request->config, PW_POOL_NAME, 0, TAG_ANY);
 	if (vp != NULL){
 		if (!inst->name || (strcmp(inst->name,vp->vp_strvalue) && strcmp(vp->vp_strvalue,"DEFAULT")))
 			return RLM_MODULE_NOOP;
 	} else {
-		RDEBUG("Could not find Pool-Name attribute.");
+		RDEBUG("Could not find Pool-Name attribute");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -476,9 +492,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(UNUSED void *instance, UNUSED 
 		return RLM_MODULE_FAIL;
 	}
 
-	fr_MD5Init(&md5_context);
-	fr_MD5Update(&md5_context, (uint8_t *)xlat_str, strlen(xlat_str));
-	fr_MD5Final(key_str, &md5_context);
+	fr_md5_init(&md5_context);
+	fr_md5_update(&md5_context, (uint8_t *)xlat_str, strlen(xlat_str));
+	fr_md5_final(key_str, &md5_context);
 	key_str[16] = '\0';
 	fr_bin2hex(hex_str, key_str, 16);
 	hex_str[32] = '\0';
@@ -774,7 +790,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(UNUSED void *instance, UNUSED 
 	}
 	else{
 		pthread_mutex_unlock(&inst->op_mutex);
-		RDEBUG("No available ip addresses in pool.");
+		RDEBUG("No available ip addresses in pool");
 		return RLM_MODULE_NOTFOUND;
 	}
 
@@ -800,22 +816,18 @@ static int mod_detach(void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_ippool;
 module_t rlm_ippool = {
-	RLM_MODULE_INIT,
-	"ippool",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_ippool_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	mod_detach,			/* detach */
-	{
-		NULL,			/* authentication */
-		NULL,		 	/* authorization */
-		NULL,			/* preaccounting */
-		mod_accounting,	/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		mod_post_auth		/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "ippool",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_ippool_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+
+		[MOD_ACCOUNTING]	= mod_accounting,
+		[MOD_POST_AUTH]		= mod_post_auth
 	},
 };

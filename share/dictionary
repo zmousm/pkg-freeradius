@@ -1,5 +1,5 @@
 # -*- text -*-
-# Copyright (C) 2011 The FreeRADIUS Server project and contributors
+# Copyright (C) 2015 The FreeRADIUS Server project and contributors
 #
 # Version $Id$
 #
@@ -19,8 +19,7 @@
 #	composed of Attribute/Value Pairs.  The value of each attribute
 #	is specified as one of a few data types.  Valid data types are:
 #
-#	text       - printable, generally UTF-8 encoded (subset of 'string')
-#	string     - 0-253 octets
+#	string     - printable text, generally UTF-8 encoded.  (The RFCs call this "text")
 #	ipaddr     - 4 octets in network byte order
 #	ipv4prefix - 1 octet reserved, one octet prefix, 4 octets ipaddr
 #	integer    - 32 bit value in big endian order
@@ -42,7 +41,7 @@
 #	short   - 16-bit unsigned integer in network byte order
 #	signed  - 32-bit signed integer in network byte order
 #	octets  - raw octets, printed and input as hex strings.
-#		  e.g.: 0x123456789abcdef
+#		  e.g.: 0x123456789abcdef  The RFCs call this "string".
 #
 # 	FreeRADIUS uses a number of data types which are defined in
 #	RFC 6929.  These data types should NEVER be used in any other
@@ -112,6 +111,9 @@ $INCLUDE dictionary.rfc6911
 $INCLUDE dictionary.rfc6929
 $INCLUDE dictionary.rfc6930
 $INCLUDE dictionary.rfc7055
+$INCLUDE dictionary.rfc7155
+$INCLUDE dictionary.rfc7268
+$INCLUDE dictionary.rfc7499
 
 #
 #	Mostly values which have been allocated by IANA under
@@ -135,6 +137,9 @@ $INCLUDE dictionary.alcatel-lucent.aaa
 $INCLUDE dictionary.alteon
 $INCLUDE dictionary.alvarion
 $INCLUDE dictionary.apc
+$INCLUDE dictionary.aptilo
+$INCLUDE dictionary.arbor
+$INCLUDE dictionary.arista
 $INCLUDE dictionary.aruba
 $INCLUDE dictionary.azaire
 $INCLUDE dictionary.ascend
@@ -160,18 +165,23 @@ $INCLUDE dictionary.cisco.asa
 #$INCLUDE dictionary.cisco.vpn3000
 $INCLUDE dictionary.cisco.vpn5000
 $INCLUDE dictionary.cisco.bbsm
+$INCLUDE dictionary.citrix
 $INCLUDE dictionary.clavister
 $INCLUDE dictionary.colubris
+$INCLUDE dictionary.compatible
 $INCLUDE dictionary.cosine
 $INCLUDE dictionary.dante
 $INCLUDE dictionary.dlink
 $INCLUDE dictionary.digium
+$INCLUDE dictionary.dragonwave
 $INCLUDE dictionary.efficientip
 $INCLUDE dictionary.eltex
 $INCLUDE dictionary.epygi
 $INCLUDE dictionary.erx
 $INCLUDE dictionary.equallogic
 $INCLUDE dictionary.ericsson
+$INCLUDE dictionary.ericsson.ab
+$INCLUDE dictionary.ericsson.packet.core.networks
 $INCLUDE dictionary.extreme
 $INCLUDE dictionary.f5
 $INCLUDE dictionary.fdxtended
@@ -197,6 +207,7 @@ $INCLUDE dictionary.livingston
 $INCLUDE dictionary.localweb
 $INCLUDE dictionary.lucent
 $INCLUDE dictionary.manzara
+$INCLUDE dictionary.meinberg
 $INCLUDE dictionary.merit
 $INCLUDE dictionary.meru
 $INCLUDE dictionary.microsoft
@@ -222,16 +233,19 @@ $INCLUDE dictionary.nortel
 $INCLUDE dictionary.packeteer
 $INCLUDE dictionary.paloalto
 $INCLUDE dictionary.patton
+$INCLUDE dictionary.perle
 $INCLUDE dictionary.propel
 $INCLUDE dictionary.prosoft
 $INCLUDE dictionary.proxim
 $INCLUDE dictionary.purewave
 $INCLUDE dictionary.quiconnect
 $INCLUDE dictionary.quintum
-$INCLUDE dictionary.redback
 $INCLUDE dictionary.redcreek
+$INCLUDE dictionary.riverbed
 $INCLUDE dictionary.riverstone
 $INCLUDE dictionary.roaringpenguin
+$INCLUDE dictionary.ruggedcom
+$INCLUDE dictionary.ruckus
 $INCLUDE dictionary.shasta
 $INCLUDE dictionary.sg
 $INCLUDE dictionary.shiva
@@ -240,10 +254,12 @@ $INCLUDE dictionary.slipstream
 $INCLUDE dictionary.sonicwall
 $INCLUDE dictionary.springtide
 $INCLUDE dictionary.starent
+$INCLUDE dictionary.surfnet
 $INCLUDE dictionary.symbol
 $INCLUDE dictionary.telebit
 $INCLUDE dictionary.terena
 $INCLUDE dictionary.trapeze
+$INCLUDE dictionary.travelping
 $INCLUDE dictionary.tropos
 $INCLUDE dictionary.t_systems_nova
 $INCLUDE dictionary.ukerna
@@ -255,6 +271,7 @@ $INCLUDE dictionary.versanet
 $INCLUDE dictionary.waverider
 $INCLUDE dictionary.walabi
 $INCLUDE dictionary.wichorus
+$INCLUDE dictionary.wifialliance
 $INCLUDE dictionary.wimax
 $INCLUDE dictionary.wispr
 $INCLUDE dictionary.xedia

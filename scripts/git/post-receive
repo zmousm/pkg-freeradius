@@ -9,11 +9,15 @@
 #
 # Copyright 2012  Arran Cudbard-Bell <a.cudbard-bell@freeradius.org>
 
+PATH=/bin:/usr/bin:/usr/sbin:/sbin
 # Tag to update when we successfully manage to start the server with a new configuration
 : ${STABLE_TAG='stable'}
 
 # Descriptive name of daemon
 : ${DAEMON_DESC='FreeRADIUS'}
+
+# Init script for radiusd
+: ${DAEMON_STATUS='/etc/init.d/radiusd status'}
 
 # Command used to restart the RADIUS daemon
 : ${DAEMON_REST='radmin -e hup'}
@@ -65,13 +69,20 @@ conf_check () {
 	return $ret
 }
 
+daemon_status () {
+	echo -n "Checking if radiusd is running ... "
+	$DAEMON_STATUS; ret=$?
+
+	return $ret
+}
+
 daemon_restart () {
 	echo -n "Restarting server... "
-	
+
 	$DAEMON_REST > /dev/null 2>&1; ret=$?
 
 	status $ret
-	return $ret 
+	return $ret
 }
 
 # Reset the current working directory state
@@ -85,8 +96,8 @@ if $ABORT_UNTRACKED && [ `$GIT_EXEC status --porcelain | wc -l` -gt 0 ]; then
 	echo "committed or added to .gitignore and $DAEMON_DESC restarted manually."
 	$GIT_EXEC status --short
 
-	if ! conf_check
-		then exit 64
+	if ! conf_check; then
+		exit 64
 	fi
 
 	echo "WARNING: $DAEMON_DESC found errors in the configuration,"
@@ -106,14 +117,14 @@ if ! $GIT_EXEC reset --hard
 fi
 
 # Check if the server finds any errors in the new config
-if ! conf_check then
+if ! conf_check; then
 	echo "WARNING: $DAEMON_DESC found errors in the configuration,"
 	echo "please fix the errors and push the corrected configuration."
 
 	conf_rollback
 	exit 64
 else
-	if ! daemon_restart; then
+	if daemon_status && ! daemon_restart ; then
 		if ! conf_rollback; then
 			echo "WARNING: Manually verify $DAEMON_DESC status immediately!"
 			exit 64
@@ -121,12 +132,12 @@ else
 
 		if ! daemon_restart; then
 			echo "WARNING: Manually verify $DAEMON_DESC status immediately!"
-			exit 64	
+			exit 64
 		fi
 
 		exit 64
 	fi
-	
+
 	$GIT_EXEC tag -f $STABLE_TAG $newrev
 fi
 

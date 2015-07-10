@@ -68,7 +68,7 @@ listen {
 	#		see raddb/sites-available/status
 	#	coa     listen for CoA-Request and Disconnect-Request
 	#		packets.  For examples, see the file
-	#		raddb/sites-available/coa-server
+	#		raddb/sites-available/coa
 	#
 	type = auth
 
@@ -84,16 +84,21 @@ listen {
 	#  source IP address for packets sent to a home server, the
 	#  proxy listeners are automatically created.
 
-	#  IP address on which to listen.
+	#  ipaddr/ipv4addr/ipv6addr - IP address on which to listen.
+	#  Out of several options the first one will be used.
+	#
 	#  Allowed values are:
-	#	dotted quad (1.2.3.4)
-	#       hostname    (radius.example.com)
-	#       wildcard    (*)
+	#	IPv4 address (e.g. 1.2.3.4, for ipv4addr/ipaddr)
+	#	IPv6 address (e.g. 2001:db8::1, for ipv6addr/ipaddr)
+	#	hostname     (radius.example.com,
+	#			A record for ipv4addr,
+	#       		AAAA record for ipv6addr,
+	#			A or AAAA record for ipaddr)
+	#       wildcard     (*)
+	#
+	# ipv4addr = *
+	# ipv6addr = *
 	ipaddr = *
-
-	#  OR, you can use an IPv6 address, but not both
-	#  at the same time.
-#	ipv6addr = ::	# any.  ::1 == localhost
 
 	#  Port on which to listen.
 	#  Allowed values are:
@@ -206,6 +211,35 @@ listen {
 	}
 }
 
+# IPv6 versions of the above - read their full config to understand options
+listen {
+	type = auth
+	ipv6addr = ::	# any.  ::1 == localhost
+	port = 0
+#	interface = eth0
+#	clients = per_socket_clients
+	limit {
+	      max_connections = 16
+	      lifetime = 0
+	      idle_timeout = 30
+	}
+}
+
+listen {
+	ipv6addr = ::
+	port = 0
+	type = acct
+#	interface = eth0
+#	clients = per_socket_clients
+
+	limit {
+#		max_pps = 0
+#		idle_timeout = 0
+#		lifetime = 0
+#		max_connections = 0
+	}
+}
+
 #  Authorization. First preprocess (hints and huntgroups files),
 #  then realms, and finally look in the "users" file.
 #
@@ -240,18 +274,17 @@ authorize {
 	#  be set for CUI generation and you want to generate CUI also
 	#  for your local clients then uncomment the operator-name
 	#  below and set the operator-name for your clients in clients.conf
-#       operator-name
+#	operator-name
 
 	#
 	#  If you want to generate CUI for some clients that do not
 	#  send proper CUI requests, then uncomment the
 	#  cui below and set "add_cui = yes" for these clients in clients.conf
-#       cui
+#	cui
 
 	#
 	#  If you want to have a log of authentication requests,
-	#  un-comment the following line, and the 'detail auth_log'
-	#  section, above.
+	#  un-comment the following line.
 #	auth_log
 
 	#
@@ -304,15 +337,14 @@ authorize {
 	#  It also sets the EAP-Type attribute in the request
 	#  attribute list to the EAP type from the packet.
 	#
-	#  As of 2.0, the EAP module returns "ok" in the authorize stage
-	#  for TTLS and PEAP.  In 1.x, it never returned "ok" here, so
-	#  this change is compatible with older configurations.
+	#  The EAP module returns "ok" if it is not yet ready to
+	#  authenticate the user.  The configuration below checks for
+	#  that code, and stops processing the "authorize" section if
+	#  so.
 	#
-	#  The example below uses module failover to avoid querying all
-	#  of the following modules if the EAP module returns "ok".
-	#  Therefore, your LDAP and/or SQL servers will not be queried
-	#  for the many packets that go back and forth to set up TTLS
-	#  or PEAP.  The load on those servers will therefore be reduced.
+	#  Any LDAP and/or SQL servers will not be queried for the
+	#  initial set of packets that go back and forth to set up
+	#  TTLS or PEAP.
 	#
 	eap {
 		ok = return
@@ -322,19 +354,20 @@ authorize {
 	#  Pull crypt'd passwords from /etc/passwd or /etc/shadow,
 	#  using the system API's to get the password.  If you want
 	#  to read /etc/passwd or /etc/shadow directly, see the
-	#  passwd module in radiusd.conf.
+	#  mods-available/passwd module.
 	#
 #	unix
 
 	#
-	#  Read the 'users' file
+	#  Read the 'users' file.  In v3, this is located in
+	#  raddb/mods-config/files/authorize
 	files
 
 	#
 	#  Look in an SQL database.  The schema of the database
 	#  is meant to mirror the "users" file.
 	#
-	#  See "Authorization Queries" in sql.conf
+	#  See "Authorization Queries" in mods-available/sql
 	-sql
 
 	#
@@ -537,7 +570,7 @@ accounting {
 	#  Update accounting packet by adding the CUI attribute
 	#  recorded from the corresponding Access-Accept
 	#  use it only if your NAS boxes do not support CUI themselves
-#       cui
+#	cui
 	#
 	#  Create a 'detail'ed log of the packets.
 	#  Note that accounting requests which are proxied
@@ -564,7 +597,7 @@ accounting {
 	#
 	#  Log traffic to an SQL database.
 	#
-	#  See "Accounting queries" in sql.conf
+	#  See "Accounting queries" in mods-available/sql
 	-sql
 
 	#
@@ -612,7 +645,7 @@ session {
 #	radutmp
 
 	#
-	#  See "Simultaneous Use Checking Queries" in sql.conf
+	#  See "Simultaneous Use Checking Queries" in mods-available/sql
 #	sql
 }
 
@@ -621,13 +654,37 @@ session {
 #  Once we KNOW that the user has been authenticated, there are
 #  additional steps we can take.
 post-auth {
+	#
+	#  If you need to have a State attribute, you can
+	#  add it here.  e.g. for later CoA-Request with
+	#  State, and Service-Type = Authorize-Only.
+	#
+#	if (!&reply:State) {
+#		update reply {
+#			State := "0x%{randstr:16h}"
+#		}
+#	}
+
+	#
+	#  For EAP-TTLS and PEAP, add the cached attributes to the reply.
+	#  The "session-state" attributes are automatically cached when
+	#  an Access-Challenge is sent, and automatically retrieved
+	#  when an Access-Request is received.
+	#
+	#  The session-state attributes are automatically deleted after
+	#  an Access-Reject or Access-Accept is sent.
+	#
+	update {
+		&reply: += &session-state:
+	}
+
 	#  Get an address from the IP Pool.
 #	main_pool
 
 
 	#  Create the CUI value and add the attribute to Access-Accept.
 	#  Uncomment the line below if *returning* the CUI.
-#       cui
+#	cui
 
 	#
 	#  If you want to have a log of authentication replies,
@@ -638,7 +695,7 @@ post-auth {
 	#
 	#  After authenticating the user, do another SQL query.
 	#
-	#  See "Authentication Logging Queries" in sql.conf
+	#  See "Authentication Logging Queries" in mods-available/sql
 	-sql
 
 	#
@@ -724,9 +781,9 @@ post-auth {
 	#
 	#  Uncomment the next few lines to copy the required data into
 	#  the EAP-Key-Name attribute
-#	if (reply:EAP-Session-Id) {
+#	if (&reply:EAP-Session-Id) {
 #		update reply {
-#			EAP-Key-Name := "%{reply:EAP-Session-Id}"
+#			EAP-Key-Name := &reply:EAP-Session-Id
 #		}
 #	}
 
@@ -739,6 +796,8 @@ post-auth {
 	#
 	#  Add the ldap module name (or instance) if you have set
 	#  'edir_account_policy_check = yes' in the ldap module configuration
+	#
+	#  The "session-state" attributes are not available here.
 	#
 	Post-Auth-Type REJECT {
 		# log failed authentications in SQL, too.
@@ -768,12 +827,12 @@ pre-proxy {
 	# if the operator-name is found for this client.
 	# No need to uncomment this if you have already enabled this in
 	# the authorize section.
-#       operator-name
+#	operator-name
 
 	#  The client requests the CUI by sending a CUI attribute
 	#  containing one zero byte.
 	#  Uncomment the line below if *requesting* the CUI.
-#       cui
+#	cui
 
 	#  Uncomment the following line if you want to change attributes
 	#  as defined in the preproxy_users file.
@@ -836,7 +895,7 @@ post-proxy {
 	#  Accounting-Requests from the NAS, but only writes
 	#  accounting packets to disk if the home server is down.
 	#
-#	Post-Proxy-Type Fail {
+#	Post-Proxy-Type Fail-Accounting {
 #			detail
 #	}
 }

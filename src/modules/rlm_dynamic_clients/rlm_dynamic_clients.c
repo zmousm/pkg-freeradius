@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -62,7 +63,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance,
 
 	value = cf_pair_value(cp);
 	if (!value) {
-		RDEBUG("No value given for the directory entry in the client.");
+		RDEBUG("No value given for the directory entry in the client");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -93,7 +94,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance,
 #else
 static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
 {
-	RDEBUG("Dynamic clients are unsupported in this build.");
+	RDEBUG("Dynamic clients are unsupported in this build");
 	return RLM_MODULE_FAIL;
 }
 #endif
@@ -107,22 +108,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_dynamic_clients;
 module_t rlm_dynamic_clients = {
-	RLM_MODULE_INIT,
-	"dynamic_clients",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	0,
-	NULL,				/* CONF_PARSER */
-	NULL,				/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		mod_authorize,	/* authorization */
-		NULL,			/* preaccounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "dynamic_clients",
+	.type		= RLM_TYPE_THREAD_SAFE,		/* type */
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_authorize
 	},
 };

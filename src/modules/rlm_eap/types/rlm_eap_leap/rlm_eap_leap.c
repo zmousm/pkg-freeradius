@@ -37,7 +37,7 @@ RCSID("$Id$")
  * len = header + type + leap_methoddata
  * leap_methoddata = value_size + value
  */
-static int CC_HINT(nonnull) leap_initiate(UNUSED void *instance, eap_handler_t *handler)
+static int CC_HINT(nonnull) mod_session_init(UNUSED void *instance, eap_handler_t *handler)
 {
 	REQUEST 	*request = handler->request;
 	leap_session_t	*session;
@@ -81,13 +81,13 @@ static int CC_HINT(nonnull) leap_initiate(UNUSED void *instance, eap_handler_t *
 	/*
 	 *	The next stage to process the packet.
 	 */
-	handler->stage = AUTHENTICATE;
+	handler->stage = PROCESS;
 
 	talloc_free(reply);
 	return 1;
 }
 
-static int CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, eap_handler_t *handler)
+static int CC_HINT(nonnull) mod_process(UNUSED void *instance, eap_handler_t *handler)
 {
 	int		rcode;
 	REQUEST 	*request = handler->request;
@@ -114,9 +114,9 @@ static int CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, eap_handler_
 	 *	The password is never sent over the wire.
 	 *	Always get the configured password, for each user.
 	 */
-	password = pairfind(handler->request->config_items, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
+	password = pairfind(handler->request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
 	if (!password) {
-		password = pairfind(handler->request->config_items, PW_NT_PASSWORD, 0, TAG_ANY);
+		password = pairfind(handler->request->config, PW_NT_PASSWORD, 0, TAG_ANY);
 	}
 
 	if (!password) {
@@ -196,11 +196,9 @@ static int CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, eap_handler_
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
+extern rlm_eap_module_t rlm_eap_leap;
 rlm_eap_module_t rlm_eap_leap = {
-	"eap_leap",
-	NULL,			/* attach */
-	leap_initiate,		/* Start the initial request, after Identity */
-	NULL,			/* authorization */
-	mod_authenticate,	/* authentication */
-	NULL,			/* detach */
+	.name		= "eap_leap",
+	.session_init	= mod_session_init,	/* Initialise a new EAP session */
+	.process	= mod_process		/* Process next round of EAP method */
 };

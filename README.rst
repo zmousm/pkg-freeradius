@@ -10,17 +10,18 @@ Introduction
 ------------
 
 The FreeRADIUS Server Project is a high performance and highly
-configurable RADIUS server that is available under the terms of the
-GNU GPLv2.  Using RADIUS allows authentication and authorization for a
-network to be centralized, and minimizes the number of changes that
-have to be done when adding or deleting new users to a network.
+configurable multi-protocol policy server, supporting RADIUS, DHCPv4
+and VMPS. It is available under the terms of the GNU GPLv2.
+Using RADIUS allows authentication and authorization for a network
+to be centralized, and minimizes the number of changes that have to
+be done when adding or deleting new users to a network.
 
 FreeRADIUS can authenticate users on systems such as 802.1x (WiFi),
 dialup, PPPoE, VPN's, VoIP, and many others.  It supports back-end
 databases such as MySQL, PostgreSQL, Oracle, Microsoft Active
-Directory, OpenLDAP, and many more.  It is used daily to authenticate
-the Internet access for hundreds of millions of people, in sites
-ranging from 10 users, to 10 million and more users.
+Directory, Redis, OpenLDAP, and many more.  It is used daily to
+authenticate the Internet access for hundreds of millions of people,
+in sites ranging from 10 to 10 million+ users.
 
 Version 3.0 of the server is largely compatible with version 2.x, but
 we highly recommend that you recreate your configuration, rather than
@@ -78,7 +79,7 @@ Additional Information
 See ``doc/README`` for more information about FreeRADIUS.
 
 There is an O'Reilly book available.  It serves as a good
-introduction for anyone new to RADIUS.  However, it is almost 11 years
+introduction for anyone new to RADIUS.  However, it is almost 12 years
 old, and is not much more than a basic introduction to the subject.
 
 http://www.amazon.com/exec/obidos/ASIN/0596003226/freeradiusorg-20/
@@ -100,10 +101,10 @@ following:
 3. Verify that the server starts.  (You ARE using debugging mode, right?)
 4. Send it test packets using "radclient", or a NAS or AP.
 5. Verify that the server does what you expect
-    - If it does not work, change the configuration, and go to step (3) 
+    - If it does not work, change the configuration, and go to step (3)
     - If you're stuck, revert to using the "last working" configuration.
     - If it works, proceed to step (6).
-6. Save a copy of the working configuration, along with a note of what 
+6. Save a copy of the working configuration, along with a note of what
    you changed, and why.
 7. Make a SMALL change to the configuration.
 8. Repeat from step (3).
@@ -156,5 +157,5 @@ If you like the server, feel free to mail the list and say so.
 .. |CoverityStatus| image:: https://scan.coverity.com/projects/58/badge.svg?
 .. _CoverityStatus: https://scan.coverity.com/projects/58
 
-.. |BuildStatus| image:: https://travis-ci.org/FreeRADIUS/freeradius-server.png
+.. |BuildStatus| image:: https://travis-ci.org/FreeRADIUS/freeradius-server.png?branch=v3.0.x
 .. _BuildStatus: https://travis-ci.org/FreeRADIUS/freeradius-server

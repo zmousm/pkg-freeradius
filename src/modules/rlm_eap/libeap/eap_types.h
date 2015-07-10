@@ -31,13 +31,8 @@ RCSIDH(eap_methods_h, "$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
 
-/* Field length and other arbitrary things */
+/* Code (1) + Identifier (1) + Length (2) */
 #define EAP_HEADER_LEN 		4
-
-/* base for dictionary values */
-#define ATTRIBUTE_EAP_ID	1020
-#define ATTRIBUTE_EAP_CODE      1021
-#define ATTRIBUTE_EAP_BASE      1280
 
 typedef enum eap_code {
 	PW_EAP_REQUEST = 1,
@@ -106,6 +101,8 @@ typedef enum eap_method {
 	PW_EAP_MAX_TYPES		/* 54 - for validation */
 } eap_type_t;
 
+#define PW_EAP_EXPANDED_TYPE	(254)
+
 typedef enum eap_rcode {
 	EAP_NOTFOUND,    	//!< EAP handler data not found.
 	EAP_FOUND,       	//!< EAP handler data found, continue.
@@ -119,8 +116,7 @@ typedef enum eap_rcode {
 
 extern const FR_NAME_NUMBER eap_rcode_table[];
 
-/*
- * EAP-Type specific data.
+/** EAP-Type specific data
  */
 typedef struct eap_type_data {
 	eap_type_t	num;
@@ -128,8 +124,7 @@ typedef struct eap_type_data {
 	uint8_t		*data;
 } eap_type_data_t;
 
-/*
- * Structure to hold EAP data.
+/** Structure to hold EAP data
  *
  * length = code + id + length + type + type.data
  *	=  1   +  1 +   2    +  1   +  X
@@ -143,8 +138,7 @@ typedef struct eap_packet {
 	uint8_t		*packet;
 } eap_packet_t;
 
-/*
- * Structure to represent packet format of eap *on wire*
+/** Structure to represent packet format of eap *on wire*
  */
 typedef struct eap_packet_raw {
 	uint8_t		code;
@@ -157,13 +151,12 @@ typedef struct eap_packet_raw {
 /*
  * interfaces in eapcommon.c
  */
-extern eap_type_t eap_name2type(char const *name);
-extern char const *eap_type2name(eap_type_t method);
-extern int eap_wireformat(eap_packet_t *reply);
-extern int eap_basic_compose(RADIUS_PACKET *packet, eap_packet_t *reply);
-extern VALUE_PAIR *eap_packet2vp(RADIUS_PACKET *packet, eap_packet_raw_t const *reply);
-extern eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps);
-void eap_add_reply(REQUEST *request,
-		   char const *name, uint8_t const *value, int len);
+eap_type_t		eap_name2type(char const *name);
+char const		*eap_type2name(eap_type_t method);
+int			eap_wireformat(eap_packet_t *reply);
+int			eap_basic_compose(RADIUS_PACKET *packet, eap_packet_t *reply);
+VALUE_PAIR		*eap_packet2vp(RADIUS_PACKET *packet, eap_packet_raw_t const *reply);
+eap_packet_raw_t	*eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps);
+void			eap_add_reply(REQUEST *request, char const *name, uint8_t const *value, int len);
 
 #endif /* _EAP_TYPES_H */

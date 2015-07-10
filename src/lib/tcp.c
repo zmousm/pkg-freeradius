@@ -29,78 +29,9 @@ RCSID("$Id$")
 /* FIXME: into common RADIUS header? */
 #define MAX_PACKET_LEN 4096
 
-/*
- *	Open a socket TO the given IP and port.
- */
-int fr_tcp_client_socket(fr_ipaddr_t *src_ipaddr,
-			 fr_ipaddr_t *dst_ipaddr, int dst_port)
-{
-	int sockfd;
-	struct sockaddr_storage salocal;
-	socklen_t	salen;
-
-	if ((dst_port < 0) || (dst_port > 65535)) {
-		fr_strerror_printf("Port %d is out of allowed bounds",
-				   dst_port);
-		return -1;
-	}
-
-	if (!dst_ipaddr) return -1;
-
-	sockfd = socket(dst_ipaddr->af, SOCK_STREAM, 0);
-	if (sockfd < 0) {
-		return sockfd;
-	}
-
-	/*
-	 *	Allow the caller to bind us to a specific source IP.
-	 */
-	if (src_ipaddr && (src_ipaddr->af != AF_UNSPEC)) {
-		if (!fr_ipaddr2sockaddr(src_ipaddr, 0, &salocal, &salen)) {
-			close(sockfd);
-			return -1;
-		}
-
-		if (bind(sockfd, (struct sockaddr *) &salocal, salen) < 0) {
-			fr_strerror_printf("Failure binding to IP: %s",
-					   fr_syserror(errno));
-			close(sockfd);
-			return -1;
-		}
-	}
-
-	if (!fr_ipaddr2sockaddr(dst_ipaddr, dst_port, &salocal, &salen)) {
-		close(sockfd);
-		return -1;
-	}
-
-	/*
-	 *	FIXME: If EINPROGRESS, then tell the caller that
-	 *	somehow.  The caller can then call connect() when the
-	 *	socket is ready...
-	 */
-	if (connect(sockfd, (struct sockaddr *) &salocal, salen) < 0) {
-		fr_strerror_printf("Failed in connect(): %s", fr_syserror(errno));
-		close(sockfd);
-		return -1;
-	}
-
-	/*
-	 *	Set non-block *AFTER* connecting to the remote server
-	 *	so it doesn't return immediately.
-	 */
-	if (fr_nonblock(sockfd) < 0) {
-		close(sockfd);
-		return -1;
-	}
-
-	return sockfd;
-}
-
-
 RADIUS_PACKET *fr_tcp_recv(int sockfd, int flags)
 {
-	RADIUS_PACKET *packet = rad_alloc(NULL, 0);
+	RADIUS_PACKET *packet = rad_alloc(NULL, false);
 
 	if (!packet) return NULL;
 
@@ -162,8 +93,8 @@ int fr_tcp_read_packet(RADIUS_PACKET *packet, int flags)
 
 		packet_len = (packet->vector[2] << 8) | packet->vector[3];
 
-		if (packet_len < AUTH_HDR_LEN) {
-			fr_strerror_printf("Discarding packet: Smaller than RFC minimum of 20 bytes.");
+		if (packet_len < RADIUS_HDR_LEN) {
+			fr_strerror_printf("Discarding packet: Smaller than RFC minimum of 20 bytes");
 			return -1;
 		}
 
@@ -171,7 +102,7 @@ int fr_tcp_read_packet(RADIUS_PACKET *packet, int flags)
 		 *	If the packet is too big, then the socket is bad.
 		 */
 		if (packet_len > MAX_PACKET_LEN) {
-			fr_strerror_printf("Discarding packet: Larger than RFC limitation of 4096 bytes.");
+			fr_strerror_printf("Discarding packet: Larger than RFC limitation of 4096 bytes");
 			return -1;
 		}
 
@@ -222,7 +153,7 @@ int fr_tcp_read_packet(RADIUS_PACKET *packet, int flags)
 	 */
 	packet->vps = NULL;
 
-	if (fr_debug_flag) {
+	if (fr_debug_lvl) {
 		char ip_buf[128], buffer[256];
 
 		if (packet->src_ipaddr.af != AF_UNSPEC) {

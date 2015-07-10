@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -28,7 +29,6 @@ RCSID("$Id$")
 #include	<freeradius-devel/rad_assert.h>
 
 #include	<fcntl.h>
-#include	<limits.h>
 
 #include "config.h"
 
@@ -42,38 +42,30 @@ static char const porttypes[] = "ASITX";
  */
 typedef struct nas_port {
 	uint32_t		nasaddr;
-	unsigned int	port;
+	uint16_t		port;
 	off_t			offset;
 	struct nas_port 	*next;
 } NAS_PORT;
 
 typedef struct rlm_radutmp_t {
 	NAS_PORT	*nas_port_list;
-	char		*filename;
-	char		*username;
+	char const	*filename;
+	char const	*username;
 	bool		case_sensitive;
 	bool		check_nas;
-	int		permission;
+	uint32_t	permission;
 	bool		caller_id_ok;
 } rlm_radutmp_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "filename", PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED,
-	  offsetof(rlm_radutmp_t,filename), NULL,  RADUTMP },
-	{ "username", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_radutmp_t,username), NULL,  "%{User-Name}"},
-	{ "case_sensitive", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_radutmp_t,case_sensitive), NULL,  "yes"},
-	{ "check_with_nas", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_radutmp_t,check_nas), NULL,  "yes"},
-	{ "perm",     PW_TYPE_INTEGER | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_radutmp_t,permission), NULL,  NULL },
-	{ "permissions",     PW_TYPE_INTEGER,
-	  offsetof(rlm_radutmp_t,permission), NULL,  "0644" },
-	{ "callerid", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_radutmp_t,caller_id_ok), NULL, NULL },
-	{ "caller_id", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_radutmp_t,caller_id_ok), NULL, "no" },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, rlm_radutmp_t, filename), RADUTMP  },
+	{ "username", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED | PW_TYPE_XLAT, rlm_radutmp_t, username), "%{User-Name}" },
+	{ "case_sensitive", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_radutmp_t, case_sensitive), "yes" },
+	{ "check_with_nas", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_radutmp_t, check_nas), "yes" },
+	{ "perm", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, rlm_radutmp_t, permission), NULL },
+	{ "permissions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_radutmp_t, permission), "0644" },
+	{ "callerid", FR_CONF_OFFSET(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, rlm_radutmp_t, caller_id_ok), NULL },
+	{ "caller_id", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_radutmp_t, caller_id_ok), "no" },
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
@@ -136,7 +128,7 @@ static rlm_rcode_t radutmp_zap(REQUEST *request, char const *filename, uint32_t 
 /*
  *	Lookup a NAS_PORT in the nas_port_list
  */
-static NAS_PORT *nas_port_find(NAS_PORT *nas_port_list, uint32_t nasaddr, unsigned int port)
+static NAS_PORT *nas_port_find(NAS_PORT *nas_port_list, uint32_t nasaddr, uint16_t port)
 {
 	NAS_PORT	*cl;
 
@@ -163,7 +155,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	int		protocol = -1;
 	time_t		t;
 	int		fd = -1;
-	int		port_seen = 0;
+	bool		port_seen = false;
 	int		off;
 	rlm_radutmp_t	*inst = instance;
 	char		ip_name[32]; /* 255.255.255.255 */
@@ -183,7 +175,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	 *	Which type is this.
 	 */
 	if ((vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) == NULL) {
-		RDEBUG("No Accounting-Status-Type record.");
+		RDEBUG("No Accounting-Status-Type record");
 		return RLM_MODULE_NOOP;
 	}
 	status = vp->vp_integer;
@@ -209,13 +201,13 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 		     == NULL || vp->vp_date == 0)
 			check1 = 1;
 		if ((vp = pairfind(request->packet->vps, PW_ACCT_SESSION_ID, 0, TAG_ANY))
-		     != NULL && vp->length == 8 &&
+		     != NULL && vp->vp_length == 8 &&
 		     memcmp(vp->vp_strvalue, "00000000", 8) == 0)
 			check2 = 1;
 		if (check1 == 0 || check2 == 0) {
 			break;
 		}
-		INFO("rlm_radutmp: converting reboot records.");
+		INFO("rlm_radutmp: converting reboot records");
 		if (status == PW_STATUS_STOP)
 			status = PW_STATUS_ACCOUNTING_OFF;
 		if (status == PW_STATUS_START)
@@ -234,51 +226,55 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	     vp;
 	     vp = fr_cursor_next(&cursor)) {
 		if (!vp->da->vendor) switch (vp->da->attr) {
-			case PW_LOGIN_IP_HOST:
-			case PW_FRAMED_IP_ADDRESS:
-				ut.framed_address = vp->vp_ipaddr;
-				break;
-			case PW_FRAMED_PROTOCOL:
-				protocol = vp->vp_integer;
-				break;
-			case PW_NAS_IP_ADDRESS:
-				ut.nas_address = vp->vp_ipaddr;
-				break;
-			case PW_NAS_PORT:
-				ut.nas_port = vp->vp_integer;
-				port_seen = 1;
-				break;
-			case PW_ACCT_DELAY_TIME:
-				ut.delay = vp->vp_integer;
-				break;
-			case PW_ACCT_SESSION_ID:
-				/*
-				 *	If length > 8, only store the
-				 *	last 8 bytes.
-				 */
-				off = vp->length - sizeof(ut.session_id);
-				/*
-				 * 	Ascend is br0ken - it adds a \0
-				 * 	to the end of any string.
-				 * 	Compensate.
-				 */
-				if (vp->length > 0 &&
-				    vp->vp_strvalue[vp->length - 1] == 0)
-					off--;
-				if (off < 0) off = 0;
-				memcpy(ut.session_id, vp->vp_strvalue + off,
-					sizeof(ut.session_id));
-				break;
-			case PW_NAS_PORT_TYPE:
-				if (vp->vp_integer <= 4)
-					ut.porttype = porttypes[vp->vp_integer];
-				break;
-			case PW_CALLING_STATION_ID:
-				if(inst->caller_id_ok)
-					strlcpy(ut.caller_id,
-						vp->vp_strvalue,
-						sizeof(ut.caller_id));
-				break;
+		case PW_LOGIN_IP_HOST:
+		case PW_FRAMED_IP_ADDRESS:
+			ut.framed_address = vp->vp_ipaddr;
+			break;
+
+		case PW_FRAMED_PROTOCOL:
+			protocol = vp->vp_integer;
+			break;
+
+		case PW_NAS_IP_ADDRESS:
+			ut.nas_address = vp->vp_ipaddr;
+			break;
+
+		case PW_NAS_PORT:
+			ut.nas_port = vp->vp_integer;
+			port_seen = true;
+			break;
+
+		case PW_ACCT_DELAY_TIME:
+			ut.delay = vp->vp_integer;
+			break;
+
+		case PW_ACCT_SESSION_ID:
+			/*
+			 *	If length > 8, only store the
+			 *	last 8 bytes.
+			 */
+			off = vp->vp_length - sizeof(ut.session_id);
+			/*
+			 * 	Ascend is br0ken - it adds a \0
+			 * 	to the end of any string.
+			 * 	Compensate.
+			 */
+			if (vp->vp_length > 0 &&
+			    vp->vp_strvalue[vp->vp_length - 1] == 0)
+				off--;
+			if (off < 0) off = 0;
+			memcpy(ut.session_id, vp->vp_strvalue + off,
+				sizeof(ut.session_id));
+			break;
+
+		case PW_NAS_PORT_TYPE:
+			if (vp->vp_integer <= 4)
+				ut.porttype = porttypes[vp->vp_integer];
+			break;
+
+		case PW_CALLING_STATION_ID:
+			if (inst->caller_id_ok) strlcpy(ut.caller_id, vp->vp_strvalue, sizeof(ut.caller_id));
+			break;
 		}
 	}
 
@@ -493,7 +489,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 		 *	easier than searching through the entire file.
 		 */
 		if (!cache) {
-			cache = talloc_zero(inst, NAS_PORT);
+			cache = talloc_zero(NULL, NAS_PORT);
 			if (cache) {
 				cache->nasaddr = ut.nas_address;
 				cache->port = ut.nas_port;
@@ -743,31 +739,20 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST *requ
 #endif
 
 /* globally exported name */
+extern module_t rlm_radutmp;
 module_t rlm_radutmp = {
-	RLM_MODULE_INIT,
-	"radutmp",
-	RLM_TYPE_THREAD_UNSAFE | RLM_TYPE_HUP_SAFE,   	/* type */
-	sizeof(rlm_radutmp_t),
-	module_config,
-	NULL,			       /* instantiation */
-	NULL,			       /* detach */
-	{
-		NULL,		 /* authentication */
-		NULL,		 /* authorization */
-		NULL,		 /* preaccounting */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "radutmp",
+	.type		= RLM_TYPE_THREAD_UNSAFE | RLM_TYPE_HUP_SAFE,
+	.inst_size	= sizeof(rlm_radutmp_t),
+	.config		= module_config,
+	.methods = {
 #ifdef WITH_ACCOUNTING
-		mod_accounting,   /* accounting */
-#else
-		NULL,
+		[MOD_ACCOUNTING]	= mod_accounting,
 #endif
 #ifdef WITH_SESSION_MGMT
-		mod_checksimul,	/* checksimul */
-#else
-		NULL,
+		[MOD_SESSION]		= mod_checksimul
 #endif
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
 	},
 };
 

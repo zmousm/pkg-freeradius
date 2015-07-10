@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -51,10 +52,10 @@ static void calc_apop_digest(uint8_t *buffer, uint8_t const *challenge,
 {
 	FR_MD5_CTX context;
 
-	fr_MD5Init(&context);
-	fr_MD5Update(&context, challenge, challen);
-	fr_MD5Update(&context, (uint8_t const *) password, strlen(password));
-	fr_MD5Final(buffer, &context);
+	fr_md5_init(&context);
+	fr_md5_update(&context, challenge, challen);
+	fr_md5_update(&context, (uint8_t const *) password, strlen(password));
+	fr_md5_final(buffer, &context);
 }
 
 
@@ -68,14 +69,14 @@ static void calc_md5_digest(uint8_t *buffer, uint8_t const *challenge, size_t ch
 	memset(buf, 0x36, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
 	memcpy(buf+64, challenge, challen);
-	fr_MD5Init(&context);
-	fr_MD5Update(&context, buf, 64+challen);
+	fr_md5_init(&context);
+	fr_md5_update(&context, buf, 64+challen);
 	memset(buf, 0x5c, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
-	fr_MD5Final(buf+64,&context);
-	fr_MD5Init(&context);
-	fr_MD5Update(&context,buf,64+16);
-	fr_MD5Final(buffer,&context);
+	fr_md5_final(buf+64,&context);
+	fr_md5_init(&context);
+	fr_md5_update(&context,buf,64+16);
+	fr_md5_final(buffer,&context);
 }
 
 static void calc_md4_digest(uint8_t *buffer, uint8_t const *challenge, size_t challen, char const *password)
@@ -88,14 +89,14 @@ static void calc_md4_digest(uint8_t *buffer, uint8_t const *challenge, size_t ch
 	memset(buf, 0x36, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
 	memcpy(buf+64, challenge, challen);
-	fr_MD4Init(&context);
-	fr_MD4Update(&context,buf,64+challen);
+	fr_md4_init(&context);
+	fr_md4_update(&context,buf,64+challen);
 	memset(buf, 0x5c, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
-	fr_MD4Final(buf+64,&context);
-	fr_MD4Init(&context);
-	fr_MD4Update(&context,buf,64+16);
-	fr_MD4Final(buffer,&context);
+	fr_md4_final(buf+64,&context);
+	fr_md4_init(&context);
+	fr_md4_update(&context,buf,64+16);
+	fr_md4_final(buffer,&context);
 }
 
 static void calc_sha1_digest(uint8_t *buffer, uint8_t const *challenge,
@@ -109,14 +110,14 @@ static void calc_sha1_digest(uint8_t *buffer, uint8_t const *challenge,
 	memset(buf, 0x36, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
 	memcpy(buf+64, challenge, challen);
-	fr_SHA1Init(&context);
-	fr_SHA1Update(&context,buf,64+challen);
+	fr_sha1_init(&context);
+	fr_sha1_update(&context,buf,64+challen);
 	memset(buf, 0x5c, 64);
 	for(i=0; i<64 && password[i]; i++) buf[i]^=password[i];
-	fr_SHA1Final(buf+64,&context);
-	fr_SHA1Init(&context);
-	fr_SHA1Update(&context,buf,64+20);
-	fr_SHA1Final(buffer,&context);
+	fr_sha1_final(buf+64,&context);
+	fr_sha1_init(&context);
+	fr_sha1_update(&context,buf,64+20);
+	fr_sha1_final(buffer,&context);
 }
 
 
@@ -125,9 +126,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void * instance, REQ
 	VALUE_PAIR *authtype, *challenge, *response, *password;
 	uint8_t buffer[64];
 
-	password = pairfind(request->config_items, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
+	password = pairfind(request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
 	if(!password) {
-		AUTH("rlm_cram: Cleartext-Password is required for authentication.");
+		AUTH("rlm_cram: Cleartext-Password is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 	authtype = pairfind(request->packet->vps, SM_AUTHTYPE, VENDORPEC_SM, TAG_ANY);
@@ -145,37 +146,37 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void * instance, REQ
 		AUTH("rlm_cram: Required attribute Sandy-Mail-Response missed");
 		return RLM_MODULE_INVALID;
 	}
-	switch(authtype->vp_integer){
+	switch (authtype->vp_integer){
 		case 2:				/*	CRAM-MD5	*/
-			if(challenge->length < 5 || response->length != 16) {
+			if(challenge->vp_length < 5 || response->vp_length != 16) {
 				AUTH("rlm_cram: invalid MD5 challenge/response length");
 				return RLM_MODULE_INVALID;
 			}
-			calc_md5_digest(buffer, challenge->vp_octets, challenge->length, password->vp_strvalue);
+			calc_md5_digest(buffer, challenge->vp_octets, challenge->vp_length, password->vp_strvalue);
 			if(!memcmp(buffer, response->vp_octets, 16)) return RLM_MODULE_OK;
 			break;
 		case 3:				/*	APOP	*/
-			if(challenge->length < 5 || response->length != 16) {
+			if(challenge->vp_length < 5 || response->vp_length != 16) {
 				AUTH("rlm_cram: invalid APOP challenge/response length");
 				return RLM_MODULE_INVALID;
 			}
-			calc_apop_digest(buffer, challenge->vp_octets, challenge->length, password->vp_strvalue);
+			calc_apop_digest(buffer, challenge->vp_octets, challenge->vp_length, password->vp_strvalue);
 			if(!memcmp(buffer, response->vp_octets, 16)) return RLM_MODULE_OK;
 			break;
 		case 8:				/*	CRAM-MD4	*/
-			if(challenge->length < 5 || response->length != 16) {
+			if(challenge->vp_length < 5 || response->vp_length != 16) {
 				AUTH("rlm_cram: invalid MD4 challenge/response length");
 				return RLM_MODULE_INVALID;
 			}
-			calc_md4_digest(buffer, challenge->vp_octets, challenge->length, password->vp_strvalue);
+			calc_md4_digest(buffer, challenge->vp_octets, challenge->vp_length, password->vp_strvalue);
 			if(!memcmp(buffer, response->vp_octets, 16)) return RLM_MODULE_OK;
 			break;
 		case 9:				/*	CRAM-SHA1	*/
-			if(challenge->length < 5 || response->length != 20) {
+			if(challenge->vp_length < 5 || response->vp_length != 20) {
 				AUTH("rlm_cram: invalid MD4 challenge/response length");
 				return RLM_MODULE_INVALID;
 			}
-			calc_sha1_digest(buffer, challenge->vp_octets, challenge->length, password->vp_strvalue);
+			calc_sha1_digest(buffer, challenge->vp_octets, challenge->vp_length, password->vp_strvalue);
 			if(!memcmp(buffer, response->vp_octets, 20)) return RLM_MODULE_OK;
 			break;
 		default:
@@ -186,22 +187,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void * instance, REQ
 
 }
 
+extern module_t rlm_cram;
 module_t rlm_cram = {
-	RLM_MODULE_INIT,
-	"CRAM",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	0,
-	NULL,				/* CONF_PARSER */
-	NULL,				/* instantiation */
-	NULL,				/* detach */
-	{
-		mod_authenticate,	/* authenticate */
-		NULL,			/* authorize */
-		NULL,			/* pre-accounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "cram",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate
 	},
 };

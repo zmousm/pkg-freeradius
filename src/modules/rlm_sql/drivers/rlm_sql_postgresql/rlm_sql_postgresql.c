@@ -40,17 +40,27 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/rad_assert.h>
 
 #include <sys/stat.h>
 
 #include <libpq-fe.h>
+#include <postgres_ext.h>
 
 #include "config.h"
 #include "rlm_sql.h"
 #include "sql_postgresql.h"
 
+#ifndef NAMEDATALEN
+#  define NAMEDATALEN 64
+#endif
+
+typedef struct rlm_sql_postgres_config {
+	char const	*db_string;
+	bool		send_application_name;
+} rlm_sql_postgres_config_t;
+
 typedef struct rlm_sql_postgres_conn {
-	char const	*dbstring;	//!< String describing parameters for the connection
 	PGconn		*db;
 	PGresult	*result;
 	int		cur_row;
@@ -59,20 +69,75 @@ typedef struct rlm_sql_postgres_conn {
 	char		**row;
 } rlm_sql_postgres_conn_t;
 
-static int mod_instantiate(UNUSED CONF_SECTION *conf, UNUSED rlm_sql_config_t *config)
+static CONF_PARSER driver_config[] = {
+	{ "send_application_name", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sql_postgres_config_t, send_application_name), "no" },
+
+	{ NULL, -1, 0, NULL, NULL }
+};
+
+static int mod_instantiate(CONF_SECTION *conf, rlm_sql_config_t *config)
 {
 #if defined(HAVE_OPENSSL_CRYPTO_H) && (defined(HAVE_PQINITOPENSSL) || defined(HAVE_PQINITSSL))
-	static bool ssl_init = false;
-
-	if (!ssl_init) {
-#ifdef HAVE_PQINITOPENSSL
-		PQinitOpenSSL(0, 0);
-#else
-		PQinitSSL(0);
+	static bool			ssl_init = false;
 #endif
+
+	rlm_sql_postgres_config_t	*driver;
+	char 				application_name[NAMEDATALEN];
+	char				*db_string;
+
+#if defined(HAVE_OPENSSL_CRYPTO_H) && (defined(HAVE_PQINITOPENSSL) || defined(HAVE_PQINITSSL))
+	if (!ssl_init) {
+#  ifdef HAVE_PQINITOPENSSL
+		PQinitOpenSSL(0, 0);
+#  else
+		PQinitSSL(0);
+#  endif
 		ssl_init = true;
 	}
 #endif
+
+	MEM(driver = config->driver = talloc_zero(config, rlm_sql_postgres_config_t));
+	if (cf_section_parse(conf, driver, driver_config) < 0) {
+		return -1;
+	}
+
+	db_string = strchr(config->sql_db, '=') ?
+		talloc_typed_strdup(driver, config->sql_db) :
+		talloc_typed_asprintf(driver, "dbname='%s'", config->sql_db);
+
+	if (config->sql_server[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " host='%s'", config->sql_server);
+	}
+
+	if (config->sql_port) {
+		db_string = talloc_asprintf_append(db_string, " port=%i", config->sql_port);
+	}
+
+	if (config->sql_login[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " user='%s'", config->sql_login);
+	}
+
+	if (config->sql_password[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " password='%s'", config->sql_password);
+	}
+
+	/*
+	 *	Allow the user to set their own, or disable it
+	 */
+	if (driver->send_application_name) {
+		CONF_SECTION	*cs;
+		char const	*name;
+
+		cs = cf_item_parent(cf_section_to_item(conf));
+
+		name = cf_section_name2(cs);
+		if (!name) name = cf_section_name1(cs);
+
+		snprintf(application_name, sizeof(application_name),
+			 "FreeRADIUS " RADIUSD_VERSION_STRING " - %s (%s)", progname, name);
+		db_string = talloc_asprintf_append(db_string, " application_name='%s'", application_name);
+	}
+	driver->db_string = db_string;
 
 	return 0;
 }
@@ -127,7 +192,7 @@ static sql_rcode_t sql_classify_error(PGresult const *result)
 
 	/* UNIQUE VIOLATION */
 	if (strcmp("23505", errorcode) == 0) {
-		return RLM_SQL_DUPLICATE;
+		return RLM_SQL_ALT_QUERY;
 	}
 
 	/* others */
@@ -152,62 +217,28 @@ static sql_rcode_t sql_classify_error(UNUSED PGresult const *result)
 }
 #endif
 
-static int sql_socket_destructor(void *c)
+static int _sql_socket_destructor(rlm_sql_postgres_conn_t *conn)
 {
-	rlm_sql_postgres_conn_t  *conn = c;
-
 	DEBUG2("rlm_sql_postgresql: Socket destructor called, closing socket");
 
-	if (!conn->db) {
-		return 0;
-	}
+	if (!conn->db) return 0;
 
 	/* PQfinish also frees the memory used by the PGconn structure */
 	PQfinish(conn->db);
-	conn->db = NULL;
 
 	return 0;
 }
 
-/*************************************************************************
- *
- *	Function: sql_create_socket
- *
- *	Purpose: Establish connection to the db
- *
- *************************************************************************/
-static int CC_HINT(nonnull) sql_init_socket(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
+static int CC_HINT(nonnull) sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 {
-	char *dbstring;
+	rlm_sql_postgres_config_t *driver = config->driver;
 	rlm_sql_postgres_conn_t *conn;
 
 	MEM(conn = handle->conn = talloc_zero(handle, rlm_sql_postgres_conn_t));
-	talloc_set_destructor((void *) conn, sql_socket_destructor);
+	talloc_set_destructor(conn, _sql_socket_destructor);
 
-	dbstring = strchr(config->sql_db, '=') ?
-		talloc_typed_strdup(conn, config->sql_db) :
-		talloc_typed_asprintf(conn, "dbname='%s'", config->sql_db);
-
-	if (config->sql_server[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " host='%s'", config->sql_server);
-	}
-
-	if (config->sql_port[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " port=%s", config->sql_port);
-	}
-
-	if (config->sql_login[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " user='%s'", config->sql_login);
-	}
-
-	if (config->sql_password[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " password='%s'", config->sql_password);
-	}
-
-	conn->dbstring = dbstring;
-
-	DEBUG2("rlm_sql_postgresql: Connecting using parameters: %s", dbstring);
-	conn->db = PQconnectdb(dbstring);
+	DEBUG2("rlm_sql_postgresql: Connecting using parameters: %s", driver->db_string);
+	conn->db = PQconnectdb(driver->db_string);
 	if (!conn->db) {
 		ERROR("rlm_sql_postgresql: Connection failed: Out of memory");
 		return -1;
@@ -226,13 +257,6 @@ static int CC_HINT(nonnull) sql_init_socket(rlm_sql_handle_t *handle, rlm_sql_co
 	return 0;
 }
 
-/*************************************************************************
- *
- *	Function: sql_query
- *
- *	Purpose: Issue a query to the database
- *
- *************************************************************************/
 static CC_HINT(nonnull) sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config,
 					      char const *query)
 {
@@ -306,7 +330,7 @@ static CC_HINT(nonnull) sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED r
 	 */
 	case PGRES_EMPTY_QUERY:
 		ERROR("rlm_sql_postgresql: Empty query");
-		return RLM_SQL_QUERY_ERROR;
+		return RLM_SQL_QUERY_INVALID;
 
 	/*
 	 *  The server's response was not understood.
@@ -324,28 +348,31 @@ static CC_HINT(nonnull) sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED r
 	return RLM_SQL_ERROR;
 }
 
-
-/*************************************************************************
- *
- *	Function: sql_select_query
- *
- *	Purpose: Issue a select query to the database
- *
- *************************************************************************/
-static sql_rcode_t sql_select_query(rlm_sql_handle_t * handle, rlm_sql_config_t *config, char const *query) {
+static sql_rcode_t sql_select_query(rlm_sql_handle_t * handle, rlm_sql_config_t *config, char const *query)
+{
 	return sql_query(handle, config, query);
 }
 
-/*************************************************************************
- *
- *	Function: sql_fetch_row
- *
- *	Purpose: database specific fetch_row. Returns a rlm_sql_row_t struct
- *	with all the data for the query in 'handle->row'. Returns
- *	0 on success, -1 on failure, RLM_SQL_RECONNECT if 'database is down'.
- *
- *************************************************************************/
-static sql_rcode_t sql_fetch_row(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t *config) {
+static sql_rcode_t sql_fields(char const **out[], rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
+	rlm_sql_postgres_conn_t *conn = handle->conn;
+
+	int		fields, i;
+	char const	**names;
+
+	fields = PQnfields(conn->result);
+	if (fields <= 0) return RLM_SQL_ERROR;
+
+	MEM(names = talloc_zero_array(handle, char const *, fields + 1));
+
+	for (i = 0; i < fields; i++) names[i] = PQfname(conn->result, i);
+	*out = names;
+
+	return RLM_SQL_OK;
+}
+
+static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
 
 	int records, i, len;
 	rlm_sql_postgres_conn_t *conn = handle->conn;
@@ -365,7 +392,7 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t * handle, UNUSED rlm_sql_confi
 		for (i = 0; i < records; i++) {
 			len = PQgetlength(conn->result, conn->cur_row, i);
 			conn->row[i] = talloc_array(conn->row, char, len + 1);
-			strlcpy(conn->row[i], PQgetvalue(conn->result, conn->cur_row, i),len + 1);
+			strlcpy(conn->row[i], PQgetvalue(conn->result, conn->cur_row, i), len + 1);
 		}
 		conn->cur_row++;
 		handle->row = conn->row;
@@ -374,14 +401,6 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t * handle, UNUSED rlm_sql_confi
 	return 0;
 }
 
-/*************************************************************************
- *
- *      Function: sql_num_fields
- *
- *      Purpose: database specific num_fields. Returns number of rows in
- *	       query
- *
- *************************************************************************/
 static int sql_num_fields(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t *config)
 {
 	rlm_sql_postgres_conn_t *conn = handle->conn;
@@ -393,18 +412,8 @@ static int sql_num_fields(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t *co
 	return 0;
 }
 
-
-
-/*************************************************************************
- *
- *	Function: sql_free_result
- *
- *	Purpose: database specific free_result. Frees memory allocated
- *	       for a result set
- *
- *************************************************************************/
-static sql_rcode_t sql_free_result(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t *config) {
-
+static sql_rcode_t sql_free_result(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t *config)
+{
 	rlm_sql_postgres_conn_t *conn = handle->conn;
 
 	if (conn->result != NULL) {
@@ -417,75 +426,63 @@ static sql_rcode_t sql_free_result(rlm_sql_handle_t * handle, UNUSED rlm_sql_con
 	return 0;
 }
 
-
-
-/*************************************************************************
+/** Retrieves any errors associated with the connection handle
  *
- *	Function: sql_error
+ * @note Caller will free any memory allocated in ctx.
  *
- *	Purpose: database specific error. Returns error associated with
- *	       connection
- *
- *************************************************************************/
-static char const *sql_error(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t *config) {
+ * @param ctx to allocate temporary error buffers in.
+ * @param out Array of sql_log_entrys to fill.
+ * @param outlen Length of out array.
+ * @param handle rlm_sql connection handle.
+ * @param config rlm_sql config.
+ * @return number of errors written to the sql_log_entry array.
+ */
+static size_t sql_error(TALLOC_CTX *ctx, sql_log_entry_t out[], size_t outlen,
+			rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
+{
+	rlm_sql_postgres_conn_t	*conn = handle->conn;
+	char const		*p, *q;
+	size_t			i = 0;
 
-	rlm_sql_postgres_conn_t *conn = handle->conn;
+	rad_assert(outlen > 0);
 
-	return PQerrorMessage(conn->db);
+	p = PQerrorMessage(conn->db);
+	while ((q = strchr(p, '\n'))) {
+		out[i].type = L_ERR;
+		out[i].msg = talloc_asprintf(ctx, "%.*s", (int) (q - p), p);
+		p = q + 1;
+		if (++i == outlen) return outlen;
+	}
+	if (*p != '\0') {
+		out[i].type = L_ERR;
+		out[i].msg = p;
+		i++;
+	}
+
+	return i;
 }
 
-/*************************************************************************
- *
- *	Function: sql_finish_query
- *
- *	Purpose: End the query, such as freeing memory
- *
- *************************************************************************/
-static sql_rcode_t sql_finish_query(rlm_sql_handle_t * handle, rlm_sql_config_t *config) {
-
-	return sql_free_result(handle, config);
-}
-
-/*************************************************************************
- *
- *	Function: sql_finish_select_query
- *
- *	Purpose: End the select query, such as freeing memory or result
- *
- *************************************************************************/
-static sql_rcode_t sql_finish_select_query(rlm_sql_handle_t * handle, rlm_sql_config_t *config) {
-
-	return sql_free_result(handle, config);
-}
-
-
-/*************************************************************************
- *
- *	Function: sql_affected_rows
- *
- *	Purpose: Return the number of rows affected by the last query.
- *
- *************************************************************************/
-static int sql_affected_rows(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t *config) {
+static int sql_affected_rows(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t *config)
+{
 	rlm_sql_postgres_conn_t *conn = handle->conn;
 
 	return conn->affected_rows;
 }
 
 /* Exported to rlm_sql */
+extern rlm_sql_module_t rlm_sql_postgresql;
 rlm_sql_module_t rlm_sql_postgresql = {
-	"rlm_sql_postgresql",
-	mod_instantiate,
-	sql_init_socket,
-	sql_query,
-	sql_select_query,
-	NULL, /* sql_store_result */
-	sql_num_fields,
-	NULL, /* sql_num_rows */
-	sql_fetch_row,
-	NULL, /* sql_free_result */
-	sql_error,
-	sql_finish_query,
-	sql_finish_select_query,
-	sql_affected_rows,
+	.name				= "rlm_sql_postgresql",
+//	.flags				= RLM_SQL_RCODE_FLAGS_ALT_QUERY,	/* Needs more testing */
+	.mod_instantiate		= mod_instantiate,
+	.sql_socket_init		= sql_socket_init,
+	.sql_query			= sql_query,
+	.sql_select_query		= sql_select_query,
+	.sql_num_fields			= sql_num_fields,
+	.sql_fields			= sql_fields,
+	.sql_fetch_row			= sql_fetch_row,
+	.sql_error			= sql_error,
+	.sql_finish_query		= sql_free_result,
+	.sql_finish_select_query	= sql_free_result,
+	.sql_affected_rows		= sql_affected_rows
 };

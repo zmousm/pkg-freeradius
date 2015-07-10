@@ -14,8 +14,8 @@ yubikey {
 	#  If true, the authorize method of rlm_yubikey will attempt to split the
 	#  value of User-Password, into the user's password, and the OTP token.
 	#
-	#  If enabled and successful, the value of User-Password will be truncated
-	#  and request:Yubikey-OTP will be added.
+	#  If enabled and successful, the value of &request:User-Password will be
+	#  truncated and &request:Yubikey-OTP will be added.
 	#
 #	split = yes
 
@@ -25,30 +25,33 @@ yubikey {
 	#  The module itself does not provide persistent storage as this
 	#  would be duplicative of functionality already in the server.
 	#
-	#  Yubikey authentication needs two control attributes
-	#  retrieved from persistent storage:
-	#    * Yubikey-Key     - The AES key used to decrypt the OTP data.
-	#                        The Yubikey-Public-Id and/or User-Name
-	#                        attributes may be used to retrieve the key.
-	#    * Yubikey-Counter - This is compared with the counter in the OTP
-	#                        data and used to prevent replay attacks.
-	#                        This attribute will also be available in
-	#                        the request list after successful
-	#                        decryption.
+	#  Yubikey authentication needs two attributes retrieved from
+	#  persistent storage:
+	#    * &control:Yubikey-Key        - The AES key used to decrypt the OTP data.
+	#                                    The Yubikey-Public-Id and/or User-Name
+	#                                    attributes may be used to retrieve the key.
+	#    * &control:Yubikey-Counter    - This is compared with the counter in the OTP
+	#                                    data and used to prevent replay attacks.
+	#                                    This attribute will also be available in
+	#                                    the request list after successful
+	#                                    decryption.
 	#
 	#  Yubikey-Counter isn't strictly required, but the server will
 	#  generate warnings if it's not present when yubikey.authenticate
 	#  is called.
 	#
 	#  These attributes are available after authorization:
-	#    * Yubikey-Public-ID  - The public portion of the OTP string
+	#    * &request:Yubikey-Public-ID  - The public portion of the OTP string.
+	#  and additionally if 'split' is set:
+	#    * &request:Yubikey-OTP        - The OTP portion of User-Password.
 	#
 	#  These attributes are available after authentication (if successful):
-	#    * Yubikey-Private-ID - The encrypted ID included in OTP data,
-	#                           must be verified if tokens share keys.
-	#    * Yubikey-Counter    - The last counter value (should be recorded).
-	#    * Yubikey-Timestamp  - Token's internal clock (mainly useful for debugging).
-	#    * Yubikey-Random     - Randomly generated value from the token.
+	#    * &request:Yubikey-Private-ID - The encrypted ID included in OTP data,
+	#                                    must be verified if tokens share keys.
+	#    * &request:Yubikey-Counter    - The last counter value (should be recorded).
+	#    * &request:Yubikey-Timestamp  - Token's internal clock (mainly useful for
+	#                                    debugging).
+	#    * &request:Yubikey-Random     - Randomly generated value from the token.
 	#
 	decrypt = no
 
@@ -93,49 +96,63 @@ yubikey {
 		#  Connection pool parameters
 		#
 		pool {
-			# Number of connections to start
-			start = 5
+			#  Connections to create during module instantiation.
+			#  If the server cannot create specified number of
+			#  connections during instantiation it will exit.
+			#  Set to 0 to allow the server to start without the
+			#  yubikey server being available.
+			start = ${thread[pool].start_servers}
 
-			# Minimum number of connections to keep open
-			min = 4
+			#  Minimum number of connections to keep open
+			min = ${thread[pool].min_spare_servers}
 
-			# Maximum number of connections
+			#  Maximum number of connections
 			#
-			# If these connections are all in use and a new one
-			# is requested, the request will NOT get a connection.
-			max = 10
-
-			# Spare connections to be left idle
+			#  If these connections are all in use and a new one
+			#  is requested, the request will NOT get a connection.
 			#
-			# NOTE: Idle connections WILL be closed if "idle_timeout"
-			# is set.
-			spare = 3
-
-			# Number of uses before the connection is closed
+			#  Setting 'max' to LESS than the number of threads means
+			#  that some threads may starve, and you will see errors
+			#  like 'No connections available and at max connection limit'
 			#
-			# 0 means "infinite"
+			#  Setting 'max' to MORE than the number of threads means
+			#  that there are more connections than necessary.
+			max = ${thread[pool].max_servers}
+
+			#  Number of uses before the connection is closed
+			#
+			#  NOTE: A setting of 0 means infinite (no limit).
 			uses = 0
 
-			# The lifetime (in seconds) of the connection
+			#  The number of seconds to wait after the server tries
+			#  to open a connection, and fails.  During this time,
+			#  no new connections will be opened.
+			retry_delay = 30
+
+			#  The lifetime (in seconds) of the connection
+			#
+			#  NOTE: A setting of 0 means infinite (no limit).
 			lifetime = 0
 
-			# idle timeout (in seconds).  A connection which is
-			# unused for this length of time will be closed.
+			#  The idle timeout (in seconds).  A connection which is
+			#  unused for this length of time will be closed.
+			#
+			#  NOTE: A setting of 0 means infinite (no timeout).
 			idle_timeout = 60
 
-			# Cycle over all connections in a pool instead of concentrating
-			# connection use on a few connections.
+			#  Cycle over all connections in a pool instead of concentrating
+			#  connection use on a few connections.
 			spread = yes
 
-			# NOTE: All configuration settings are enforced.  If a
-			# connection is closed because of "idle_timeout",
-			# "uses", or "lifetime", then the total number of
-			# connections MAY fall below "min".  When that
-			# happens, it will open a new connection.  It will
-			# also log a WARNING message.
+			#  NOTE: All configuration settings are enforced.  If a
+			#  connection is closed because of "idle_timeout",
+			#  "uses", or "lifetime", then the total number of
+			#  connections MAY fall below "min".  When that
+			#  happens, it will open a new connection.  It will
+			#  also log a WARNING message.
 			#
-			# The solution is to either lower the "min" connections,
-			# or increase lifetime/idle_timeout.
+			#  The solution is to either lower the "min" connections,
+			#  or increase lifetime/idle_timeout.
 		}
 	}
 }

@@ -217,14 +217,30 @@ AC_DEFUN([FR_SMART_CHECK_INCLUDE], [
 ac_safe=`echo "$1" | sed 'y%./+-%__pm%'`
 old_CPPFLAGS="$CPPFLAGS"
 smart_include=
-smart_include_dir=
+dnl #  The default directories we search in (in addition to the compilers search path)
+smart_include_dir="/usr/local/include /opt/include"
+
+dnl #  Our local versions
+_smart_try_dir=
+_smart_include_dir=
+
+dnl #  Add variants with the different prefixes and one with no prefix
+for _prefix in $smart_prefix ""; do
+  for _dir in $smart_try_dir; do
+    _smart_try_dir="${_smart_try_dir} ${_dir}/${_prefix}"
+  done
+
+  for _dir in $smart_include_dir; do
+    _smart_include_dir="${_smart_include_dir} ${_dir}/${_prefix}"
+  done
+done
 
 dnl #
-dnl #  Try first any user-specified directory, otherwise we may pick up
+dnl #  Try any user-specified directory first otherwise we may pick up
 dnl #  the wrong version.
 dnl #
-if test "x$smart_try_dir" != "x"; then
-  for try in $smart_try_dir; do
+if test "x$_smart_try_dir" != "x"; then
+  for try in $_smart_try_dir; do
     AC_MSG_CHECKING([for $1 in $try])
     CPPFLAGS="-isystem $try $old_CPPFLAGS"
     AC_TRY_COMPILE([$2
@@ -244,30 +260,58 @@ if test "x$smart_try_dir" != "x"; then
 fi
 
 dnl #
-dnl #  Try using the default includes.
+dnl #  Try using the default includes (with prefixes).
 dnl #
 if test "x$smart_include" = "x"; then
-  AC_MSG_CHECKING([for $1])
-  AC_TRY_COMPILE([$2
-		  #include <$1>],
-		 [int a = 1;],
-		 [
-		   smart_include=" "
-		   AC_MSG_RESULT(yes)
-		   break
-		 ],
-		 [
-		   smart_include=
-		   AC_MSG_RESULT(no)
-		 ])
+  for _prefix in $smart_prefix; do
+    AC_MSG_CHECKING([for ${_prefix}/$1])
+
+    AC_TRY_COMPILE([$2
+		    #include <$1>],
+		   [int a = 1;],
+		   [
+		     smart_include="-isystem ${_prefix}/"
+		     AC_MSG_RESULT(yes)
+		     break
+		   ],
+		   [
+		     smart_include=
+		     AC_MSG_RESULT(no)
+		   ])
+  done
+fi
+
+dnl #
+dnl #  Try using the default includes (without prefixes).
+dnl #
+if test "x$smart_include" = "x"; then
+    AC_MSG_CHECKING([for $1])
+
+    AC_TRY_COMPILE([$2
+		    #include <$1>],
+		   [int a = 1;],
+		   [
+		     smart_include=" "
+		     AC_MSG_RESULT(yes)
+		     break
+		   ],
+		   [
+		     smart_include=
+		     AC_MSG_RESULT(no)
+		   ])
 fi
 
 dnl #
 dnl #  Try to guess possible locations.
 dnl #
 if test "x$smart_include" = "x"; then
-  FR_LOCATE_DIR(smart_include_dir,$1)
-  for try in $smart_include_dir /usr/local/include /opt/include; do
+
+  for prefix in $smart_prefix; do
+    FR_LOCATE_DIR(_smart_include_dir,"${_prefix}/${1}")
+  done
+  FR_LOCATE_DIR(_smart_include_dir, $1)
+
+  for try in $_smart_include_dir; do
     AC_MSG_CHECKING([for $1 in $try])
     CPPFLAGS="-isystem $try $old_CPPFLAGS"
     AC_TRY_COMPILE([$2
@@ -294,6 +338,12 @@ if test "x$smart_include" != "x"; then
   CPPFLAGS="$smart_include $old_CPPFLAGS"
   SMART_CPPFLAGS="$smart_include $SMART_CPPFLAGS"
 fi
+
+dnl #
+dnl #  Consume prefix, it's not likely to be used
+dnl #  between multiple calls.
+dnl #
+smart_prefix=
 ])
 
 dnl #######################################################################
@@ -457,5 +507,106 @@ AC_DEFUN([VL_LIB_READLINE], [
   fi
   AC_SUBST(LIBREADLINE)
 ])dnl
+
+dnl #
+dnl #  Check if we have the choose expr builtin
+dnl #
+AC_DEFUN([FR_HAVE_BUILTIN_CHOOSE_EXPR],
+[
+  AC_CACHE_CHECK([for __builtin_choose_expr support in compiler], [ax_cv_cc_builtin_choose_expr],[
+    AC_RUN_IFELSE(
+      [
+        AC_LANG_SOURCE(
+        [
+          int main(int argc, char **argv) {
+            if ((argc < 0) || !argv) return 1; /* -Werror=unused-parameter */
+            return __builtin_choose_expr(0, 1, 0);
+          }
+        ])
+      ],
+      [ax_cv_cc_builtin_choose_expr=yes],
+      [ax_cv_cc_builtin_choose_expr=no]
+    )
+  ])
+  if test "x$ax_cv_cc_builtin_choose_expr" = "xyes"; then
+    AC_DEFINE([HAVE_BUILTIN_CHOOSE_EXPR],1,[Define if the compiler supports __builtin_choose_expr])
+  fi
+])
+
+dnl #
+dnl #  Check if we have the types compatible p builtin
+dnl #
+AC_DEFUN([FR_HAVE_BUILTIN_TYPES_COMPATIBLE_P],
+[
+  AC_CACHE_CHECK([for __builtin_types_compatible_p support in compiler], [ax_cv_cc_builtin_types_compatible_p],[
+    AC_RUN_IFELSE(
+      [
+        AC_LANG_SOURCE(
+        [
+          int main(int argc, char **argv) {
+            if ((argc < 0) || !argv) return 1; /* -Werror=unused-parameter */
+            return !(__builtin_types_compatible_p(char *, char *));
+          }
+        ])
+      ],
+      [ax_cv_cc_builtin_types_compatible_p=yes],
+      [ax_cv_cc_builtin_types_compatible_p=no]
+    )
+  ])
+  if test "x$ax_cv_cc_builtin_types_compatible_p" = "xyes"; then
+    AC_DEFINE([HAVE_BUILTIN_TYPES_COMPATIBLE_P],1,[Define if the compiler supports __builtin_types_compatible_p])
+  fi
+])
+
+dnl #
+dnl #  Check if we have the bwsap64 builtin
+dnl #
+AC_DEFUN([FR_HAVE_BUILTIN_BSWAP64],
+[
+  AC_CACHE_CHECK([for __builtin_bswap64 support in compiler], [ax_cv_cc_builtin_bswap64],[
+    AC_RUN_IFELSE(
+      [
+        AC_LANG_SOURCE([
+          int main(int argc, char **argv) {
+            if ((argc < 0) || !argv) return 1; /* -Werror=unused-parameter */
+            return (__builtin_bswap64(0));
+          }
+        ])
+      ],
+      [ax_cv_cc_builtin_bswap64=yes],
+      [ax_cv_cc_builtin_bswap64=no]
+    )
+  ])
+  if test "x$ax_cv_cc_builtin_bswap64" = "xyes"; then
+    AC_DEFINE([HAVE_BUILTIN_BSWAP_64],1,[Define if the compiler supports __builtin_bswap64])
+  fi
+])
+
+dnl #
+dnl #  Check if we have __attribute__((__bounded__)) (usually only OpenBSD with GCC)
+dnl #
+AC_DEFUN([FR_HAVE_BOUNDED_ATTRIBUTE],[
+  AC_CACHE_CHECK([for __attribute__((__bounded__)) support in compiler], [ax_cv_cc_bounded_attribute],[
+    CFLAGS_SAVED=$CFLAGS
+    CFLAGS="$CFLAGS -Werror"
+    AC_RUN_IFELSE(
+      [
+        AC_LANG_SOURCE([
+          void test(char *buff) __attribute__ ((__bounded__ (__string__, 1, 1)));
+          int main(int argc, char **argv) {
+            if ((argc < 0) || !argv) return 1; /* -Werror=unused-parameter */
+            return 0;
+          }
+        ])
+      ],
+      [ax_cv_cc_bounded_attribute=yes],
+      [ax_cv_cc_bounded_attribute=no]
+    )
+    CFLAGS="$CFLAGS_SAVED"
+  ])
+  if test "x$ax_cv_cc_bounded_attribute" = "xyes"; then
+    AC_DEFINE(HAVE_ATTRIBUTE_BOUNDED, 1, [Define if your compiler supports the __bounded__ attribute (usually OpenBSD gcc).])
+  fi
+])
 
 AC_INCLUDE(aclocal.m4)

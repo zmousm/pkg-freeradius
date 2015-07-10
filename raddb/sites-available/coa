@@ -13,7 +13,7 @@ listen {
 	type = coa
 	ipaddr = *
 	port = 3799
-	server = coa
+	virtual_server = coa
 }
 
 server coa {
@@ -37,7 +37,7 @@ server coa {
 	}
 
 	#  When a packet is sent, it is processed through the
-	#  recv-coa section.  This applies to *both* CoA-Request and
+	#  send-coa section.  This applies to *both* CoA-Request and
 	#  Disconnect-Request packets.
 	send-coa {
 		#  Sample module.

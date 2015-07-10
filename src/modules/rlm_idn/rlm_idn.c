@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -81,13 +82,13 @@ static const CONF_PARSER mod_config[] = {
 	 *	be used.
 	 */
 
-	{"allow_unassigned", PW_TYPE_BOOLEAN, offsetof(rlm_idn_t, allow_unassigned), NULL, "no" },
-	{"use_std3_ascii_rules", PW_TYPE_BOOLEAN, offsetof(rlm_idn_t, use_std3_ascii_rules), NULL, "yes" },
+	{ "allow_unassigned", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_idn_t, allow_unassigned), "no" },
+	{ "use_std3_ascii_rules", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_idn_t, use_std3_ascii_rules), "yes" },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
 
-static ssize_t xlat_idna(void *instance, UNUSED REQUEST *request, char const *fmt, char *out, size_t freespace)
+static ssize_t xlat_idna(void *instance, REQUEST *request, char const *fmt, char *out, size_t freespace)
 {
 	rlm_idn_t *inst = instance;
 	char *idna = NULL;
@@ -130,7 +131,7 @@ static ssize_t xlat_idna(void *instance, UNUSED REQUEST *request, char const *fm
 	return len;
 }
 
-static int mod_instantiate(CONF_SECTION *conf, void *instance)
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 {
 	rlm_idn_t *inst = instance;
 	char const *xlat_name;
@@ -147,26 +148,12 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	return 0;
 }
 
+extern module_t rlm_idn;
 module_t rlm_idn = {
-	RLM_MODULE_INIT,
-	"idn",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_idn_t),
-	mod_config,			/* CONF_PARSER */
-	mod_instantiate,		/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,		 	/* authentication */
-		NULL,			/* authorization */
-		NULL,			/* preaccounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
-#ifdef WITH_COA
-		, NULL,
-		NULL
-#endif
-	},
+	.magic		= RLM_MODULE_INIT,
+	.name		= "idn",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_idn_t),
+	.config		= mod_config,
+	.bootstrap	= mod_bootstrap
 };

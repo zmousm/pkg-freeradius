@@ -64,11 +64,11 @@ if test x$with_[]modname != xno; then
     dnl ############################################################
 
     smart_try_dir="$oracle_include_dir /usr/local/instaclient/include"
-    
+
     if test "x$ORACLE_HOME" != "x"; then
-	smart_try_dir+="${ORACLE_HOME}/include"
+	smart_try_dir="${smart_try_dir} ${ORACLE_HOME}/include"
     fi
-    
+
     FR_SMART_CHECK_INCLUDE(oci.h)
     if test "x$ac_cv_header_oci_h" != "xyes"; then
 	AC_MSG_WARN([oracle headers not found. Use --with-oracle-include-dir=<path> or set ORACLE_HOME.])
@@ -80,22 +80,25 @@ if test x$with_[]modname != xno; then
     dnl ############################################################
 
     old_LIBS="$LIBS"
-    
+
     if test "x$oracle_lib_dir" != "x" ; then
 	lib_path="${oracle_lib_dir} "
     elif test "x$ORACLE_HOME" != "x" ; then
 	lib_path="${ORACLE_HOME}/lib "
     fi
 
+    AC_MSG_WARN([Oracle version >= 12 needs -laio])
+
     for path in $lib_path "/usr/local/instaclient/lib" "" "/opt/lib"; do
-	for oracle_version in 11 10 9 ""; do
+	for oracle_version in 12.1 12 11 10 9 ""; do
 	    if test "$path" != ""; then
 		AC_MSG_CHECKING([for OCIInitialize in nnz${oracle_version} in $path])
 	    else
 		AC_MSG_CHECKING([for OCIInitialize in nnz${oracle_version}])
 	    fi
-	    
+
 	    LIBS="$old_LIBS -L$path -lclntsh -lnnz${oracle_version}"
+
 	    AC_TRY_LINK([#include <oci.h>
 
 		static OCIEnv           *p_env;
@@ -111,12 +114,12 @@ if test x$with_[]modname != xno; then
 		int             rc;
 		char            errbuf[100];
 		int             errcode;
-	    
+
 		rc = OCIInitialize((ub4) OCI_DEFAULT, (dvoid *)0,  /* Initialize OCI */
 				   (dvoid * (*)(dvoid *, size_t)) 0,
 				   (dvoid * (*)(dvoid *, dvoid *, size_t))0,
 				   (void (*)(dvoid *, dvoid *)) 0 );
-    
+
 		],
 		[mod_ldflags="$LIBS"],
 	    )
@@ -126,7 +129,7 @@ if test x$with_[]modname != xno; then
 	    fi
 	    AC_MSG_RESULT(no)
 	done
-	
+
 	if test "x$mod_ldflags" != "x"; then
 		break
 	fi
@@ -136,9 +139,9 @@ if test x$with_[]modname != xno; then
 
     if test "x$mod_ldflags" = "x"; then
 	AC_MSG_WARN([oracle libraries not found.  Use --with-oracle-lib-dir=<path> or set ORACLE_HOME.])
-	fail=["$fail libclntsh libnnz[9-11]"]
+	fail=["$fail libclntsh libnnz[9-12]"]
     fi
-    
+
     targetname=modname
 else
     targetname=
@@ -156,7 +159,7 @@ if test "x$fail" != x; then
 	fi
 fi
 
-mod_cflags="$SMART_CFLAGS"
+mod_cflags="$SMART_CPPFLAGS"
 AC_SUBST(mod_ldflags)
 AC_SUBST(mod_cflags)
 AC_SUBST(targetname)
