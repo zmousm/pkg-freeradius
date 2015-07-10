@@ -1,3 +1,9 @@
+freeradius (3.0.9-1+grnet) unstable; urgency=low
+
+  * Placeholder
+
+ -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Fri, 10 Jul 2015 03:26:43 +0300
+
 freeradius (3.0.9-1) unstable; urgency=medium
 
   * New upstream version.
