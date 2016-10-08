@@ -1,3 +1,16 @@
+freeradius (3.0.12-1~70+grnet1) unstable; urgency=low
+
+  [ Alan T. DeKok ]
+  * add "date" module (cherry picked from commit e5cce0504bd0dbc227c839297e3d164ef800cbc8)
+
+  [ Zenon Mousmoulas ]
+  * Non-maintainer upload.
+  * Refresh debian/patches/radiusd-to-freeradius.diff
+  * Set debian/source/format = quilt
+  * Add libpcre3-dev to build-deps
+
+ -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Sun, 09 Oct 2016 09:02:51 +0300
+
 freeradius (3.0.12-1) unstable; urgency=medium
 
   * New upstream version.
