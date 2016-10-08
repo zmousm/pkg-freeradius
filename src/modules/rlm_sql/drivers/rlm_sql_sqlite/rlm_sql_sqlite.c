@@ -45,7 +45,7 @@ RCSID("$Id$")
 #endif
 
 #ifndef HAVE_SQLITE3_INT64
-typedef sqlite3_int64 sqlite_int64
+typedef sqlite_int64 sqlite3_int64;
 #endif
 
 typedef struct rlm_sql_sqlite_conn {
@@ -62,7 +62,7 @@ typedef struct rlm_sql_sqlite_config {
 static const CONF_PARSER driver_config[] = {
 	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, rlm_sql_sqlite_config_t, filename), NULL },
 	{ "busy_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sql_sqlite_config_t, busy_timeout), "200" },
-	{NULL, -1, 0, NULL, NULL}
+	CONF_PARSER_TERMINATOR
 };
 
 /** Convert an sqlite status code to an sql_rcode_t
@@ -307,7 +307,7 @@ static int sql_loadfile(TALLOC_CTX *ctx, sqlite3 *db, char const *filename)
 			if ((*p != 0x0a) && (*p != 0x0d) && (*p != '\t')) break;
 			cl = 1;
 		} else {
-			cl = fr_utf8_char((uint8_t *) p);
+			cl = fr_utf8_char((uint8_t *) p, -1);
 			if (!cl) break;
 		}
 	}
@@ -663,6 +663,8 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 
 	char **row;
 
+	TALLOC_FREE(handle->row);
+
 	/*
 	 *	Executes the SQLite query and interates over the results
 	 */
@@ -688,11 +690,6 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 		conn->col_count = sql_num_fields(handle, config);
 		if (conn->col_count == 0) return RLM_SQL_ERROR;
 	}
-
-	/*
-	 *	Free the previous result (also gets called on finish_query)
-	 */
-	talloc_free(handle->row);
 
 	MEM(row = handle->row = talloc_zero_array(handle->conn, char *, conn->col_count + 1));
 

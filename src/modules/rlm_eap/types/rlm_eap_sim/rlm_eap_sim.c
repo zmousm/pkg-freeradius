@@ -46,13 +46,15 @@ typedef struct eap_sim_server_state {
 /*
  *	build a reply to be sent.
  */
-static int eap_sim_compose(eap_handler_t *handler)
+static void eap_sim_compose(REQUEST *request, eap_handler_t *handler)
 {
 	/* we will set the ID on requests, since we have to HMAC it */
 	handler->eap_ds->set_request_id = 1;
 
-	return map_eapsim_basictypes(handler->request->reply,
-				     handler->eap_ds->request);
+	if (!map_eapsim_basictypes(handler->request->reply,
+				   handler->eap_ds->request)) {
+		REDEBUG("Failed decoding EAP-SIM packet: %s", fr_strerror());
+	}
 }
 
 static int eap_sim_sendstart(eap_handler_t *handler)
@@ -83,33 +85,33 @@ static int eap_sim_sendstart(eap_handler_t *handler)
 	words[1] = htons(EAP_SIM_VERSION);
 	words[2] = 0;
 
-	newvp = paircreate(packet, PW_EAP_SIM_VERSION_LIST, 0);
-	pairmemcpy(newvp, (uint8_t const *) words, sizeof(words));
+	newvp = fr_pair_afrom_num(packet, PW_EAP_SIM_VERSION_LIST, 0);
+	fr_pair_value_memcpy(newvp, (uint8_t const *) words, sizeof(words));
 
-	pairadd(vps, newvp);
+	fr_pair_add(vps, newvp);
 
 	/* set the EAP_ID - new value */
-	newvp = paircreate(packet, PW_EAP_ID, 0);
+	newvp = fr_pair_afrom_num(packet, PW_EAP_ID, 0);
 	newvp->vp_integer = ess->sim_id++;
-	pairreplace(vps, newvp);
+	fr_pair_replace(vps, newvp);
 
 	/* record it in the ess */
 	ess->keys.versionlistlen = 2;
 	memcpy(ess->keys.versionlist, words + 1, ess->keys.versionlistlen);
 
 	/* the ANY_ID attribute. We do not support re-auth or pseudonym */
-	newvp = paircreate(packet, PW_EAP_SIM_FULLAUTH_ID_REQ, 0);
+	newvp = fr_pair_afrom_num(packet, PW_EAP_SIM_FULLAUTH_ID_REQ, 0);
 	newvp->vp_length = 2;
 	newvp->vp_octets = p = talloc_array(newvp, uint8_t, 2);
 
 	p[0] = 0;
 	p[0] = 1;
-	pairadd(vps, newvp);
+	fr_pair_add(vps, newvp);
 
 	/* the SUBTYPE, set to start. */
-	newvp = paircreate(packet, PW_EAP_SIM_SUBTYPE, 0);
+	newvp = fr_pair_afrom_num(packet, PW_EAP_SIM_SUBTYPE, 0);
 	newvp->vp_integer = EAPSIM_START;
-	pairreplace(vps, newvp);
+	fr_pair_replace(vps, newvp);
 
 	return 1;
 }
@@ -124,7 +126,7 @@ static int eap_sim_get_challenge(eap_handler_t *handler, VALUE_PAIR *vps, int id
 	/*
 	 *	Generate a new RAND value, and derive Kc and SRES from Ki
 	 */
-	ki = pairfind(vps, PW_EAP_SIM_KI, 0, TAG_ANY);
+	ki = fr_pair_find_by_num(vps, PW_EAP_SIM_KI, 0, TAG_ANY);
 	if (ki) {
 		int i;
 
@@ -132,7 +134,7 @@ static int eap_sim_get_challenge(eap_handler_t *handler, VALUE_PAIR *vps, int id
 		 *	Check to see if have a Ki for the IMSI, this allows us to generate the rest
 		 *	of the triplets.
 		 */
-		algo_version = pairfind(vps, PW_EAP_SIM_ALGO_VERSION, 0, TAG_ANY);
+		algo_version = fr_pair_find_by_num(vps, PW_EAP_SIM_ALGO_VERSION, 0, TAG_ANY);
 		if (!algo_version) {
 			REDEBUG("Found Ki, but missing EAP-Sim-Algo-Version");
 			return 0;
@@ -200,10 +202,10 @@ static int eap_sim_get_challenge(eap_handler_t *handler, VALUE_PAIR *vps, int id
 	 *	Use known RAND, SRES, and Kc values, these may of been pulled in from an AuC,
 	 *	or created by sending challenges to the SIM directly.
 	 */
-	vp = pairfind(vps, PW_EAP_SIM_RAND1 + idx, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(vps, PW_EAP_SIM_RAND1 + idx, 0, TAG_ANY);
 	/* Hack for backwards compatibility */
 	if (!vp) {
-		vp = pairfind(request->reply->vps, PW_EAP_SIM_RAND1 + idx, 0, TAG_ANY);
+		vp = fr_pair_find_by_num(request->reply->vps, PW_EAP_SIM_RAND1 + idx, 0, TAG_ANY);
 	}
 	if (!vp) {
 		/* bad, we can't find stuff! */
@@ -217,10 +219,10 @@ static int eap_sim_get_challenge(eap_handler_t *handler, VALUE_PAIR *vps, int id
 	}
 	memcpy(ess->keys.rand[idx], vp->vp_strvalue, EAPSIM_RAND_SIZE);
 
-	vp = pairfind(vps, PW_EAP_SIM_SRES1 + idx, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(vps, PW_EAP_SIM_SRES1 + idx, 0, TAG_ANY);
 	/* Hack for backwards compatibility */
 	if (!vp) {
-		vp = pairfind(request->reply->vps, PW_EAP_SIM_SRES1 + idx, 0, TAG_ANY);
+		vp = fr_pair_find_by_num(request->reply->vps, PW_EAP_SIM_SRES1 + idx, 0, TAG_ANY);
 	}
 	if (!vp) {
 		/* bad, we can't find stuff! */
@@ -235,10 +237,10 @@ static int eap_sim_get_challenge(eap_handler_t *handler, VALUE_PAIR *vps, int id
 	}
 	memcpy(ess->keys.sres[idx], vp->vp_strvalue, EAPSIM_SRES_SIZE);
 
-	vp = pairfind(vps, PW_EAP_SIM_KC1 + idx, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(vps, PW_EAP_SIM_KC1 + idx, 0, TAG_ANY);
 	/* Hack for backwards compatibility */
 	if (!vp) {
-		vp = pairfind(request->reply->vps, PW_EAP_SIM_KC1 + idx, 0, TAG_ANY);
+		vp = fr_pair_find_by_num(request->reply->vps, PW_EAP_SIM_KC1 + idx, 0, TAG_ANY);
 	}
 
 	if (!vp) {
@@ -305,7 +307,7 @@ static int eap_sim_sendchallenge(eap_handler_t *handler)
 	/*
 	 *	Okay, we got the challenges! Put them into an attribute.
 	 */
-	newvp = paircreate(packet, PW_EAP_SIM_RAND, 0);
+	newvp = fr_pair_afrom_num(packet, PW_EAP_SIM_RAND, 0);
 	newvp->vp_length = 2 + (EAPSIM_RAND_SIZE * 3);
 	newvp->vp_octets = p = talloc_array(newvp, uint8_t, newvp->vp_length);
 
@@ -316,14 +318,14 @@ static int eap_sim_sendchallenge(eap_handler_t *handler)
 	memcpy(p, ess->keys.rand[1], EAPSIM_RAND_SIZE);
 	p += EAPSIM_RAND_SIZE;
 	memcpy(p, ess->keys.rand[2], EAPSIM_RAND_SIZE);
-	pairadd(outvps, newvp);
+	fr_pair_add(outvps, newvp);
 
 	/*
 	 *	Set the EAP_ID - new value
 	 */
-	newvp = paircreate(packet, PW_EAP_ID, 0);
+	newvp = fr_pair_afrom_num(packet, PW_EAP_ID, 0);
 	newvp->vp_integer = ess->sim_id++;
-	pairreplace(outvps, newvp);
+	fr_pair_replace(outvps, newvp);
 
 	/*
 	 *	Make a copy of the identity
@@ -334,7 +336,7 @@ static int eap_sim_sendchallenge(eap_handler_t *handler)
 	/*
 	 *	Use the SIM identity, if available
 	 */
-	newvp = pairfind(*invps, PW_EAP_SIM_IDENTITY, 0, TAG_ANY);
+	newvp = fr_pair_find_by_num(*invps, PW_EAP_SIM_IDENTITY, 0, TAG_ANY);
 	if (newvp && newvp->vp_length > 2) {
 		uint16_t len;
 
@@ -361,18 +363,18 @@ static int eap_sim_sendchallenge(eap_handler_t *handler)
 	 *	We store the NONCE_MT in the MAC for the encoder, which
 	 *	will pull it out before it does the operation.
 	 */
-	newvp = paircreate(packet, PW_EAP_SIM_MAC, 0);
-	pairmemcpy(newvp, ess->keys.nonce_mt, 16);
-	pairreplace(outvps, newvp);
+	newvp = fr_pair_afrom_num(packet, PW_EAP_SIM_MAC, 0);
+	fr_pair_value_memcpy(newvp, ess->keys.nonce_mt, 16);
+	fr_pair_replace(outvps, newvp);
 
-	newvp = paircreate(packet, PW_EAP_SIM_KEY, 0);
-	pairmemcpy(newvp, ess->keys.K_aut, 16);
-	pairreplace(outvps, newvp);
+	newvp = fr_pair_afrom_num(packet, PW_EAP_SIM_KEY, 0);
+	fr_pair_value_memcpy(newvp, ess->keys.K_aut, 16);
+	fr_pair_replace(outvps, newvp);
 
 	/* the SUBTYPE, set to challenge. */
-	newvp = paircreate(packet, PW_EAP_SIM_SUBTYPE, 0);
+	newvp = fr_pair_afrom_num(packet, PW_EAP_SIM_SUBTYPE, 0);
 	newvp->vp_integer = EAPSIM_CHALLENGE;
-	pairreplace(outvps, newvp);
+	fr_pair_replace(outvps, newvp);
 
 	return 1;
 }
@@ -400,9 +402,9 @@ static int eap_sim_sendsuccess(eap_handler_t *handler)
 	ess = (eap_sim_state_t *)handler->opaque;
 
 	/* set the EAP_ID - new value */
-	vp = paircreate(packet, PW_EAP_ID, 0);
+	vp = fr_pair_afrom_num(packet, PW_EAP_ID, 0);
 	vp->vp_integer = ess->sim_id++;
-	pairreplace(&handler->request->reply->vps, vp);
+	fr_pair_replace(&handler->request->reply->vps, vp);
 
 	p = ess->keys.msk;
 	eap_add_reply(handler->request, "MS-MPPE-Recv-Key", p, EAPTLS_MPPE_KEY_LEN);
@@ -416,9 +418,9 @@ static int eap_sim_sendsuccess(eap_handler_t *handler)
 /** Run the server state machine
  *
  */
-static void eap_sim_stateenter(eap_handler_t *handler,
-			       eap_sim_state_t *ess,
-			       enum eapsim_serverstates newstate)
+static void eap_sim_state_enter(REQUEST *request, eap_handler_t *handler,
+				eap_sim_state_t *ess,
+				enum eapsim_serverstates newstate)
 {
 	switch (newstate) {
 	/*
@@ -452,7 +454,7 @@ static void eap_sim_stateenter(eap_handler_t *handler,
 	ess->state = newstate;
 
 	/* build the target packet */
-	eap_sim_compose(handler);
+	eap_sim_compose(request, handler);
 }
 
 /*
@@ -480,7 +482,7 @@ static int mod_session_init(UNUSED void *instance, eap_handler_t *handler)
 	if (!eap_sim_get_challenge(handler, request->config, 0, ess) ||
 	    !eap_sim_get_challenge(handler, request->config, 1, ess) ||
 	    !eap_sim_get_challenge(handler, request->config, 2, ess)) {
-		return 0;
+		return 0;	/* already printed error */
 	}
 
 	/*
@@ -489,7 +491,7 @@ static int mod_session_init(UNUSED void *instance, eap_handler_t *handler)
 	time(&n);
 	ess->sim_id = (n & 0xff);
 
-	eap_sim_stateenter(handler, ess, EAPSIM_SERVER_START);
+	eap_sim_state_enter(request, handler, ess, EAPSIM_SERVER_START);
 
 	return 1;
 }
@@ -509,12 +511,11 @@ static int process_eap_sim_start(eap_handler_t *handler, VALUE_PAIR *vps)
 	uint16_t simversion;
 	ess = (eap_sim_state_t *)handler->opaque;
 
-	nonce_vp = pairfind(vps, PW_EAP_SIM_NONCE_MT, 0, TAG_ANY);
-	selectedversion_vp = pairfind(vps, PW_EAP_SIM_SELECTED_VERSION, 0, TAG_ANY);
+	nonce_vp = fr_pair_find_by_num(vps, PW_EAP_SIM_NONCE_MT, 0, TAG_ANY);
+	selectedversion_vp = fr_pair_find_by_num(vps, PW_EAP_SIM_SELECTED_VERSION, 0, TAG_ANY);
 	if (!nonce_vp || !selectedversion_vp) {
 		RDEBUG2("Client did not select a version and send a NONCE");
-		eap_sim_stateenter(handler, ess, EAPSIM_SERVER_START);
-
+		eap_sim_state_enter(request, handler, ess, EAPSIM_SERVER_START);
 		return 1;
 	}
 
@@ -523,7 +524,6 @@ static int process_eap_sim_start(eap_handler_t *handler, VALUE_PAIR *vps)
 	 */
 	if (selectedversion_vp->vp_length < 2) {
 		REDEBUG("EAP-SIM version field is too short");
-
 		return 0;
 	}
 	memcpy(&simversion, selectedversion_vp->vp_strvalue, sizeof(simversion));
@@ -550,7 +550,7 @@ static int process_eap_sim_start(eap_handler_t *handler, VALUE_PAIR *vps)
 	/*
 	 *	Everything looks good, change states
 	 */
-	eap_sim_stateenter(handler, ess, EAPSIM_SERVER_CHALLENGE);
+	eap_sim_state_enter(request, handler, ess, EAPSIM_SERVER_CHALLENGE);
 
 	return 1;
 }
@@ -604,7 +604,7 @@ static int process_eap_sim_challenge(eap_handler_t *handler, VALUE_PAIR *vps)
 	}
 
 	/* everything looks good, change states */
-	eap_sim_stateenter(handler, ess, EAPSIM_SERVER_SUCCESS);
+	eap_sim_state_enter(request, handler, ess, EAPSIM_SERVER_SUCCESS);
 	return 1;
 }
 
@@ -632,12 +632,15 @@ static int mod_process(UNUSED void *arg, eap_handler_t *handler)
 					  handler->eap_ds->response->type.data,
 					  handler->eap_ds->response->type.length);
 
-	if (!success) return 0;
+	if (!success) {
+		REDEBUG("Failed decoding EAP-SIM packet: %s", fr_strerror());
+		return 0;
+	}
 
 	/*
 	 *	See what kind of message we have gotten
 	 */
-	vp = pairfind(vps, PW_EAP_SIM_SUBTYPE, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(vps, PW_EAP_SIM_SUBTYPE, 0, TAG_ANY);
 	if (!vp) {
 		REDEBUG2("No subtype attribute was created, message dropped");
 		return 0;
@@ -659,7 +662,7 @@ static int mod_process(UNUSED void *arg, eap_handler_t *handler)
 		 */
 		default:
 
-			eap_sim_stateenter(handler, ess, EAPSIM_SERVER_START);
+			eap_sim_state_enter(request, handler, ess, EAPSIM_SERVER_START);
 			return 1;
 		/*
 		 * 	A response to our EAP-Sim/Request/Start!
@@ -674,7 +677,7 @@ static int mod_process(UNUSED void *arg, eap_handler_t *handler)
 		 *	Pretty much anything else here is illegal, so we will retransmit the request.
 		 */
 		default:
-			eap_sim_stateenter(handler, ess, EAPSIM_SERVER_CHALLENGE);
+			eap_sim_state_enter(request, handler, ess, EAPSIM_SERVER_CHALLENGE);
 			return 1;
 		/*
 		 *	A response to our EAP-Sim/Request/Challenge!

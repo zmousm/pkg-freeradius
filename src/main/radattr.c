@@ -63,6 +63,24 @@ static ssize_t xlat_test(UNUSED void *instance, UNUSED REQUEST *request,
 	return 0;
 }
 
+static RADIUS_PACKET my_original = {
+	.sockfd = -1,
+	.id = 0,
+	.code = PW_CODE_ACCESS_REQUEST,
+	.vector = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f },
+};
+
+
+static RADIUS_PACKET my_packet = {
+	.sockfd = -1,
+	.id = 0,
+	.code = PW_CODE_ACCESS_ACCEPT,
+	.vector = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f },
+};
+
+
+static char const *my_secret = "testing123";
+
 /*
  *	End of hacks for xlat
  *
@@ -669,7 +687,7 @@ static void process_file(const char *root_dir, char const *filename)
 				p += 7;
 			}
 
-			if (userparse(NULL, p, &head) != T_EOL) {
+			if (fr_pair_list_afrom_str(NULL, p, &head) != T_EOL) {
 				strlcpy(output, fr_strerror(), sizeof(output));
 				continue;
 			}
@@ -677,7 +695,12 @@ static void process_file(const char *root_dir, char const *filename)
 			attr = data;
 			vp = head;
 			while (vp) {
-				len = rad_vp2attr(NULL, NULL, NULL, (VALUE_PAIR const **)(void **)&vp,
+				VALUE_PAIR **pvp = &vp;
+				VALUE_PAIR const **qvp;
+
+				memcpy(&qvp, &pvp, sizeof(pvp));
+
+				len = rad_vp2attr(&my_packet, &my_original, my_secret, qvp,
 						  attr, data + sizeof(data) - attr);
 				if (len < 0) {
 					fprintf(stderr, "Failed encoding %s: %s\n",
@@ -689,7 +712,7 @@ static void process_file(const char *root_dir, char const *filename)
 				if (len == 0) break;
 			}
 
-			pairfree(&head);
+			fr_pair_list_free(&head);
 			outlen = attr - data;
 			goto print_hex;
 		}
@@ -712,9 +735,9 @@ static void process_file(const char *root_dir, char const *filename)
 			my_len = 0;
 			while (len > 0) {
 				vp = NULL;
-				my_len = rad_attr2vp(NULL, NULL, NULL, NULL, attr, len, &vp);
+				my_len = rad_attr2vp(NULL, &my_packet, &my_original, my_secret, attr, len, &vp);
 				if (my_len < 0) {
-					pairfree(&head);
+					fr_pair_list_free(&head);
 					break;
 				}
 
@@ -751,7 +774,7 @@ static void process_file(const char *root_dir, char const *filename)
 					}
 				}
 
-				pairfree(&head);
+				fr_pair_list_free(&head);
 			} else if (my_len < 0) {
 				strlcpy(output, fr_strerror(), sizeof(output));
 
@@ -773,7 +796,7 @@ static void process_file(const char *root_dir, char const *filename)
 				p += 12;
 			}
 
-			if (userparse(NULL, p, &head) != T_EOL) {
+			if (fr_pair_list_afrom_str(NULL, p, &head) != T_EOL) {
 				strlcpy(output, fr_strerror(), sizeof(output));
 				continue;
 			}
@@ -791,11 +814,10 @@ static void process_file(const char *root_dir, char const *filename)
 						vp->da->name, fr_strerror());
 					exit(1);
 				}
-				if (len > 0) debug_pair(vp);
 				attr += len;
 			};
 
-			pairfree(&head);
+			fr_pair_list_free(&head);
 			outlen = attr - data;
 			goto print_hex;
 		}
@@ -835,7 +857,7 @@ static void process_file(const char *root_dir, char const *filename)
 					}
 				}
 
-				pairfree(&head);
+				fr_pair_list_free(&head);
 			} else if (my_len < 0) {
 				strlcpy(output, fr_strerror(), sizeof(output));
 
@@ -848,7 +870,7 @@ static void process_file(const char *root_dir, char const *filename)
 		if (strncmp(p, "attribute ", 10) == 0) {
 			p += 10;
 
-			if (userparse(NULL, p, &head) != T_EOL) {
+			if (fr_pair_list_afrom_str(NULL, p, &head) != T_EOL) {
 				strlcpy(output, fr_strerror(), sizeof(output));
 				continue;
 			}
@@ -900,7 +922,7 @@ static void NEVER_RETURNS usage(void)
 	fprintf(stderr, "  -d <raddb>             Set user dictionary directory (defaults to " RADDBDIR ").\n");
 	fprintf(stderr, "  -D <dictdir>           Set main dictionary directory (defaults to " DICTDIR ").\n");
 	fprintf(stderr, "  -x                     Debugging mode.\n");
-	fprintf(stderr, "  -M                     Show program version information.\n");
+	fprintf(stderr, "  -M                     Show talloc memory report.\n");
 
 	exit(1);
 }
@@ -911,6 +933,7 @@ int main(int argc, char *argv[])
 	bool report = false;
 	char const *radius_dir = RADDBDIR;
 	char const *dict_dir = DICTDIR;
+	int *inst = &c;
 
 	cf_new_escape = true;	/* fix the tests */
 
@@ -923,11 +946,9 @@ int main(int argc, char *argv[])
 
 	while ((c = getopt(argc, argv, "d:D:xMh")) != EOF) switch (c) {
 		case 'd':
-			if (!optarg) usage();
 			radius_dir = optarg;
 			break;
 		case 'D':
-			if (!optarg) usage();
 			dict_dir = optarg;
 			break;
 		case 'x':
@@ -962,7 +983,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	if (xlat_register("test", xlat_test, NULL, NULL) < 0) {
+	if (xlat_register("test", xlat_test, NULL, inst) < 0) {
 		fprintf(stderr, "Failed registering xlat");
 		return 1;
 	}

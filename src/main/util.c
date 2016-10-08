@@ -303,6 +303,7 @@ size_t rad_filename_make_safe(UNUSED REQUEST *request, char *out, size_t outlen,
 			 */
 			if (*q < ' ') {
 				*(p++) = '_';
+				q++;
 				continue;
 			}
 
@@ -391,7 +392,7 @@ size_t rad_filename_escape(UNUSED REQUEST *request, char *out, size_t outlen, ch
 		/*
 		 *	Encode multibyte UTF8 chars
 		 */
-		utf8_len = fr_utf8_char((uint8_t const *) in);
+		utf8_len = fr_utf8_char((uint8_t const *) in, -1);
 		if (utf8_len > 1) {
 			if (freespace <= (utf8_len * 3)) break;
 
@@ -580,6 +581,13 @@ static int _request_free(REQUEST *request)
 	request->home_server = NULL;
 #endif
 
+	/*
+	 *	This is parented separately.
+	 */
+	if (request->state_ctx) {
+		talloc_free(request->state_ctx);
+	}
+
 	return 0;
 }
 
@@ -612,6 +620,8 @@ REQUEST *request_alloc(TALLOC_CTX *ctx)
 	request->module = "";
 	request->component = "<core>";
 	request->log.func = vradlog_request;
+
+	request->state_ctx = talloc_init("session-state");
 
 	return request;
 }
@@ -1084,7 +1094,7 @@ static void verify_packet(char const *file, int line, REQUEST *request, RADIUS_P
 	if (!packet->vps) return;
 
 #ifdef WITH_VERIFY_PTR
-	fr_pair_verify_list(file, line, packet, packet->vps);
+	fr_pair_list_verify(file, line, packet, packet->vps);
 #endif
 }
 /*
@@ -1101,8 +1111,8 @@ void verify_request(char const *file, int line, REQUEST *request)
 	(void) talloc_get_type_abort(request, REQUEST);
 
 #ifdef WITH_VERIFY_PTR
-	fr_pair_verify_list(file, line, request, request->config);
-	fr_pair_verify_list(file, line, request, request->state);
+	fr_pair_list_verify(file, line, request, request->config);
+	fr_pair_list_verify(file, line, request->state_ctx, request->state);
 #endif
 
 	if (request->packet) verify_packet(file, line, request, request->packet, "request");

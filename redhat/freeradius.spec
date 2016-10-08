@@ -1,6 +1,7 @@
 %bcond_with rlm_yubikey
 #%bcond_with experimental_modules
 
+%{!?_with_rlm_cache_memcached: %global _without_rlm_cache_memcached --without-rlm_cache_memcached}
 %{!?_with_rlm_eap_pwd: %global _without_rlm_eap_pwd --without-rlm_eap_pwd}
 %{!?_with_rlm_eap_tnc: %global _without_rlm_eap_tnc --without-rlm_eap_tnc}
 %{!?_with_rlm_yubikey: %global _without_rlm_yubikey --without-rlm_yubikey}
@@ -8,13 +9,11 @@
 # experimental modules
 %bcond_with rlm_idn
 %bcond_with rlm_ruby
-%bcond_with rlm_sql_freetds
 %bcond_with rlm_sql_oracle
 %{?_with_rlm_idn: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_opendirectory: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_ruby: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_securid: %global _with_experimental_modules --with-experimental-modules}
-%{?_with_rlm_sql_freetds: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_sql_oracle: %global _with_experimental_modules --with-experimental-modules}
 
 %if %{?_with_experimental_modules:1}%{!?_with_experimental_modules:0}
@@ -22,13 +21,12 @@
 %{!?_with_rlm_opendirectory: %global _without_rlm_opendirectory --without-rlm_opendirectory}
 %{!?_with_rlm_ruby: %global _without_rlm_ruby --without-rlm_ruby}
 %{!?_with_rlm_securid: %global _without_rlm_securid --without-rlm_securid}
-%{!?_with_rlm_sql_freetds: %global _without_rlm_sql_freetds --without-rlm_sql_freetds}
 %{!?_with_rlm_sql_oracle: %global _without_rlm_sql_oracle --without-rlm_sql_oracle}
 %endif
 
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 3.0.9
+Version: 3.0.12
 Release: 2%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
@@ -97,6 +95,18 @@ done when adding or deleting new users.
 # CentOS defines debug package by default. Only define it if not already defined
 %if 0%{!?_enable_debug_packages:1}
 %debug_package
+%endif
+
+%if %{?_with_rlm_cache_memcached:1}%{?!_with_rlm_cache_memcached:0}
+%package memcached
+Summary: Memcached support for freeRADIUS
+Group: System Environment/Daemons
+Requires: %{name} = %{version}-%{release}
+Requires: libmemcached
+BuildRequires: libmemcached-devel
+
+%description memcached
+Adds support for rlm_memcached as a cache driver.
 %endif
 
 %package config
@@ -211,7 +221,6 @@ BuildRequires: unixODBC-devel
 %description unixODBC
 This plugin provides unixODBC support for the FreeRADIUS server project.
 
-%if %{?_with_rlm_sql_freetds:1}%{!?_with_rlm_sql_freetds:0}
 %package freetds
 Summary: FreeTDS support for FreeRADIUS
 Group: System Environment/Daemons
@@ -221,7 +230,6 @@ BuildRequires: freetds-devel
 
 %description freetds
 This plugin provides FreeTDS support for the FreeRADIUS server project.
-%endif
 
 %if %{?_with_rlm_sql_oracle:1}%{!?_with_rlm_sql_oracle:0}
 %package oracle
@@ -296,11 +304,16 @@ find $RPM_BUILD_DIR/freeradius-server-%{version} \( -name '*.c' -o -name '*.h' \
 
 
 %build
-%ifarch s390 s390x
-export CFLAGS="$RPM_OPT_FLAGS -fPIC"
-%else
-export CFLAGS="$RPM_OPT_FLAGS -fpic"
+# Retain CFLAGS from the environment...
+%if %{?_with_developer:1}%{!?_with_developer:0}
+export CFLAGS="$CFLAGS -fpic"
+export CXXFLAGS="$CFLAGS"
 %endif
+
+# Need to pass these explicitly for clang, else rpmbuilder bails when trying to extract debug info from
+# the libraries.  Guessing GCC does this by default.  Why use clang over gcc? The version of clang
+# which ships with RHEL 6 has basic C11 support, gcc doesn't.
+export LDFLAGS="-Wl,--build-id"
 
 %configure \
         --libdir=%{_libdir}/freeradius \
@@ -339,10 +352,10 @@ export CFLAGS="$RPM_OPT_FLAGS -fpic"
         %{?_without_rlm_opendirectory} \
         %{?_with_rlm_securid} \
         %{?_without_rlm_securid} \
-        %{?_with_rlm_sql_freetds} \
-        %{?_without_rlm_sql_freetds} \
         %{?_with_rlm_ruby} \
-        %{?_without_rlm_ruby}
+        %{?_without_rlm_ruby} \
+        %{?_with_rlm_cache_memcached} \
+        %{?_without_rlm_cache_memcached} \
 #        --with-modules="rlm_wimax" \
 
 %if "%{_lib}" == "lib64"
@@ -390,9 +403,6 @@ rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-available/idn
 %endif
 %if %{?_with_rlm_ruby:0}%{!?_with_rlm_ruby:1}
 rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/ruby
-%endif
-%if %{?_with_rlm_sql_freetds:0}%{!?_with_rlm_sql_freetds:1}
-rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/sql/main/mssql
 %endif
 %if %{?_with_rlm_sql_oracle:0}%{!?_with_rlm_sql_oracle:1}
 rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/sql/ippool/oracle
@@ -552,6 +562,7 @@ fi
 %{_libdir}/freeradius/rlm_digest.so
 %{_libdir}/freeradius/rlm_dynamic_clients.so
 %{_libdir}/freeradius/rlm_eap.so
+%{_libdir}/freeradius/rlm_eap_fast.so
 %{_libdir}/freeradius/rlm_eap_gtc.so
 %{_libdir}/freeradius/rlm_eap_leap.so
 %{_libdir}/freeradius/rlm_eap_md5.so
@@ -579,7 +590,6 @@ fi
 %{_libdir}/freeradius/rlm_soh.so
 %{_libdir}/freeradius/rlm_sometimes.so
 %{_libdir}/freeradius/rlm_sql.so
-%{_libdir}/freeradius/rlm_sqlhpwippool.so
 %{_libdir}/freeradius/rlm_sql_null.so
 %{_libdir}/freeradius/rlm_sql_sqlite.so
 %{_libdir}/freeradius/rlm_sqlcounter.so
@@ -682,10 +692,8 @@ fi
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/ruby/*
 %endif
 # freetds
-%if %{?_with_rlm_sql_freetds:1}%{!?_with_rlm_sql_freetds:0}
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/mssql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/mssql/*
-%endif
 # oracle
 %if %{?_with_rlm_sql_oracle:1}%{!?_with_rlm_sql_oracle:0}
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql
@@ -704,7 +712,9 @@ fi
 %defattr(-,root,root)
 /usr/bin/*
 # man-pages
+%doc %{_mandir}/man1/dhcpclient.1.gz
 %doc %{_mandir}/man1/radclient.1.gz
+%doc %{_mandir}/man1/radcounter.1.gz
 %doc %{_mandir}/man1/radeapclient.1.gz
 %doc %{_mandir}/man1/radlast.1.gz
 %doc %{_mandir}/man1/radtest.1.gz
@@ -712,6 +722,12 @@ fi
 %doc %{_mandir}/man1/radzap.1.gz
 %doc %{_mandir}/man8/radsqlrelay.8.gz
 %doc %{_mandir}/man8/rlm_ippool_tool.8.gz
+
+%if %{?_with_rlm_cache_memcached:1}%{!?_with_rlm_cache_memcached:0}
+%files memcached
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_cache_memcached.so
+%endif
 
 %files krb5
 %defattr(-,root,root)
@@ -760,11 +776,9 @@ fi
 %{_libdir}/freeradius/rlm_ruby.so
 %endif
 
-%if %{?_with_rlm_sql_freetds:1}%{!?_with_rlm_sql_freetds:0}
 %files freetds
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_sql_freetds.so
-%endif
 
 %if %{?_with_rlm_sql_oracle:1}%{!?_with_rlm_sql_oracle:0}
 %files oracle
@@ -780,5 +794,5 @@ fi
 
 
 %changelog
-* Wed Sep 22 2013 Alan DeKok <aland@freeradius.org> - 3.0.0
+* Wed Sep 25 2013 Alan DeKok <aland@freeradius.org> - 3.0.0
 - upgrade to latest upstream release

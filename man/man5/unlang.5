@@ -10,7 +10,7 @@
 .RE
 .sp
 ..
-.TH unlang 5 "24 November 2014" "" "FreeRADIUS Processing un-language"
+.TH unlang 5 "05 February 2016" "" "FreeRADIUS Processing un-language"
 .SH NAME
 unlang \- FreeRADIUS Processing un\-language
 .SH DESCRIPTION
@@ -40,12 +40,14 @@ one one line.  Each entry begins with a keyword.  Entries are
 organized into lists.  Processing of the language is line by line,
 from the start of the list to the end.  Actions are executed
 per-keyword.
-.IP module-name
+.IP module-name[.section-name]
 A reference to the named module.  When processing reaches this point,
 the pre-compiled module is called.  The module may succeed or fail,
 and will return a status to "unlang" if so.  This status can be tested
 in a condition.  See the "Simple Conditions" text in the CONDITIONS
 section, and MODULE RETURN CODES, below.
+If a section-name is provided, it will cause the module to execute 
+as if it were listed in the named section.
 
 .DS
 	chap  # call the CHAP module
@@ -218,7 +220,7 @@ See raddb/sites-available/originate-coa for additional information.
 
 The "session-state" list is primarily used for EAP.  Attributes put
 into the "session-state" list are saved for the next packet in the
-session.  They are automatically retreived when the next packet is
+session.  They are automatically retrieved when the next packet is
 received.
 
 The only contents permitted in an "update" section are attributes and
@@ -444,7 +446,7 @@ true.  Valid comparison operators are "==", "!=", "<", "<=", ">",
 ">=", "=~", and "!~", all with their usual meanings.  Invalid
 comparison operators are ":=" and "=".
 .RE
-.IP Attribute Comparisons
+.IP "Attribute Comparisons"
 .DS
 	(&User-Name == "foo")
 .DE
@@ -454,7 +456,7 @@ evaluates to true if the comparison holds true.  The comparison is
 done by printing the attribute to a string, and then doing a string
 comparison of the two sides of the condition.
 .RE
-.IP Inter-Attribute Comparisons
+.IP "Inter-Attribute Comparisons"
 .DS
 	(&User-Name == &Filter-Id)
 .DE
@@ -661,7 +663,7 @@ as with %{%{One}:-%{%{Two}:-%{Three}}}
 .PP
 String lengths and arrays
 .RS
-Similar to a Unix shell, there are ways to reference string lenths,
+Similar to a Unix shell, there are ways to reference string lengths,
 and the second or more instance of an attribute in a list.  If you
 need more than this functionality, we suggest using a real language.
 .IP %{strlen:string}
@@ -775,6 +777,12 @@ This operator is valid only for attributes of integer type.
 .IP !*
 Delete all occurances of the named attribute, no matter what the
 value.
+.IP =~
+Keep all attributes having values which match the given regular
+expression.  If no attribute matches, nothing else is done.
+.IP !~
+Keep all attributes having values which fail to match the given
+regular expression.  If no attribute matches, nothing else is done.
 .RE
 .IP Values
 .br

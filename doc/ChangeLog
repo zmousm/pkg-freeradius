@@ -1,3 +1,278 @@
+FreeRADIUS 3.0.12 Thur 29 Sep 2016 13:00:00 EDT urgency=medium
+	Feature improvements
+	* Add support for =~ and !~ in update sections.
+	  See "man unlang"
+	* Add dictionary.checkpoint.
+	* Simultaneous-Use prints out more information.
+	* Print WARNING in debug mode when packets may be
+	  truncated.
+	* Added expansions %{home_server:state} and
+	  %{home_server_pool:state}, which show the
+	  state of the server / pool.
+	* Mark rlm_sql_freetds as stable.
+	* Make rlm_perl less fragile.  Patch from
+	  Herwin Weststrate.
+	* Allow extended attributes to have "encrypt=2"
+	* Update dictionary.aruba.
+	* Add support for EAP-FAST.  This is an isolated
+	  feature which does not affect anything else.
+	* Update OpenSSL vulnerability list.  Use a version
+	  of OpenSSL released after September 20, 2016.
+	* EAP certificate verification is now done when
+	  "verify" is enabled and "ocsp" is disabled.
+	* New dhcpclient and rlm_rad_counter man pages.
+	* Minor abfab and moonshot additions.
+	* Pass CFLAGS through from environment in RPM builds.
+	  Allows more custom builds.
+	* Build with Heimdal in addtion to libkrb5.
+
+	Bug fixes
+	* Use correct typedef for older versions of sqlite.
+	* Update mssql schema to add priority
+	* don't complain on /dev/urandom in ldap
+	* fix == operator in update sections
+	* Don't create DHCP strings with many trailing zeros.
+	  Patch from Nicolas C.  Fixes #1526.
+	* Allow MS-CHAP change passwords instead of complaining
+	  on large buffer.
+	* Allow assignment or equality operator on SQL.
+	* Update aclocal tests for FreeBSD 10.  Patches from
+	  Mathieu Simon.
+	* Remove occasional hang in rlm_linelog.
+	* Copy VSAs to inner tunnel for TTLS and PEAP.
+	  Fixes #1544
+	* A few minor bugfixes caught in v3.1.x cleanup, and
+	  back-ported to v3.0.x.
+	* do_not_respond again works in post-proxy
+	* Allow realm "~^.*$" {} and User-Name with no realm.
+	* Fix leak when creating unknown attributes
+	* Fix Debian / logrotate.
+	* Make OpenSSL error functions thread-safe.
+	* Fix crash with rlm_sql and updating SQL-User-Name.
+	* Debian build updates.
+	* Allow regular expression comparisons in radclient
+	  fixes #1574.
+	* Fix memory leak on unknown attributes in detail file
+	  reader.
+	* Update example paths in "man" pages when installing
+	  them
+	* Build fixes for rlm_mschap.  Fixes #1489.
+	* BSD build fixes.  Patch from issue #1583.
+	* Be more careful about /lib/ when building.
+	  Fixes #1585.
+	* Correct ifdef placement error.  Fixes #1572.
+	* Allow for more files in internal "exfile" API
+	  So it will be possible to open more than 64
+	  "detail" files at the same time.
+	* Remove support for statically built EAP modules.
+	  Fixes #1591.
+	* Many fixes to rlm_python from Guillaume Pannatier.
+	* Use correct week adjustment in SQLcounter.
+	  Fixes #1608
+	* Minor fixes to allow compilation without DHCP,
+	  VMPS, or TCP.
+	* Fix checks for module / config file change on HUP.
+	* Compile regex comparisons when sent via
+	  "debug condition".  Fixes #1632.
+	* Update filenames in documentation and examples.
+	  Patch from Alan Buxey, #1655.
+	* Don't crash if SQL connection becomes unavailable.
+	  Fixes #1640.
+	* Disallow originate_coa when proxy_requests = no
+	  Fixes #1684.
+	* Free rad_perlconf_hv in correct perl context.
+	  Fixes #1675.
+	* Multiple fixes for Debian builds.  #1510, among
+	  others.
+	* Set OpenSSL FIPS compatibility flag when necessary.
+	* Pulled fixes for the build system over from other
+	  branches.
+	* Fix OCSP for RADIUS over TLS.
+	* Fix skip_if_ocsp_ok behavior.
+	* Better fixes for systems without closefrom() but
+	  which have /proc.  Fixes #1757.
+	* Minor build fixes back-ported from v4.0.x.
+	* build --whout-ascend-binary.  Fixes #1761.
+	* Be more aggressive about not opening new connections
+	  in debug mode after CTRL-C.  Address #1604.
+
+FreeRADIUS 3.0.11 Mon 25 Jan 2016 14:00:00 EST urgency=medium
+	Feature improvements
+	* "unlang" comparisons of IP addresses to IP prefixes
+	  are now detected, and types automatically cast.
+	* Allow shorthand form of ipv4prefix values e.g. 127/8.
+	* Add "auto_chain" to raddb/mods-available/eap, tls
+	  subsection.  This allows the disabling of OpenSSL
+	  auto-chaining of certificates.  Which might be wrong.
+	* Added printing of coa and disconnect stats (radmin).
+	* radclient defaults to expecting Access-Accept responses
+	  to Status-Server.
+	* Updated dictionary.lancom, dictionary.starent.
+	* Portability fixes for Solaris.
+	* More errors from ntlm_auth gets passed to MS-CHAP.
+	* Update abfab-tr-idp virtual server.
+	* Added "filter_password" in policy.d/filter.  This
+	  removes embedded zero bytes in User-Password, for
+	  compatibility with broken clients.
+	* The server now issues a WARNING message if duplicate
+	  configuration items are found.
+	* TLS can skip the "verify" section if OCSP returns OK.
+	  See raddb/mods-available/eap, "skip_if_ocsp_ok".
+	* Set TLS-OCSP-Cert-Valid = yes / no / skipped, which
+	  is the result from the OCSP check.
+	* Interoperate with AD and "LmCompatibiltyLevel = 5",
+	  by always setting WBC_MSV1_0_ALLOW_MSVCHAPV2 for
+	  native winbind in rlm_mschap.
+	* TTLS and PEAP now require "virtual_server" to be a real server.
+	* Print WARNING when TTLS or PEAP identities are spoofed
+	  or not properly anonymized.  See RFC 7542 for requirements.
+	* Various rlm_python fixes from Herwin Weststrate.
+	* Allow setting Response-Packet-Type in "Post-Proxy-Type Fail",
+	  which is useful when the home server does not respond.
+	* elasticsearch updates from Matthew Newton
+
+	Bug fixes
+	* Fix issue where field nas_type would not be accessible via
+	  the %{client:} xlat, for clients loaded from SQL.
+	* Fix compatiblity issues with OpenSSL 1.0.2.  Ignore
+	  calls to msg_callback with 'pseudo' content types.
+	* Data type "ipv4prefix" is parsed correctly.
+	* Use correct talloc context in rlm_exec.  Fixes #1338.
+	* Complain in unlang if "else" is used with no previous
+	  "if" or "elsif".
+	* Send accounting status packets to the accounting port.
+	  Fixes #1364.
+	* Print out CFLAGS when doing "radiusd -Xxv"
+	* Fixed bug with coa/acct stats value #1339. Based on patch from
+	  Jorge Pereira.
+	* Fixes for LEAP proxying.  Don't use LEAP!
+	* Fix issue with "directory already exists" seen when doing
+	  "make install".
+	* Fixed bug with radmin related to the option "stats detail <filename>"
+	* Complain if the detail file reader does not have permission
+	  to read the "detail.work" file.  Fixes #1398
+	* Fixed SoH. Attributes were not being copied to the virtual server.
+	* Used a wrong list to global statistics in "stats".
+	* Create EAP-PWD identity correctly.  Prevents segfaults.
+	* Dynamically validate authentication types for PEAP and EAP-MSCHAPv2.
+	* Fix includes in installed headers.
+	* OpenSSL 1.0.1f and 1.0.1g do NOT calculate TLS 1.2 keys correctly.
+	  See raddb/mods-available/eap, "disable_tlsv1_2"
+	* Allow password change to work for MS-CHAP.  This requires 'r=0',
+	  because password changes are not retries.
+	* Fix home server fail-over for home servers using TCP and/or RadSec.
+	* Special characters in expanded regexes are now escaped
+	  e.g. User-Name containing '.', and comparing /%{User-Name}/,
+	  the '.' will now be escaped.  See src/tests/keywords/regex-escape.
+	* Use correct authentication vector when sending Access-Reject replies
+	  for RadSec.
+	* Set FreeRADIUS-Proxied-To in TTLS again.  You should use the
+	  "inner-tunnel" virtual server, instead of relying on this attribute.
+	* Fix debugging constants in rlm_perl.  Patch from Herwin Weststrate.
+	* Add samba-dev / samba4-dev to debian builds so that rlm_mschap can
+	  automatically use the new winbind API.
+	* Automatically skip zero-length attributes when sending packets,
+	  instead of erroring out.
+
+FreeRADIUS 3.0.10 Mon 05 Oct 2015 15:00:00 EDT urgency=medium
+	Feature improvements
+	* Do more optimization of unlang policies.  This makes
+	  run-time a bit faster.
+	* Re-name most of the functions in src/lib.  Third-party
+	  module authors will have to do the same.
+	* More documentation on contributing and how to write
+	  modules.
+	* Update radiusd.service for systemd.
+	* Open IPv6 proxy socket if the server is listening on IPV6
+	  auth / acct / coa packets.
+	* Create debian packages for DHCP.  Fixes #1125.
+	* Add more tests for "update" section parsing.
+	* Update "man" pages.
+	* Update attributes for Alcatel 7750
+	* Add dictionary for Boingo Wi-Fi
+	* Add support for DHCP lease queries.
+	  See raddb/sites-available/dhcp
+	* On HUP, check all modules for config files which have
+	  changed.  And only re-load those modules.
+	* Allow FreeRADIUS-Response-Delay(-USec) to be set for
+	  RADIUS packets.  Patch from Herwin Weststrate.
+	* Documentation fixes from Alan Buxey and Matthew Newton.
+	* Update "logrotate" script.
+	* Added more RFCs to doc/rfc for new standards implemented
+	  by FreeRADIUS.
+	* Don't crash when doing "radmin -e "help hup".
+	  Patch from Matthew Newton.
+	* The dictionary parser now does more sanity checks, which
+	  prevents run-time problems with invalid attributes.
+	* Update debian packages.  Patches from Christopher Hoskin.
+	* Many other debian packaging fixes from Matthew Netwon
+	  and Herwin Weststrate.
+	* Add "session-state" to Perl.  Patch from Herwin Weststrate.
+
+	Bug fixes
+	* Fix rlm_files so that there are no collisions when loading
+	  10's of 1000's of users.
+	* Fix radclient to use our internal v4/v6 parsing functions.
+	  v6 addresses with ports now work correctly.
+	* Fix sending/receiving packet messages to wrap v6 addresses
+	  in square brackets '[]'.
+	* Check for sasl/sasl.h when building rlm_ldap, and disable
+	  SASL functionality if unavailable.
+	* Fix issue which caused a non \0 terminated buffer to be
+	  assigned to attributes if the value being assigned contained
+	  an invalid escape sequence.
+	* Fix deadlock when reconnecting connections in the connection
+	  pool.
+	* Fix potential overrun in functions that used fr_utf8_char
+	  with a non nul terminated buffer.
+	* Fix decoding issue for Tunnel-Password type attributes
+	  which were very long.  Found by Denis Andzakovic.
+	* Fix radclient issue with TCP sockets on FreeBSD.
+	* The server now creates ${run_dir} and ${logdir} directories
+	  in daemon mode, when running as "root".
+	* Handle tags when using maps.  Fixes #1191.
+	* Fix crash when CoA packets time out.
+	* Fix parse error in rediswho
+	* Fix regex support in SQL radcheck the "users" file and radsniff.
+	* Register listen xlat earlier, so that it's available when the
+	  virtual servers are being parsed.
+	* Parse Ascend-Data-Filter when given as "0x..."
+	* Print Ascend-Data-Filter correctly.  Add test cases for both.
+	* Allow old-style clients again.  They will be disallowed for
+	  3.1.0 and following.
+	* Complain instead of crash when "else" and "elsif" are in
+	  the wrong place.
+	* Clean up memory more aggressively.  This lowers the
+	  maximum memory used, most typically for TLS based EAP methods.
+	* Prevent the server from unlinking the control socket of an
+	  already running instance.
+	* Fallback to using the configured OCSP URL if one exists, and
+	  no URL is provided in the certificate.
+	* Return CoA-NAK if proxying CoA fails.  Based on patch from
+	  Jorge Pereira.
+	* Lower peak memory usage by decreasing size of internal
+	  memory pools.
+	* The control socket is now left in place if a second copy
+	  of the server is accidentally started.
+	* Allow virtual attributes in "switch", "case", etc.
+	  Fixes #1240 and #1265.
+	* Many spell check / typo fixes in comments and example
+	  configuration files.
+	* Better handle multiple DHCP listeners.
+	* Don't print secrets for old-style realms.  Fixes #1267.
+	* Don't fall through in empty "case" statements.
+	  Fixes #1274.
+	* Update EAP-TTLS so that MPPE keys are correctly calculated with TLSv1.2.
+	* Always delete MS-MPPE-* from the TTLS inner tunnel. This allows
+	  TTLS / EAP-MSCHAPv2 to work. Fixes #1206.
+	* Fix off by one error that caused some MSCHAP-Error messages to
+	  be sent without the password change version (V=3) and the textual
+	  message component (M=).
+	* Always include C= V= and M= in MSCHAPv2 errors.  RFC 2759 does not say
+	  that any of these fields are optional, and not including V= caused
+	  errors with wpa_supplicant.
+	* Do not include M= in MSCHAPv1 errors.  It's not supported.
+
 FreeRADIUS 3.0.9 Wed 08 Jul 2015 12:00:00 EDT urgency=medium
 	Feature improvements
 	* Make "pool" configurations more consistent, and
@@ -1001,7 +1276,7 @@ FreeRADIUS 3.0.0 Mon  7 Oct 2013 15:48:14 EDT urgency=medium
 	* Added EAP-PWD implementation from Dan Harkins
 	* Added connection pools for modules. This unifies connection
 	  management which was previously different for different modules.
-l	* SQL now uses the connection pool.  See mods-available/sql
+ 	* SQL now uses the connection pool.  See mods-available/sql
 	* SQL now supports arbitrary Acct-Status-Types.
 	  These changes are not compatible with 2.x.
 	* SQL now has full support for SQLite.  See raddb/sql/main/sqlite/

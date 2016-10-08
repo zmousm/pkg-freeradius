@@ -122,9 +122,7 @@ typedef struct pair_list {
 	VALUE_PAIR		*check;
 	VALUE_PAIR		*reply;
 	int			lineno;
-	int			order;
 	struct pair_list	*next;
-	struct pair_list	*lastdefault;
 } PAIR_LIST;
 
 /** Types of #vp_tmpl_t

@@ -64,7 +64,7 @@ typedef struct rlm_pap_t {
  */
 static const CONF_PARSER module_config[] = {
 	{ "normalise", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_pap_t, normify), "yes" },
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -163,7 +163,7 @@ static void normify(REQUEST *request, VALUE_PAIR *vp, size_t min_len)
 		if (decoded == (vp->vp_length >> 1)) {
 			RDEBUG2("Normalizing %s from hex encoding, %zu bytes -> %zu bytes",
 				vp->da->name, vp->vp_length, decoded);
-			pairmemcpy(vp, buffer, decoded);
+			fr_pair_value_memcpy(vp, buffer, decoded);
 			return;
 		}
 	}
@@ -179,7 +179,7 @@ static void normify(REQUEST *request, VALUE_PAIR *vp, size_t min_len)
 		if (decoded >= (ssize_t) min_len) {
 			RDEBUG2("Normalizing %s from base64 encoding, %zu bytes -> %zu bytes",
 				vp->da->name, vp->vp_length, decoded);
-			pairmemcpy(vp, buffer, decoded);
+			fr_pair_value_memcpy(vp, buffer, decoded);
 			return;
 		}
 	}
@@ -260,12 +260,12 @@ redo:
 		 *	memcpy.  BUT it might be a string (or used as one), so
 		 *	we ensure that there's a trailing zero, too.
 		 */
-		new = paircreate(request, attr, 0);
+		new = fr_pair_afrom_num(request, attr, 0);
 		if (new->da->type == PW_TYPE_OCTETS) {
-			pairmemcpy(new, (uint8_t const *) q + 1, (len - hlen) + 1);
+			fr_pair_value_memcpy(new, (uint8_t const *) q + 1, (len - hlen) + 1);
 			new->vp_length = (len - hlen);	/* lie about the length */
 		} else {
-			pairstrcpy(new, q + 1);
+			fr_pair_value_strcpy(new, q + 1);
 		}
 
 		if (RDEBUG_ENABLED3) {
@@ -273,11 +273,12 @@ redo:
 
 			old_value = vp_aprints_value(request, vp, '\'');
 			new_value = vp_aprints_value(request, new, '\'');
-			RDEBUG3("Converted: %s = '%s' -> %s = '%s'", vp->da->name, old_value, new->da->name, new_value);
+			RDEBUG3("Converted: &control:%s = '%s' -> &control:%s = '%s'",
+				vp->da->name, old_value, new->da->name, new_value);
 			talloc_free(old_value);
 			talloc_free(new_value);
 		} else {
-			RDEBUG2("Converted: %s -> %s", vp->da->name, new->da->name);
+			RDEBUG2("Converted: &control:%s -> &control:%s", vp->da->name, new->da->name);
 		}
 
 		return new;
@@ -298,7 +299,7 @@ redo:
 		 *	must be \0 terminated.
 		 */
 		digest[decoded] = '\0';
-		pairmemcpy(vp, digest, decoded + 1);
+		fr_pair_value_memcpy(vp, digest, decoded + 1);
 		vp->vp_length = decoded;		/* lie about the length */
 
 		goto redo;
@@ -312,8 +313,8 @@ redo:
 	}
 
 unknown_header:
-	new = paircreate(request, PW_CLEARTEXT_PASSWORD, 0);
-	pairstrcpy(new, vp->vp_strvalue);
+	new = fr_pair_afrom_num(request, PW_CLEARTEXT_PASSWORD, 0);
+	fr_pair_value_strcpy(new, vp->vp_strvalue);
 
 	return new;
 }
@@ -354,7 +355,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 			/*
 			 *	Password already exists: use that instead of this one.
 			 */
-			if (pairfind(request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY)) {
+			if (fr_pair_find_by_num(request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY)) {
 				RWDEBUG("Config already contains a \"known good\" password "
 					"(&control:Cleartext-Password).  Ignoring &config:Password-With-Header");
 				break;
@@ -475,15 +476,15 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		 *	Likely going to be proxied.  Avoid printing
 		 *	warning message.
 		 */
-		if (pairfind(request->config, PW_REALM, 0, TAG_ANY) ||
-		    (pairfind(request->config, PW_PROXY_TO_REALM, 0, TAG_ANY))) {
+		if (fr_pair_find_by_num(request->config, PW_REALM, 0, TAG_ANY) ||
+		    (fr_pair_find_by_num(request->config, PW_PROXY_TO_REALM, 0, TAG_ANY))) {
 			return RLM_MODULE_NOOP;
 		}
 
 		/*
 		 *	The TLS types don't need passwords.
 		 */
-		vp = pairfind(request->packet->vps, PW_EAP_TYPE, 0, TAG_ANY);
+		vp = fr_pair_find_by_num(request->packet->vps, PW_EAP_TYPE, 0, TAG_ANY);
 		if (vp &&
 		    ((vp->vp_integer == 13) || /* EAP-TLS */
 		     (vp->vp_integer == 21) || /* EAP-TTLS */
@@ -514,7 +515,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	}
 
 	if (inst->auth_type) {
-		vp = radius_paircreate(request, &request->config,
+		vp = radius_pair_create(request, &request->config,
 				       PW_AUTH_TYPE, 0);
 		vp->vp_integer = inst->auth_type;
 	}
@@ -538,7 +539,8 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_clear(UNUSED rlm_pap_t *inst, REQUE
 	    (rad_digest_cmp(vp->vp_octets,
 			    request->password->vp_octets,
 			    vp->vp_length) != 0)) {
-		REDEBUG("Cleartext password does not match \"known good\" password");
+		REDEBUG("Cleartext password \"%s\" does not match \"known good\" password",
+			request->password->vp_strvalue);
 		return RLM_MODULE_REJECT;
 	}
 	return RLM_MODULE_OK;
@@ -623,7 +625,7 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_smd5(rlm_pap_t *inst, REQUEST *requ
 
 static rlm_rcode_t CC_HINT(nonnull) pap_auth_sha(rlm_pap_t *inst, REQUEST *request, VALUE_PAIR *vp)
 {
-	fr_SHA1_CTX sha1_context;
+	fr_sha1_ctx sha1_context;
 	uint8_t digest[128];
 
 	RDEBUG("Comparing with \"known-good\" SHA-Password");
@@ -651,7 +653,7 @@ static rlm_rcode_t CC_HINT(nonnull) pap_auth_sha(rlm_pap_t *inst, REQUEST *reque
 
 static rlm_rcode_t CC_HINT(nonnull) pap_auth_ssha(rlm_pap_t *inst, REQUEST *request, VALUE_PAIR *vp)
 {
-	fr_SHA1_CTX sha1_context;
+	fr_sha1_ctx sha1_context;
 	uint8_t digest[128];
 
 	RDEBUG("Comparing with \"known-good\" SSHA-Password");

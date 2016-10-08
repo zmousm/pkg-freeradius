@@ -42,10 +42,8 @@ typedef struct rlm_eap_gtc_t {
 
 static CONF_PARSER module_config[] = {
 	{ "challenge", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_gtc_t, challenge), "Password: " },
-
 	{ "auth_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_gtc_t, auth_type_name), "PAP" },
-
-	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -172,7 +170,7 @@ static int CC_HINT(nonnull) mod_process(void *instance, eap_handler_t *handler)
 		/*
 		 *	For now, do cleartext password authentication.
 		 */
-		vp = pairfind(request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
+		vp = fr_pair_find_by_num(request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
 		if (!vp) {
 			REDEBUG2("Cleartext-Password is required for authentication");
 			eap_ds->request->code = PW_EAP_FAILURE;
@@ -198,23 +196,19 @@ static int CC_HINT(nonnull) mod_process(void *instance, eap_handler_t *handler)
 		 */
 	} else if (eap_ds->response->type.length <= 128) {
 		int rcode;
-		char *p;
 
 		/*
 		 *	If there was a User-Password in the request,
 		 *	why the heck are they using EAP-GTC?
 		 */
-		pairdelete(&request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY);
+		fr_pair_delete_by_num(&request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY);
 
-		vp = pairmake_packet("User-Password", NULL, T_OP_EQ);
+		vp = pair_make_request("User-Password", NULL, T_OP_EQ);
 		if (!vp) {
 			return 0;
 		}
-		vp->vp_length = eap_ds->response->type.length;
-		vp->vp_strvalue = p = talloc_array(vp, char, vp->vp_length + 1);
-		vp->type = VT_DATA;
-		memcpy(p, eap_ds->response->type.data, vp->vp_length);
-		p[vp->vp_length] = 0;
+
+		fr_pair_value_bstrncpy(vp, eap_ds->response->type.data, eap_ds->response->type.length);
 
 		/*
 		 *	Add the password to the request, and allow

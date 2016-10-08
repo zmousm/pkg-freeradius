@@ -191,6 +191,29 @@ struct tm *gmtime_r(time_t const *l_clock, struct tm *result)
 }
 #endif
 
+#ifndef HAVE_VDPRINTF
+int vdprintf (int fd, char const *format, va_list args)
+{
+	int     ret;
+	FILE    *fp;
+	int	dup_fd;
+
+	dup_fd = dup(fd);
+	if (dup_fd < 0) return -1;
+
+	fp = fdopen(fd, "w");
+	if (!fp) {
+		close(dup_fd);
+		return -1;
+	}
+
+	ret = vfprintf(fp, format, args);
+	fclose(fp);	/* Also closes dup_fd */
+
+	return ret;
+}
+#endif
+
 #ifndef HAVE_GETTIMEOFDAY
 #ifdef WIN32
 /*

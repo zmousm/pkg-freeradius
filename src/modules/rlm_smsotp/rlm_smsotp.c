@@ -39,8 +39,7 @@ static const CONF_PARSER module_config[] = {
 	{ "socket", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, socket), "/var/run/smsotp_socket" },
 	{ "challenge_message", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, challenge), "Enter Mobile PIN" },
 	{ "challenge_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, authtype), "smsotp-reply" },
-
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 static int _mod_conn_free(int *fdp)
@@ -208,7 +207,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	 *  Look for the 'state' attribute.
 	 */
 #define WRITE_ALL(_a,_b,_c) if (write_all(_a,_b,_c) < 0) goto done;
-	state = pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY);
+	state = fr_pair_find_by_num(request->packet->vps, PW_STATE, 0, TAG_ANY);
 	if (state) {
 		RDEBUG("Found reply to access challenge");
 
@@ -272,8 +271,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	 *	Create the challenge, and add it to the reply.
 	 */
 
-	pairmake_reply("Reply-Message", inst->challenge, T_OP_EQ);
-	pairmake_reply("State", buffer, T_OP_EQ);
+	pair_make_reply("Reply-Message", inst->challenge, T_OP_EQ);
+	pair_make_reply("State", buffer, T_OP_EQ);
 
 	/*
 	 *  Mark the packet as an Access-Challenge packet.
@@ -304,12 +303,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	/*
 	 *  Look for the 'state' attribute.
 	 */
-	state = pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY);
+	state = fr_pair_find_by_num(request->packet->vps, PW_STATE, 0, TAG_ANY);
 	if (state != NULL) {
 		DEBUG("rlm_smsotp: Found reply to access challenge (AUTZ), Adding Auth-Type '%s'",inst->authtype);
 
-		pairdelete(&request->config, PW_AUTH_TYPE, 0, TAG_ANY); /* delete old auth-type */
-		pairmake_config("Auth-Type", inst->authtype, T_OP_SET);
+		fr_pair_delete_by_num(&request->config, PW_AUTH_TYPE, 0, TAG_ANY); /* delete old auth-type */
+		pair_make_config("Auth-Type", inst->authtype, T_OP_SET);
 	}
 
 	return RLM_MODULE_OK;

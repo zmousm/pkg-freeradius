@@ -29,7 +29,6 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 
 #include <libcouchbase/couchbase.h>
-#include <json.h>
 
 #include "mod.h"
 #include "couchbase.h"
@@ -121,9 +120,14 @@ int mod_build_attribute_element_map(CONF_SECTION *conf, void *instance)
 	CONF_PAIR *cp;                      /* conig pair */
 	const char *attribute, *element;    /* attribute and element names */
 
-	/* find map section */
-	cs = cf_section_sub_find(conf, "map");
-	if (!cs) cf_section_sub_find(conf, "update");
+	/* find update section */
+	cs = cf_section_sub_find(conf, "update");
+
+	/* backwards compatibility */
+	if (!cs) {
+		cs = cf_section_sub_find(conf, "map");
+		WARN("rlm_couchbase: found deprecated 'map' section - please change to 'update'");
+	}
 
 	/* check section */
 	if (!cs) {
@@ -139,7 +143,7 @@ int mod_build_attribute_element_map(CONF_SECTION *conf, void *instance)
 	for (ci = cf_item_find_next(cs, NULL); ci != NULL; ci = cf_item_find_next(cs, ci)) {
 		/* validate item */
 		if (!cf_item_is_pair(ci)) {
-			ERROR("rlm_couchbase: failed to parse invalid item in 'map' section");
+			ERROR("rlm_couchbase: failed to parse invalid item in 'update' section");
 			/* free map */
 			if (inst->map) {
 				json_object_put(inst->map);
@@ -240,10 +244,10 @@ int mod_attribute_to_element(const char *name, json_object *map, void *buf)
 void *mod_json_object_to_value_pairs(json_object *json, const char *section, REQUEST *request)
 {
 	json_object *jobj, *jval, *jop;     /* json object pointers */
-	TALLOC_CTX *ctx;                    /* talloc context for pairmake */
-	VALUE_PAIR *vp, **ptr;              /* value pair and value pair pointer for pairmake */
+	TALLOC_CTX *ctx;                    /* talloc context for fr_pair_make */
+	VALUE_PAIR *vp, **ptr;              /* value pair and value pair pointer for fr_pair_make */
 
-	/* assign ctx and vps for pairmake based on section */
+	/* assign ctx and vps for fr_pair_make based on section */
 	if (strcmp(section, "config") == 0) {
 		ctx = request;
 		ptr = &(request->config);
@@ -252,7 +256,7 @@ void *mod_json_object_to_value_pairs(json_object *json, const char *section, REQ
 		ptr = &(request->reply->vps);
 	} else {
 		/* log error - this shouldn't happen */
-		RERROR("invalid section passed for pairmake");
+		RERROR("invalid section passed for fr_pair_make");
 		/* return */
 		return NULL;
 	}
@@ -260,7 +264,7 @@ void *mod_json_object_to_value_pairs(json_object *json, const char *section, REQ
 	/* get config payload */
 	if (json_object_object_get_ex(json, section, &jobj)) {
 		/* make sure we have the correct type */
-		if (!json_object_is_type(jobj, json_type_object)) {
+		if ((jobj == NULL) || !json_object_is_type(jobj, json_type_object)) {
 			/* log error */
 			RERROR("invalid json type for '%s' section - sections must be json objects", section);
 			/* reuturn */
@@ -269,7 +273,7 @@ void *mod_json_object_to_value_pairs(json_object *json, const char *section, REQ
 		/* loop through object */
 		json_object_object_foreach(jobj, attribute, json_vp) {
 			/* check for appropriate type in value and op */
-			if (!json_object_is_type(json_vp, json_type_object)) {
+			if ((jobj == NULL) || !json_object_is_type(json_vp, json_type_object)) {
 				/* log error */
 				RERROR("invalid json type for '%s' attribute - attributes must be json objects",
 				       attribute);
@@ -282,6 +286,8 @@ void *mod_json_object_to_value_pairs(json_object *json, const char *section, REQ
 			/* create pair from json object */
 			if (json_object_object_get_ex(json_vp, "value", &jval) &&
 				json_object_object_get_ex(json_vp, "op", &jop)) {
+				/* check for null before getting type */
+				if (jval == NULL) return NULL;
 				/* make correct pairs based on json object type */
 				switch (json_object_get_type(jval)) {
 				case json_type_double:
@@ -290,7 +296,7 @@ void *mod_json_object_to_value_pairs(json_object *json, const char *section, REQ
 					/* debugging */
 					RDEBUG("adding '%s' attribute to '%s' section", attribute, section);
 					/* add pair */
-					vp = pairmake(ctx, ptr, attribute, json_object_get_string(jval),
+					vp = fr_pair_make(ctx, ptr, attribute, json_object_get_string(jval),
 						fr_str2int(fr_tokens, json_object_get_string(jop), 0));
 					/* check pair */
 					if (!vp) {
@@ -453,7 +459,7 @@ int mod_ensure_start_timestamp(json_object *json, VALUE_PAIR *vps)
 	}
 
 	/* get current event timestamp */
-	if ((vp = pairfind(vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY)) != NULL) {
+	if ((vp = fr_pair_find_by_num(vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY)) != NULL) {
 		/* get seconds value from attribute */
 		ts = vp->vp_date;
 	} else {
@@ -467,7 +473,7 @@ int mod_ensure_start_timestamp(json_object *json, VALUE_PAIR *vps)
 	memset(value, 0, sizeof(value));
 
 	/* get elapsed session time */
-	if ((vp = pairfind(vps, PW_ACCT_SESSION_TIME, 0, TAG_ANY)) != NULL) {
+	if ((vp = fr_pair_find_by_num(vps, PW_ACCT_SESSION_TIME, 0, TAG_ANY)) != NULL) {
 		/* calculate diff */
 		ts = (ts - vp->vp_integer);
 		/* calculate start time */
@@ -613,7 +619,7 @@ int mod_load_client_documents(rlm_couchbase_t *inst, CONF_SECTION *tmpl, CONF_SE
 	DEBUG3("rlm_couchbase: jrows == %s", json_object_to_json_string(jrows));
 
 	/* check for valid row value */
-	if (!json_object_is_type(jrows, json_type_array) || json_object_array_length(jrows) < 1) {
+	if ((jrows == NULL) || !json_object_is_type(jrows, json_type_array) || json_object_array_length(jrows) < 1) {
 		/* log error */
 		ERROR("rlm_couchbase: no valid rows returned from view: %s", vpath);
 		/* set return */

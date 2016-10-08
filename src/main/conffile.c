@@ -42,6 +42,8 @@ RCSID("$Id$")
 
 #include <ctype.h>
 
+bool check_config = false;
+
 typedef enum conf_property {
 	CONF_PROPERTY_INVALID = 0,
 	CONF_PROPERTY_NAME,
@@ -120,7 +122,6 @@ struct conf_part {
 typedef struct cf_file_t {
 	char const	*filename;
 	CONF_SECTION	*cs;
-	bool		input;
 	struct stat	buf;
 } cf_file_t;
 
@@ -331,7 +332,6 @@ static FILE *cf_file_open(CONF_SECTION *cs, char const *filename)
 
 	file->filename = filename;
 	file->cs = cs;
-	file->input = true;
 
 	if (fstat(fd, &file->buf) == 0) {
 #ifdef S_IWOTH
@@ -360,10 +360,9 @@ static FILE *cf_file_open(CONF_SECTION *cs, char const *filename)
 }
 
 /*
- *	Do some checks on the file as an "input" file.  i.e. one read
- *	by a module.
+ *	Do some checks on the file
  */
-static bool cf_file_input(CONF_SECTION *cs, char const *filename)
+static bool cf_file_check(CONF_SECTION *cs, char const *filename, bool check_perms)
 {
 	cf_file_t *file;
 	CONF_DATA *cd;
@@ -381,12 +380,16 @@ static bool cf_file_input(CONF_SECTION *cs, char const *filename)
 
 	file->filename = filename;
 	file->cs = cs;
-	file->input = true;
 
 	if (stat(filename, &file->buf) < 0) {
-		ERROR("Unable to open file \"%s\": %s", filename, fr_syserror(errno));
+		ERROR("Unable to check file \"%s\": %s", filename, fr_syserror(errno));
 		talloc_free(file);
 		return false;
+	}
+
+	if (!check_perms) {
+		talloc_free(file);
+		return true;
 	}
 
 #ifdef S_IWOTH
@@ -410,20 +413,27 @@ static bool cf_file_input(CONF_SECTION *cs, char const *filename)
 }
 
 
+typedef struct cf_file_callback_t {
+	int		rcode;
+	rb_walker_t	callback;
+	CONF_SECTION	*modules;
+} cf_file_callback_t;
+
+
 /*
  *	Return 0 for keep going, 1 for stop.
  */
 static int file_callback(void *ctx, void *data)
 {
-	int *rcode = ctx;
-	struct stat buf;
+	cf_file_callback_t *cb = ctx;
 	cf_file_t *file = data;
+	struct stat buf;
 
 	/*
 	 *	The file doesn't exist or we can no longer read it.
 	 */
 	if (stat(file->filename, &buf) < 0) {
-		*rcode = CF_FILE_ERROR;
+		cb->rcode = CF_FILE_ERROR;
 		return 1;
 	}
 
@@ -431,28 +441,13 @@ static int file_callback(void *ctx, void *data)
 	 *	The file changed, we'll need to re-read it.
 	 */
 	if (buf.st_mtime != file->buf.st_mtime) {
-		/*
-		 *	Set none -> whatever
-		 */
-		if (*rcode == CF_FILE_NONE) {
-			if (!file->input) {
-				*rcode = CF_FILE_CONFIG;
-				return 1;
-			}
 
-			*rcode = CF_FILE_MODULE;
-			return 0;
-
-		}
-
-		/*
-		 *	A module WAS changed, but now we discover that
-		 *	a main config file has changed.  We might as
-		 *	well re-load everything.
-		 */
-		if ((*rcode == CF_FILE_MODULE) && !file->input) {
-			*rcode = CF_FILE_CONFIG;
-			return 1;
+		if (cb->callback(cb->modules, file->cs)) {
+			cb->rcode |= CF_FILE_MODULE;
+			DEBUG3("HUP: Changed module file %s", file->filename);
+		} else {
+			DEBUG3("HUP: Changed config file %s", file->filename);
+			cb->rcode |= CF_FILE_CONFIG;
 		}
 	}
 
@@ -463,11 +458,11 @@ static int file_callback(void *ctx, void *data)
 /*
  *	See if any of the files have changed.
  */
-int cf_file_changed(CONF_SECTION *cs)
+int cf_file_changed(CONF_SECTION *cs, rb_walker_t callback)
 {
-	int rcode;
 	CONF_DATA *cd;
 	CONF_SECTION *top;
+	cf_file_callback_t cb;
 	rbtree_t *tree;
 
 	top = cf_top_section(cs);
@@ -476,10 +471,13 @@ int cf_file_changed(CONF_SECTION *cs)
 
 	tree = cd->data;
 
-	rcode = CF_FILE_NONE;
-	(void) rbtree_walk(tree, RBTREE_IN_ORDER, file_callback, &rcode);
+	cb.rcode = CF_FILE_NONE;
+	cb.callback = callback;
+	cb.modules = cf_section_sub_find(cs, "modules");
 
-	return rcode;
+	(void) rbtree_walk(tree, RBTREE_IN_ORDER, file_callback, &cb);
+
+	return cb.rcode;
 }
 
 static int _cf_section_free(CONF_SECTION *cs)
@@ -573,7 +571,7 @@ CONF_PAIR *cf_pair_dup(CONF_SECTION *parent, CONF_PAIR *cp)
 	/*
 	 *	Avoid mallocs if possible.
 	 */
-	if (!cp->item.filename || (strcmp(parent->item.filename, cp->item.filename) == 0)) {
+	if (!cp->item.filename || (parent->item.filename && !strcmp(parent->item.filename, cp->item.filename))) {
 		new->item.filename = parent->item.filename;
 	} else {
 		new->item.filename = talloc_strdup(new, cp->item.filename);
@@ -1332,12 +1330,30 @@ static inline int fr_item_validate_ipaddr(CONF_SECTION *cs, char const *name, PW
  * @note The dflt value will only be used if no matching #CONF_PAIR is found. Empty strings will not
  *	 result in the dflt value being used.
  *
+ * **PW_TYPE to data type mappings**
+ * | PW_TYPE                 | Data type          | Dynamically allocated  |
+ * | ----------------------- | ------------------ | ---------------------- |
+ * | PW_TYPE_TMPL            | ``vp_tmpl_t``      | Yes                    |
+ * | PW_TYPE_BOOLEAN         | ``bool``           | No                     |
+ * | PW_TYPE_INTEGER         | ``uint32_t``       | No                     |
+ * | PW_TYPE_SHORT           | ``uint16_t``       | No                     |
+ * | PW_TYPE_INTEGER64       | ``uint64_t``       | No                     |
+ * | PW_TYPE_SIGNED          | ``int32_t``        | No                     |
+ * | PW_TYPE_STRING          | ``char const *``   | Yes                    |
+ * | PW_TYPE_IPV4_ADDR       | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_IPV4_PREFIX     | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_IPV6_ADDR       | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_IPV6_PREFIX     | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_COMBO_IP_ADDR   | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_COMBO_IP_PREFIX | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_TIMEVAL         | ``struct timeval`` | No                     |
+ *
  * @param cs to search for matching #CONF_PAIR in.
  * @param name of #CONF_PAIR to search for.
  * @param type Data type to parse #CONF_PAIR value as.
  *	Should be one of the following ``data`` types, and one or more of the following ``flag`` types or'd together:
  *	- ``data`` #PW_TYPE_TMPL 		- @copybrief PW_TYPE_TMPL
- 					  	  Feeds the value into #tmpl_afrom_str. Value can be
+ *					  	  Feeds the value into #tmpl_afrom_str. Value can be
  *					  	  obtained when processing requests, with #tmpl_expand or #tmpl_aexpand.
  *	- ``data`` #PW_TYPE_BOOLEAN		- @copybrief PW_TYPE_BOOLEAN
  *	- ``data`` #PW_TYPE_INTEGER		- @copybrief PW_TYPE_INTEGER
@@ -1348,8 +1364,9 @@ static inline int fr_item_validate_ipaddr(CONF_SECTION *cs, char const *name, PW
  *	- ``data`` #PW_TYPE_IPV4_ADDR		- @copybrief PW_TYPE_IPV4_ADDR (IPv4 address with prefix 32).
  *	- ``data`` #PW_TYPE_IPV4_PREFIX		- @copybrief PW_TYPE_IPV4_PREFIX (IPv4 address with variable prefix).
  *	- ``data`` #PW_TYPE_IPV6_ADDR		- @copybrief PW_TYPE_IPV6_ADDR (IPv6 address with prefix 128).
+ *	- ``data`` #PW_TYPE_IPV6_PREFIX		- @copybrief PW_TYPE_IPV6_PREFIX (IPv6 address with variable prefix).
  *	- ``data`` #PW_TYPE_COMBO_IP_ADDR 	- @copybrief PW_TYPE_COMBO_IP_ADDR (IPv4/IPv6 address with
- 						  prefix 32/128).
+ *						  prefix 32/128).
  *	- ``data`` #PW_TYPE_COMBO_IP_PREFIX	- @copybrief PW_TYPE_COMBO_IP_PREFIX (IPv4/IPv6 address with
  *						  variable prefix).
  *	- ``data`` #PW_TYPE_TIMEVAL		- @copybrief PW_TYPE_TIMEVAL
@@ -1361,12 +1378,16 @@ static inline int fr_item_validate_ipaddr(CONF_SECTION *cs, char const *name, PW
  *	- ``flag`` #PW_TYPE_NOT_EMPTY		- @copybrief PW_TYPE_NOT_EMPTY
  * @param data Pointer to a global variable, or pointer to a field in the struct being populated with values.
  * @param dflt value to use, if no #CONF_PAIR is found.
- * @return -1 on error, -2 if deprecated, 0 on success (correctly parsed), 1 if default value was used.
+ * @return
+ *	- 1 if default value was used.
+ *	- 0 on success.
+ *	- -1 on error.
+ *	- -2 if deprecated.
  */
 int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *data, char const *dflt)
 {
 	int rcode;
-	bool deprecated, required, attribute, secret, file_input, cant_be_empty, tmpl, multi;
+	bool deprecated, required, attribute, secret, file_input, cant_be_empty, tmpl, multi, file_exists;
 	char **q;
 	char const *value;
 	CONF_PAIR *cp = NULL;
@@ -1381,6 +1402,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 	attribute = (type & PW_TYPE_ATTRIBUTE);
 	secret = (type & PW_TYPE_SECRET);
 	file_input = (type == PW_TYPE_FILE_INPUT);	/* check, not and */
+	file_exists = (type == PW_TYPE_FILE_EXISTS);	/* check, not and */
 	cant_be_empty = (type & PW_TYPE_NOT_EMPTY);
 	tmpl = (type & PW_TYPE_TMPL);
 	multi = (type & PW_TYPE_MULTI);
@@ -1392,7 +1414,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 	 *	Everything except templates must have a base type.
 	 */
 	if (!(type & 0xff) && !tmpl) {
-		cf_log_err(c_item, "Configuration item '%s' must have a data type", name);
+		cf_log_err(c_item, "Configuration item \"%s\" must have a data type", name);
 		return -1;
 	}
 
@@ -1407,6 +1429,8 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 	 *	section, use the default value.
 	 */
 	if (!cp) {
+		if (deprecated) return 0;	/* Don't set the default value */
+
 		rcode = 1;
 		value = dflt;
 	/*
@@ -1414,23 +1438,44 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 	 */
 	} else {
 		CONF_PAIR *next = cp;
+
 		value = cp->value;
 		cp->parsed = true;
 		c_item = &cp->item;
 
+		if (deprecated) {
+			cf_log_err(c_item, "Configuration item \"%s\" is deprecated", name);
+			return -2;
+		}
+
 		/*
-		 *	@fixme We should actually validate
-		 *	the value of the pairs too
+		 *	A quick check to see if the next item is the same.
 		 */
-		if (multi) while ((next = cf_pair_find_next(cs, next, name))) {
-			next->parsed = true;
+		if (!multi && cp->item.next && (cp->item.next->type == CONF_ITEM_PAIR)) {
+			next = cf_item_to_pair(cp->item.next);
+
+			if (strcmp(next->attr, name) == 0) {
+				WARN("%s[%d]: Ignoring duplicate configuration item '%s'",
+				     next->item.filename ? next->item.filename : "unknown",
+				     next->item.lineno, name);
+			}
+		}
+										   
+		if (multi) {
+			while ((next = cf_pair_find_next(cs, next, name)) != NULL) {
+				/*
+				 *	@fixme We should actually validate
+				 *	the value of the pairs too
+				 */
+				next->parsed = true;
+			};
 		}
 	}
 
 	if (!value) {
 		if (required) {
 		is_required:
-			cf_log_err(c_item, "Configuration item '%s' must have a value", name);
+			cf_log_err(c_item, "Configuration item \"%s\" must have a value", name);
 
 			return -1;
 		}
@@ -1439,19 +1484,12 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 
 	if ((value[0] == '\0') && cant_be_empty) {
 	cant_be_empty:
-		cf_log_err(c_item, "Configuration item '%s' must not be empty (zero length)", name);
-
-		if (!required)
-			cf_log_err(c_item, "Comment item to silence this message");
+		cf_log_err(c_item, "Configuration item \"%s\" must not be empty (zero length)", name);
+		if (!required) cf_log_err(c_item, "Comment item to silence this message");
 
 		return -1;
 	}
 
-	if (deprecated) {
-		cf_log_err(c_item, "Configuration item \"%s\" is deprecated", name);
-
-		return -2;
-	}
 
 	/*
 	 *	Process a value as a LITERAL template.  Once all of
@@ -1615,7 +1653,11 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 		 *	to be caught as early as possible, during
 		 *	server startup.
 		 */
-		if (*q && file_input && !cf_file_input(cs, *q)) {
+		if (*q && file_input && !cf_file_check(cs, *q, true)) {
+			return -1;
+		}
+
+		if (*q && file_exists && !cf_file_check(cs, *q, false)) {
 			return -1;
 		}
 		break;
@@ -1646,7 +1688,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 	case PW_TYPE_COMBO_IP_PREFIX:
 		ipaddr = data;
 
-		if (fr_pton(ipaddr, value, -1, true) < 0) {
+		if (fr_pton(ipaddr, value, -1, AF_UNSPEC, true) < 0) {
 			ERROR("%s", fr_strerror());
 			return -1;
 		}
@@ -1802,24 +1844,29 @@ static void cf_section_parse_warn(CONF_SECTION *cs)
 	}
 }
 
-/*
- *	Parse a configuration section into user-supplied variables.
+/** Parse a configuration section into user-supplied variables
+ *
+ * @param cs to parse.
+ * @param base pointer to a struct to fill with data.  Any buffers will also be talloced
+ *	using this parent as a pointer.
+ * @param variables mappings between struct fields and #CONF_ITEM s.
+ * @return
+ *	- 0 on success.
+ *	- -1 on general error.
+ *	- -2 if a deprecated #CONF_ITEM was found.
  */
-int cf_section_parse(CONF_SECTION *cs, void *base,
-		     CONF_PARSER const *variables)
+int cf_section_parse(CONF_SECTION *cs, void *base, CONF_PARSER const *variables)
 {
-	int ret;
+	int ret = 0;
 	int i;
 	void *data;
 
 	cs->variables = variables; /* this doesn't hurt anything */
 
 	if (!cs->name2) {
-		cf_log_info(cs, "%.*s%s {", cs->depth, parse_spaces,
-		       cs->name1);
+		cf_log_info(cs, "%.*s%s {", cs->depth, parse_spaces, cs->name1);
 	} else {
-		cf_log_info(cs, "%.*s%s %s {", cs->depth, parse_spaces,
-		       cs->name1, cs->name2);
+		cf_log_info(cs, "%.*s%s %s {", cs->depth, parse_spaces, cs->name1, cs->name2);
 	}
 
 	cf_section_parse_init(cs, base, variables);
@@ -1841,11 +1888,13 @@ int cf_section_parse(CONF_SECTION *cs, void *base,
 			 */
 			if (!variables[i].dflt || !subcs) {
 				ERROR("Internal sanity check 1 failed in cf_section_parse %s", variables[i].name);
-				goto error;
+				ret = -1;
+				goto finish;
 			}
 
-			if (cf_section_parse(subcs, (uint8_t *)base + variables[i].offset,
-					     (CONF_PARSER const *) variables[i].dflt) < 0) goto error;
+			ret = cf_section_parse(subcs, (uint8_t *)base + variables[i].offset,
+					       (CONF_PARSER const *) variables[i].dflt);
+			if (ret < 0) goto finish;
 			continue;
 		} /* else it's a CONF_PAIR */
 
@@ -1854,27 +1903,41 @@ int cf_section_parse(CONF_SECTION *cs, void *base,
 		} else if (base) {
 			data = ((char *)base) + variables[i].offset;
 		} else {
-			DEBUG2("Internal sanity check 2 failed in cf_section_parse");
-			goto error;
+			ERROR("Internal sanity check 2 failed in cf_section_parse");
+			ret = -1;
+			goto finish;
 		}
 
 		/*
 		 *	Parse the pair we found, or a default value.
 		 */
 		ret = cf_item_parse(cs, variables[i].name, variables[i].type, data, variables[i].dflt);
-		if (ret < 0) {
-			/*
-			 *	Be nice, and print the name of the new config item.
-			 */
-			if ((ret == -2) && (variables[i + 1].offset == variables[i].offset) &&
+		switch (ret) {
+		case 1:		/* Used default */
+			ret = 0;
+			break;
+
+		case 0:		/* OK */
+			break;
+
+		case -1:	/* Parse error */
+			goto finish;
+
+		case -2:	/* Deprecated CONF ITEM */
+			if ((variables[i + 1].offset == variables[i].offset) &&
 			    (variables[i + 1].data == variables[i].data)) {
 				cf_log_err(&(cs->item), "Replace \"%s\" with \"%s\"", variables[i].name,
 					   variables[i + 1].name);
 			}
-
-			goto error;
+			goto finish;
 		}
 	} /* for all variables in the configuration section */
+
+	/*
+	 *	Ensure we have a proper terminator, type so we catch
+	 *	missing terminators reliably
+	 */
+	rad_assert(variables[i].type == -1);
 
 	/*
 	 *	Warn about items in the configuration which weren't
@@ -1882,15 +1945,12 @@ int cf_section_parse(CONF_SECTION *cs, void *base,
 	 */
 	if (rad_debug_lvl >= 3) cf_section_parse_warn(cs);
 
-	cf_log_info(cs, "%.*s}", cs->depth, parse_spaces);
-
 	cs->base = base;
 
-	return 0;
-
- error:
 	cf_log_info(cs, "%.*s}", cs->depth, parse_spaces);
-	return -1;
+
+finish:
+	return ret;
 }
 
 
@@ -3098,12 +3158,12 @@ VALUE_PAIR *cf_pairtovp(CONF_PAIR *pair)
 	     (pair->rhs_type == T_BACK_QUOTED_STRING))) {
 		VALUE_PAIR *vp;
 
-		vp = pairmake(pair, NULL, pair->attr, NULL, pair->op);
+		vp = fr_pair_make(pair, NULL, pair->attr, NULL, pair->op);
 		if (!vp) {
 			return NULL;
 		}
 
-		if (pairmark_xlat(vp, pair->value) < 0) {
+		if (fr_pair_mark_xlat(vp, pair->value) < 0) {
 			talloc_free(vp);
 
 			return NULL;
@@ -3112,7 +3172,7 @@ VALUE_PAIR *cf_pairtovp(CONF_PAIR *pair)
 		return vp;
 	}
 
-	return pairmake(pair, NULL, pair->attr, pair->value, pair->op);
+	return fr_pair_make(pair, NULL, pair->attr, pair->value, pair->op);
 }
 
 /*

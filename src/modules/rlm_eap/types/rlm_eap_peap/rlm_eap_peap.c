@@ -30,6 +30,9 @@ typedef struct rlm_eap_peap_t {
 	fr_tls_server_conf_t *tls_conf;
 	char const *default_method_name;	//!< Default tunneled EAP type.
 	int default_method;
+
+	char const *inner_eap_module;		//!< module name for inner EAP
+	int auth_type_eap;
 	bool use_tunneled_reply;		//!< Use the reply attributes from the tunneled session in
 						//!< the non-tunneled reply to the client.
 
@@ -52,6 +55,8 @@ static CONF_PARSER module_config[] = {
 
 	{ "default_eap_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, default_method_name), "mschapv2" },
 
+	{ "inner_eap_module", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, inner_eap_module), NULL },
+
 	{ "copy_request_to_tunnel", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_peap_t, copy_request_to_tunnel), "no" },
 
 	{ "use_tunneled_reply", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_peap_t, use_tunneled_reply), "no" },
@@ -68,7 +73,7 @@ static CONF_PARSER module_config[] = {
 
 	{ "soh_virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, soh_virtual_server), NULL },
 
-	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -78,6 +83,7 @@ static CONF_PARSER module_config[] = {
 static int mod_instantiate(CONF_SECTION *cs, void **instance)
 {
 	rlm_eap_peap_t		*inst;
+	DICT_VALUE const	*dv;
 
 	*instance = inst = talloc_zero(cs, rlm_eap_peap_t);
 	if (!inst) return -1;
@@ -86,6 +92,11 @@ static int mod_instantiate(CONF_SECTION *cs, void **instance)
 	 *	Parse the configuration attributes.
 	 */
 	if (cf_section_parse(cs, inst, module_config) < 0) {
+		return -1;
+	}
+
+	if (!inst->virtual_server) {
+		ERROR("rlm_eap_peap: A 'virtual_server' MUST be defined for security");
 		return -1;
 	}
 
@@ -109,6 +120,19 @@ static int mod_instantiate(CONF_SECTION *cs, void **instance)
 	if (!inst->tls_conf) {
 		ERROR("rlm_eap_peap: Failed initializing SSL context");
 		return -1;
+	}
+
+	/*
+	 *	Don't expose this if we don't need it.
+	 */
+	if (!inst->inner_eap_module) inst->inner_eap_module = "eap";
+
+	dv = dict_valbyname(PW_AUTH_TYPE, 0, inst->inner_eap_module);
+	if (!dv) {
+		WARN("Failed to find 'Auth-Type %s' section in virtual server %s.  The server cannot proxy inner-tunnel EAP packets.",
+		     inst->inner_eap_module, inst->virtual_server);
+	} else {
+		inst->auth_type_eap = dv->value;
 	}
 
 	return 0;
@@ -161,7 +185,7 @@ static int mod_session_init(void *type_arg, eap_handler_t *handler)
 	 * EAP-TLS-Require-Client-Cert attribute will override
 	 * the require_client_cert configuration option.
 	 */
-	vp = pairfind(handler->request->config, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(handler->request->config, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
 	if (vp) {
 		client_cert = vp->vp_integer ? true : false;
 	} else {
@@ -301,7 +325,7 @@ static int mod_process(void *arg, eap_handler_t *handler)
 	/*
 	 *	Process the PEAP portion of the request.
 	 */
-	rcode = eappeap_process(handler, tls_session);
+	rcode = eappeap_process(handler, tls_session, inst->auth_type_eap);
 	switch (rcode) {
 	case RLM_MODULE_REJECT:
 		eaptls_fail(handler, 0);
@@ -320,14 +344,14 @@ static int mod_process(void *arg, eap_handler_t *handler)
 		if (peap->soh_reply_vps) {
 			RDEBUG2("Using saved attributes from the SoH reply");
 			rdebug_pair_list(L_DBG_LVL_2, request, peap->soh_reply_vps, NULL);
-			pairfilter(handler->request->reply,
+			fr_pair_list_mcopy_by_num(handler->request->reply,
 				  &handler->request->reply->vps,
 				  &peap->soh_reply_vps, 0, 0, TAG_ANY);
 		}
 		if (peap->accept_vps) {
 			RDEBUG2("Using saved attributes from the original Access-Accept");
 			rdebug_pair_list(L_DBG_LVL_2, request, peap->accept_vps, NULL);
-			pairfilter(handler->request->reply,
+			fr_pair_list_mcopy_by_num(handler->request->reply,
 				  &handler->request->reply->vps,
 				  &peap->accept_vps, 0, 0, TAG_ANY);
 		} else if (peap->use_tunneled_reply) {

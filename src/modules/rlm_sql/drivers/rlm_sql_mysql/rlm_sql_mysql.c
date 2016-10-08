@@ -92,16 +92,14 @@ static CONF_PARSER tls_config[] = {
 	 *	MySQL Specific TLS attributes
 	 */
 	{ "cipher", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_mysql_config_t, tls_cipher), NULL },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static const CONF_PARSER driver_config[] = {
 	{ "tls", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) tls_config },
 
 	{ "warnings", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sql_mysql_config_t, warnings_str), "auto" },
-
-	{NULL, -1, 0, NULL, NULL}
+	CONF_PARSER_TERMINATOR
 };
 
 /* Prototypes */
@@ -391,9 +389,15 @@ static int sql_num_fields(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *con
 	rlm_sql_mysql_conn_t *conn = handle->conn;
 
 #if MYSQL_VERSION_ID >= 32224
+	/*
+	 *	Count takes a connection handle
+	 */
 	if (!(num = mysql_field_count(conn->sock))) {
 #else
-	if (!(num = mysql_num_fields(conn->sock))) {
+	/*
+	 *	Fields takes a result struct
+	 */
+	if (!(num = mysql_num_fields(conn->result))) {
 #endif
 		return -1;
 	}

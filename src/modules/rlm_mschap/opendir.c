@@ -52,7 +52,7 @@ static rlm_rcode_t getUserNodeRef(REQUEST *request, char* inUserName, char **out
 	tDataBuffer	     	*tDataBuff	= NULL;
 	tDirNodeReference       nodeRef		= 0;
 	long		    	status		= eDSNoErr;
-	char			*what		= NULL;
+	char const		*what		= NULL;
 	char			*status_name	= NULL;
 	tContextData	    	context		= 0;
 	uint32_t	   	nodeCount	= 0;
@@ -63,9 +63,9 @@ static rlm_rcode_t getUserNodeRef(REQUEST *request, char* inUserName, char **out
 	tDataList	       *pRecType	= NULL;
 	tDataList	       *pAttrType	= NULL;
 	uint32_t	   	recCount	= 0;
-	tRecordEntry	    *pRecEntry	= NULL;
+	tRecordEntry	    	*pRecEntry	= NULL;
 	tAttributeListRef       attrListRef	= 0;
-	char		    *pUserLocation	= NULL;
+	char		    	*pUserLocation	= NULL;
 	tAttributeValueListRef  valueRef	= 0;
 	tDataList	       *pUserNode	= NULL;
 	rlm_rcode_t		result		= RLM_MODULE_FAIL;
@@ -241,7 +241,7 @@ rlm_rcode_t od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR *
 	uint32_t		uiLen		 = 0;
 	char			*username_string = NULL;
 	char			*shortUserName	 = NULL;
-	VALUE_PAIR		*response	 = pairfind(request->packet->vps, PW_MSCHAP2_RESPONSE, VENDORPEC_MICROSOFT, TAG_ANY);
+	VALUE_PAIR		*response	 = fr_pair_find_by_num(request->packet->vps, PW_MSCHAP2_RESPONSE, VENDORPEC_MICROSOFT, TAG_ANY);
 #ifndef NDEBUG
 	unsigned int t;
 #endif

@@ -28,15 +28,15 @@ RCSIDH(other_h, "$Id$")
 #include <freeradius-devel/connection.h>
 #include "config.h"
 
-#ifdef HAVE_JSON_JSONH
-#define HAVE_JSON
-#endif
-
 #define CURL_NO_OLDIES 1
 #include <curl/curl.h>
 
 #ifdef HAVE_JSON
-#include <json/json.h>
+#  if defined(HAVE_JSONMC_JSON_H)
+#    include <json-c/json.h>
+#  elif defined(HAVE_JSON_JSON_H)
+#    include <json/json.h>
+#  endif
 #endif
 
 #define REST_URI_MAX_LEN		2048
@@ -153,7 +153,7 @@ typedef struct rlm_rest_t {
 	struct timeval		connect_timeout_tv;	//!< Connection timeout timeval.
 	long			connect_timeout;	//!< Connection timeout ms.
 
-	fr_connection_pool_t	*conn_pool;	//!< Pointer to the connection pool.
+	fr_connection_pool_t	*pool;		//!< Pointer to the connection pool.
 
 	rlm_rest_section_t	authorize;	//!< Configuration specific to authorisation.
 	rlm_rest_section_t	authenticate;	//!< Configuration specific to authentication.

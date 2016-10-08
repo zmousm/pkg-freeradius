@@ -697,7 +697,7 @@ ldap_rcode_t rlm_ldap_bind(rlm_ldap_t const *inst, REQUEST *request, ldap_handle
 	rad_assert(*pconn && (*pconn)->handle);
 	rad_assert(!retry || inst->pool);
 
-#ifndef HAVE_LDAP_SASL_INTERACTIVE_BIND
+#ifndef WITH_SASL
 	rad_assert(!sasl->mech);
 #endif
 
@@ -712,7 +712,7 @@ ldap_rcode_t rlm_ldap_bind(rlm_ldap_t const *inst, REQUEST *request, ldap_handle
 	 */
 	num = retry ? fr_connection_pool_get_num(inst->pool) : 0;
 	for (i = num; i >= 0; i--) {
-#ifdef HAVE_LDAP_SASL_INTERACTIVE_BIND
+#ifdef WITH_SASL
 		if (sasl && sasl->mech) {
 			status = rlm_ldap_sasl_interactive(inst, request, *pconn, dn, password, sasl,
 							   &error, &extra);
@@ -1094,7 +1094,7 @@ char const *rlm_ldap_find_user(rlm_ldap_t const *inst, REQUEST *request, ldap_ha
 	 *	If the caller isn't looking for the result we can just return the current userdn value.
 	 */
 	if (!force) {
-		vp = pairfind(request->config, PW_LDAP_USERDN, 0, TAG_ANY);
+		vp = fr_pair_find_by_num(request->config, PW_LDAP_USERDN, 0, TAG_ANY);
 		if (vp) {
 			RDEBUG("Using user DN from request \"%s\"", vp->vp_strvalue);
 			*rcode = RLM_MODULE_OK;
@@ -1168,7 +1168,7 @@ char const *rlm_ldap_find_user(rlm_ldap_t const *inst, REQUEST *request, ldap_ha
 			RINDENT();
 			for (entry = ldap_first_entry((*pconn)->handle, *result);
 			     entry;
-			     entry = ldap_next_entry((*pconn)->handle, NULL)) {
+			     entry = ldap_next_entry((*pconn)->handle, entry)) {
 				dn = ldap_get_dn((*pconn)->handle, entry);
 				REDEBUG("%s", dn);
 				ldap_memfree(dn);
@@ -1198,7 +1198,7 @@ char const *rlm_ldap_find_user(rlm_ldap_t const *inst, REQUEST *request, ldap_ha
 	rlm_ldap_normalise_dn(dn, dn);
 
 	/*
-	 *	We can't use pairmake here to copy the value into the
+	 *	We can't use fr_pair_make here to copy the value into the
 	 *	attribute, as the dn must be copied into the attribute
 	 *	verbatim (without de-escaping).
 	 *
@@ -1206,15 +1206,14 @@ char const *rlm_ldap_find_user(rlm_ldap_t const *inst, REQUEST *request, ldap_ha
 	 *	we pass the string back to libldap we must not alter it.
 	 */
 	RDEBUG("User object found at DN \"%s\"", dn);
-	vp = pairmake(request, &request->config, "LDAP-UserDN", NULL, T_OP_EQ);
+	vp = fr_pair_make(request, &request->config, "LDAP-UserDN", NULL, T_OP_EQ);
 	if (vp) {
-		pairstrcpy(vp, dn);
+		fr_pair_value_strcpy(vp, dn);
 		*rcode = RLM_MODULE_OK;
 	}
-
-finish:
 	ldap_memfree(dn);
 
+finish:
 	if ((freeit || (*rcode != RLM_MODULE_OK)) && *result) {
 		ldap_msgfree(*result);
 		*result = NULL;
@@ -1277,11 +1276,11 @@ void rlm_ldap_check_reply(rlm_ldap_t const *inst, REQUEST *request)
 	*	an LDAP attribute and a password reference attribute in the control list.
 	*/
 	if (inst->expect_password && (rad_debug_lvl > 1)) {
-		if (!pairfind(request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY) &&
-		    !pairfind(request->config, PW_NT_PASSWORD, 0, TAG_ANY) &&
-		    !pairfind(request->config, PW_USER_PASSWORD, 0, TAG_ANY) &&
-		    !pairfind(request->config, PW_PASSWORD_WITH_HEADER, 0, TAG_ANY) &&
-		    !pairfind(request->config, PW_CRYPT_PASSWORD, 0, TAG_ANY)) {
+		if (!fr_pair_find_by_num(request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY) &&
+		    !fr_pair_find_by_num(request->config, PW_NT_PASSWORD, 0, TAG_ANY) &&
+		    !fr_pair_find_by_num(request->config, PW_USER_PASSWORD, 0, TAG_ANY) &&
+		    !fr_pair_find_by_num(request->config, PW_PASSWORD_WITH_HEADER, 0, TAG_ANY) &&
+		    !fr_pair_find_by_num(request->config, PW_CRYPT_PASSWORD, 0, TAG_ANY)) {
 			RWDEBUG("No \"known good\" password added. Ensure the admin user has permission to "
 				"read the password attribute");
 			RWDEBUG("PAP authentication will *NOT* work with Active Directory (if that is what you "
@@ -1327,6 +1326,41 @@ static int rlm_ldap_rebind(LDAP *handle, LDAP_CONST char *url, UNUSED ber_tag_t 
 	return LDAP_SUCCESS;
 }
 #endif
+
+int rlm_ldap_global_init(rlm_ldap_t *inst)
+{
+	int ldap_errno;
+
+	rad_assert(inst); /* clang scan */
+
+#define do_ldap_global_option(_option, _name, _value) \
+	if (ldap_set_option(NULL, _option, _value) != LDAP_OPT_SUCCESS) { \
+		ldap_get_option(NULL, LDAP_OPT_ERROR_NUMBER, &ldap_errno); \
+		ERROR("Failed setting global option %s: %s", _name, \
+			 (ldap_errno != LDAP_SUCCESS) ? ldap_err2string(ldap_errno) : "Unknown error"); \
+		return -1;\
+	}
+
+#define maybe_ldap_global_option(_option, _name, _value) \
+	if (_value) do_ldap_global_option(_option, _name, _value)
+
+#ifdef LDAP_OPT_DEBUG_LEVEL
+	/*
+	 *	Can't use do_ldap_global_option
+	 */
+	if (inst->ldap_debug) do_ldap_global_option(LDAP_OPT_DEBUG_LEVEL, "ldap_debug", &(inst->ldap_debug));
+#endif
+
+#ifdef LDAP_OPT_X_TLS_RANDOM_FILE
+	/*
+	 *	OpenLDAP will error out if we attempt to set
+	 *	this on a handle. Presumably it's global in
+	 *	OpenSSL too.
+	 */
+	maybe_ldap_global_option(LDAP_OPT_X_TLS_RANDOM_FILE, "random_file", inst->tls_random_file);
+#endif
+	return 0;
+}
 
 /** Close and delete a connection
  *
@@ -1404,17 +1438,8 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 		goto error;\
 	}
 
-#define do_ldap_global_option(_option, _name, _value) \
-	if (ldap_set_option(NULL, _option, _value) != LDAP_OPT_SUCCESS) { \
-		ldap_get_option(conn->handle, LDAP_OPT_ERROR_NUMBER, &ldap_errno); \
-		LDAP_ERR("Failed setting global option %s: %s", _name, \
-			 (ldap_errno != LDAP_SUCCESS) ? ldap_err2string(ldap_errno) : "Unknown error"); \
-		goto error;\
-	}
-
-	if (inst->ldap_debug) {
-		do_ldap_global_option(LDAP_OPT_DEBUG_LEVEL, "ldap_debug", &(inst->ldap_debug));
-	}
+#define maybe_ldap_option(_option, _name, _value) \
+	if (_value) do_ldap_option(_option, _name, _value)
 
 	/*
 	 *	Leave "dereference" unset to use the OpenLDAP default.
@@ -1474,9 +1499,6 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 		do_ldap_option(LDAP_OPT_X_TLS, "tls_mode", &(inst->tls_mode));
 	}
 
-#  define maybe_ldap_option(_option, _name, _value) \
-	if (_value) do_ldap_option(_option, _name, _value)
-
 	maybe_ldap_option(LDAP_OPT_X_TLS_CACERTFILE, "ca_file", inst->tls_ca_file);
 	maybe_ldap_option(LDAP_OPT_X_TLS_CACERTDIR, "ca_path", inst->tls_ca_path);
 
@@ -1486,7 +1508,6 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 	 */
 	maybe_ldap_option(LDAP_OPT_X_TLS_CERTFILE, "certificate_file", inst->tls_certificate_file);
 	maybe_ldap_option(LDAP_OPT_X_TLS_KEYFILE, "private_key_file", inst->tls_private_key_file);
-	maybe_ldap_option(LDAP_OPT_X_TLS_RANDOM_FILE, "random_file", inst->tls_random_file);
 
 #  ifdef LDAP_OPT_X_TLS_NEVER
 	if (inst->tls_require_cert_str) {

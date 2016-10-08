@@ -232,8 +232,6 @@ ATTRIBUTE	OTP-Challenge				1145	string
 ATTRIBUTE	EAP-Session-Id				1146	octets
 ATTRIBUTE	Chbind-Response-Code			1147	integer
 
-ATTRIBUTE	Chbind-Response-Code			1147	integer
-
 VALUE	Chbind-Response-Code		success			2
 VALUE	Chbind-Response-Code		failure			3
 
@@ -272,6 +270,8 @@ ATTRIBUTE	SSHA2-256-Password			1178	octets
 ATTRIBUTE	SSHA2-384-Password			1179	octets
 ATTRIBUTE	SSHA2-512-Password			1180	octets
 
+ATTRIBUTE	MS-CHAP-Peer-Challenge			1192	octets
+
 #
 #	Range:	1200-1279
 #		EAP-SIM (and other EAP type) weirdness.
@@ -307,6 +307,9 @@ ATTRIBUTE	EAP-Sim-KC3				1214	octets
 
 ATTRIBUTE	EAP-Sim-Ki				1215	octets
 ATTRIBUTE	EAP-Sim-Algo-Version			1216	integer
+
+ATTRIBUTE	Outer-Realm-Name			1218	string
+ATTRIBUTE	Inner-Realm-Name			1219	string
 
 #
 #	Range:	1280 - 1535
@@ -533,6 +536,15 @@ ATTRIBUTE	TLS-PSK-Identity			1933	string
 
 # 1934 - 1939: reserved for future cert attributes
 
+# 1940 - 1949: reserved for TLS session caching, mostly in 3.1
+
+# Set by EAP-TLS code
+ATTRIBUTE	TLS-OCSP-Cert-Valid			1943    integer
+VALUE	TLS-OCSP-Cert-Valid		unknown			3
+VALUE	TLS-OCSP-Cert-Valid		skipped			2
+VALUE	TLS-OCSP-Cert-Valid		yes			1
+VALUE	TLS-OCSP-Cert-Valid		no			0
+
 #
 #	Range:	1940-2099
 #		Free
@@ -596,30 +608,12 @@ ATTRIBUTE	Radclient-Test-Name			2200	string
 #
 
 VALUE	Auth-Type			Local			1
-VALUE	Auth-Type			System			2
-VALUE	Auth-Type			SecurID			3
 VALUE	Auth-Type			Reject			4
-VALUE	Auth-Type			ActivCard		5
-VALUE	Auth-Type			EAP			6
 
 #
 #	FreeRADIUS extensions (most originally from Cistron)
 #
 VALUE	Auth-Type			Accept			254
-
-VALUE	Auth-Type			PAP			1024
-VALUE	Auth-Type			CHAP			1025
-# 1026 was LDAP, but we deleted it.  Adding it back will break the
-# ldap module.
-VALUE	Auth-Type			PAM			1027
-VALUE	Auth-Type			MS-CHAP			1028
-VALUE	Auth-Type			MSCHAP			1028
-VALUE	Auth-Type			Kerberos		1029
-VALUE	Auth-Type			CRAM			1030
-VALUE	Auth-Type			NS-MTA-MD5		1031
-# 1032 is unused (was a duplicate of CRAM)
-VALUE	Auth-Type			SMB			1033
-VALUE	Auth-Type			MS-CHAP-V2		1034
 
 #
 #	Authorization type, too.
@@ -799,7 +793,7 @@ VALUE	EAP-Type			IKEv2			49
 VALUE	EAP-Type			AKA2			50
 VALUE	EAP-Type			GPSK			51
 VALUE	EAP-Type			PWD			52
-VALUE	EAP-Type			EVEv1			53
+VALUE	EAP-Type			EKEv1			53
 
 #
 #	And this is what most people mean by MS-CHAPv2

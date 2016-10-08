@@ -32,7 +32,6 @@ RCSID("$Id$")
 #include <freeradius-devel/rad_assert.h>
 
 #include <libcouchbase/couchbase.h>
-#include <json.h>
 
 #include "mod.h"
 #include "couchbase.h"
@@ -43,7 +42,7 @@ RCSID("$Id$")
  */
 static const CONF_PARSER client_config[] = {
 	{ "view", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_couchbase_t, client_view), "_design/client/_view/by_name" },
-	{NULL, -1, 0, NULL, NULL}     /* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 /**
@@ -67,7 +66,7 @@ static const CONF_PARSER module_config[] = {
 	{ "simul_vkey", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_couchbase_t, simul_vkey), "%{tolower:%{%{Stripped-User-Name}:-%{User-Name}}}" },
 	{ "verify_simul", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_couchbase_t, verify_simul), NULL }, /* NULL defaults to "no" */
 #endif
-	{NULL, -1, 0, NULL, NULL}     /* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 /** Initialize the rlm_couchbase module
@@ -284,7 +283,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	rad_assert(request->packet != NULL);
 
 	/* sanity check */
-	if ((vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) == NULL) {
+	if ((vp = fr_pair_find_by_num(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) == NULL) {
 		/* log debug */
 		RDEBUG("could not find status type in packet");
 		/* return */
@@ -361,7 +360,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	switch (status) {
 	case PW_STATUS_START:
 		/* add start time */
-		if ((vp = pairfind(request->packet->vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY)) != NULL) {
+		if ((vp = fr_pair_find_by_num(request->packet->vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY)) != NULL) {
 			/* add to json object */
 			json_object_object_add(cookie->jobj, "startTimestamp",
 					       mod_value_pair_to_json_object(request, vp));
@@ -370,7 +369,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 
 	case PW_STATUS_STOP:
 		/* add stop time */
-		if ((vp = pairfind(request->packet->vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY)) != NULL) {
+		if ((vp = fr_pair_find_by_num(request->packet->vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY)) != NULL) {
 			/* add to json object */
 			json_object_object_add(cookie->jobj, "stopTimestamp",
 					       mod_value_pair_to_json_object(request, vp));
@@ -479,13 +478,13 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 
 	/* do nothing if this is not enabled */
 	if (inst->check_simul != true) {
-		RDEBUG3("mod_checksimul returning noop - not enabled");
+		RWDEBUG("Simultaneous-Use checking requires 'simul_count_query' to be configured");
 		return RLM_MODULE_NOOP;
 	}
 
 	/* ensure valid username in request */
-	if ((!request->username) || (request->username->vp_length == '\0')) {
-		RDEBUG3("mod_checksimul - invalid username");
+	if ((!request->username) || (request->username->vp_length == 0)) {
+		REDEBUG("Zero Length username not permitted");
 		return RLM_MODULE_INVALID;
 	}
 
@@ -608,12 +607,12 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 	request->simul_count = 0;
 
 	/* get client ip address for MPP detection below */
-	if ((vp = pairfind(request->packet->vps, PW_FRAMED_IP_ADDRESS, 0, TAG_ANY)) != NULL) {
+	if ((vp = fr_pair_find_by_num(request->packet->vps, PW_FRAMED_IP_ADDRESS, 0, TAG_ANY)) != NULL) {
 		client_ip_addr = vp->vp_ipaddr;
 	}
 
 	/* get calling station id for MPP detection below */
-	if ((vp = pairfind(request->packet->vps, PW_CALLING_STATION_ID, 0, TAG_ANY)) != NULL) {
+	if ((vp = fr_pair_find_by_num(request->packet->vps, PW_CALLING_STATION_ID, 0, TAG_ANY)) != NULL) {
 		client_cs_id = vp->vp_strvalue;
 	}
 

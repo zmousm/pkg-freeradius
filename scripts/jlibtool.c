@@ -79,7 +79,7 @@
 #  define LD_LIBRARY_PATH_LOCAL		"DYLD_FALLBACK_LIBRARY_PATH"
 #endif
 
-#if defined(__linux__) || defined(__FreeBSD__) || defined(__NetBSD__)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__NetBSD__) || (defined(__sun) && defined(__GNUC__))
 #  define SHELL_CMD 			"/bin/sh"
 #  define DYNAMIC_LIB_EXT		"so"
 #  define MODULE_LIB_EXT		"so"
@@ -93,14 +93,18 @@
 #  define SHARED_OPTS			"-shared"
 #  define MODULE_OPTS			"-shared"
 #  define LINKER_FLAG_PREFIX		"-Wl,"
+#if !defined(__sun)
 #  define DYNAMIC_LINK_OPTS		LINKER_FLAG_PREFIX "-export-dynamic"
+#else
+#  define DYNAMIC_LINK_OPTS		""
+#endif
 #  define ADD_MINUS_L
 #  define LD_RUN_PATH			"LD_RUN_PATH"
 #  define LD_LIBRARY_PATH		"LD_LIBRARY_PATH"
 #  define LD_LIBRARY_PATH_LOCAL		LD_LIBRARY_PATH
 #endif
 
-#if defined(__sun)
+#if defined(__sun) && !defined(__GNUC__)
 #  define SHELL_CMD			"/bin/sh"
 #  define DYNAMIC_LIB_EXT		"so"
 #  define MODULE_LIB_EXT		"so"
@@ -2228,21 +2232,25 @@ static int run_mode(command_t *cmd)
 
 		strcpy(libpath, cmd->arglist->vals[0]);
 		add_dotlibs(libpath);
-	l = strrchr(libpath, '/');
-	if (!l) l = strrchr(libpath, '\\');
-	if (l) {
-		*l = '\0';
-		l = libpath;
-	} else {
-		l = ".libs/";
-	}
+		l = strrchr(libpath, '/');
+		if (!l) l = strrchr(libpath, '\\');
+		if (l) {
+			*l = '\0';
+			l = libpath;
+		} else {
+			l = ".libs/";
+		}
 
-	l = "./build/lib/.libs";
-	setenv(LD_LIBRARY_PATH_LOCAL, l, 1);
-	rv = run_command(cmd, cmd->arglist);
+		l = "./build/lib/.libs";
+		setenv(LD_LIBRARY_PATH_LOCAL, l, 1);
+#ifdef __APPLE__
+		setenv("DYLD_FALLBACK_LIBRARY_PATH", l, 1);
+#endif
+		setenv("FR_LIBRARY_PATH", "./build/lib/local/.libs", 1);
+		rv = run_command(cmd, cmd->arglist);
 		if (rv) goto finish;
 	}
-	  break;
+		break;
 
 	default:
 		break;

@@ -130,6 +130,7 @@ $INCLUDE dictionary.3gpp2
 $INCLUDE dictionary.acc
 $INCLUDE dictionary.acme
 $INCLUDE dictionary.actelis
+$INCLUDE dictionary.adtran
 $INCLUDE dictionary.airespace
 $INCLUDE dictionary.alcatel
 $INCLUDE dictionary.alcatel.sr
@@ -146,6 +147,7 @@ $INCLUDE dictionary.ascend
 $INCLUDE dictionary.bay
 $INCLUDE dictionary.bintec
 $INCLUDE dictionary.bluecoat
+$INCLUDE dictionary.boingo
 $INCLUDE dictionary.broadsoft
 $INCLUDE dictionary.brocade
 $INCLUDE dictionary.bskyb
@@ -153,6 +155,7 @@ $INCLUDE dictionary.bt
 $INCLUDE dictionary.cablelabs
 $INCLUDE dictionary.cabletron
 $INCLUDE dictionary.camiant
+$INCLUDE dictionary.checkpoint
 $INCLUDE dictionary.chillispot
 $INCLUDE dictionary.cisco
 $INCLUDE dictionary.cisco.asa
@@ -192,6 +195,7 @@ $INCLUDE dictionary.foundry
 $INCLUDE dictionary.gandalf
 $INCLUDE dictionary.gemtek
 $INCLUDE dictionary.h3c
+$INCLUDE dictionary.hillstone
 $INCLUDE dictionary.hp
 $INCLUDE dictionary.huawei
 $INCLUDE dictionary.iea
@@ -203,11 +207,13 @@ $INCLUDE dictionary.juniper
 $INCLUDE dictionary.karlnet
 $INCLUDE dictionary.kineto
 $INCLUDE dictionary.lancom
+$INCLUDE dictionary.lantronix
 $INCLUDE dictionary.livingston
 $INCLUDE dictionary.localweb
 $INCLUDE dictionary.lucent
 $INCLUDE dictionary.manzara
 $INCLUDE dictionary.meinberg
+$INCLUDE dictionary.meraki
 $INCLUDE dictionary.merit
 $INCLUDE dictionary.meru
 $INCLUDE dictionary.microsoft
@@ -246,6 +252,7 @@ $INCLUDE dictionary.riverstone
 $INCLUDE dictionary.roaringpenguin
 $INCLUDE dictionary.ruggedcom
 $INCLUDE dictionary.ruckus
+$INCLUDE dictionary.sangoma
 $INCLUDE dictionary.shasta
 $INCLUDE dictionary.sg
 $INCLUDE dictionary.shiva

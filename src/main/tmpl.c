@@ -251,7 +251,7 @@ VALUE_PAIR **radius_list(REQUEST *request, pair_lists_t list)
 		if (request->coa && /* match reply with request */
 		    (request->coa->proxy->code == PW_CODE_DISCONNECT_REQUEST) &&
 		    request->coa->proxy_reply) {
-			return &request->coa->proxy->vps;
+			return &request->coa->proxy_reply->vps;
 		}
 		break;
 #endif
@@ -300,11 +300,11 @@ RADIUS_PACKET *radius_packet(REQUEST *request, pair_lists_t list)
 #ifdef WITH_COA
 	case PAIR_LIST_COA:
 	case PAIR_LIST_DM:
-		return request->coa->packet;
+		return request->coa->proxy;
 
 	case PAIR_LIST_COA_REPLY:
 	case PAIR_LIST_DM_REPLY:
-		return request->coa->reply;
+		return request->coa->proxy_reply;
 #endif
 	}
 
@@ -339,7 +339,7 @@ TALLOC_CTX *radius_list_ctx(REQUEST *request, pair_lists_t list)
 		return request;
 
 	case PAIR_LIST_STATE:
-		return request;
+		return request->state_ctx;
 
 #ifdef WITH_PROXY
 	case PAIR_LIST_PROXY_REQUEST:
@@ -958,7 +958,7 @@ ssize_t tmpl_afrom_str(TALLOC_CTX *ctx, vp_tmpl_t **out, char const *in, size_t 
 	parse:
 		if (cf_new_escape && do_unescape) {
 			slen = value_data_from_str(ctx, &data, &data_type, NULL, in, inlen, quote);
-			rad_assert(slen >= 0);
+			if (slen < 0) return 0;
 
 			vpt = tmpl_alloc(ctx, TMPL_TYPE_LITERAL, data.strvalue, talloc_array_length(data.strvalue) - 1);
 			talloc_free(data.ptr);
@@ -1190,7 +1190,7 @@ int tmpl_cast_to_vp(VALUE_PAIR **out, REQUEST *request,
 
 	*out = NULL;
 
-	vp = pairalloc(request, cast);
+	vp = fr_pair_afrom_da(request, cast);
 	if (!vp) return -1;
 
 	if (vpt->type == TMPL_TYPE_DATA) {
@@ -1204,7 +1204,7 @@ int tmpl_cast_to_vp(VALUE_PAIR **out, REQUEST *request,
 
 	rcode = tmpl_aexpand(vp, &p, request, vpt, NULL, NULL);
 	if (rcode < 0) {
-		pairfree(&vp);
+		fr_pair_list_free(&vp);
 		return rcode;
 	}
 	data.strvalue = p;
@@ -1216,9 +1216,9 @@ int tmpl_cast_to_vp(VALUE_PAIR **out, REQUEST *request,
 		vp->data.ptr = talloc_steal(vp, data.ptr);
 		vp->vp_length = rcode;
 
-	} else if (pairparsevalue(vp, data.strvalue, rcode) < 0) {
+	} else if (fr_pair_value_from_str(vp, data.strvalue, rcode) < 0) {
 		talloc_free(data.ptr);
-		pairfree(&vp);
+		fr_pair_list_free(&vp);
 		return -1;
 	}
 
@@ -2038,9 +2038,9 @@ int tmpl_copy_vps(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, vp_tmpl_t
 	for (vp = tmpl_cursor_init(&err, &from, request, vpt);
 	     vp;
 	     vp = tmpl_cursor_next(&from, vpt)) {
-		vp = paircopyvp(ctx, vp);
+		vp = fr_pair_copy(ctx, vp);
 		if (!vp) {
-			pairfree(out);
+			fr_pair_list_free(out);
 			return -4;
 		}
 		fr_cursor_insert(&to, vp);
@@ -2197,7 +2197,7 @@ void tmpl_verify(char const *file, int line, vp_tmpl_t const *vpt)
 		}
 
 		if (vpt->tmpl_da->flags.is_unknown) {
-			if (vpt->tmpl_da != (DICT_ATTR *)&vpt->data.attribute.unknown.da) {
+			if (vpt->tmpl_da != (DICT_ATTR const *)&vpt->data.attribute.unknown.da) {
 				FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: TMPL_TYPE_ATTR "
 					     "da is marked as unknown, but does not point to the template's "
 					     "unknown da buffer", file, line);
