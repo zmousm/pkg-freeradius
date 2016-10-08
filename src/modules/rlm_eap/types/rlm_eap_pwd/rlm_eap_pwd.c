@@ -46,7 +46,7 @@ static CONF_PARSER pwd_module_config[] = {
 	{ "fragment_size", FR_CONF_OFFSET(PW_TYPE_INTEGER, eap_pwd_t, fragment_size), "1020" },
 	{ "server_id", FR_CONF_OFFSET(PW_TYPE_STRING, eap_pwd_t, server_id), NULL },
 	{ "virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, eap_pwd_t, virtual_server), NULL },
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static int mod_detach (void *arg)
@@ -177,7 +177,7 @@ static int mod_session_init (void *instance, eap_handler_t *handler)
 
 	if (!inst || !handler) {
 		ERROR("rlm_eap_pwd: Initiate, NULL data provided");
-		return -1;
+		return 0;
 	}
 
 	/*
@@ -185,7 +185,7 @@ static int mod_session_init (void *instance, eap_handler_t *handler)
 	*/
 	if (!inst->server_id) {
 		ERROR("rlm_eap_pwd: Server ID is not configured");
-		return -1;
+		return 0;
 	}
 	switch (inst->group) {
 	case 19:
@@ -197,10 +197,10 @@ static int mod_session_init (void *instance, eap_handler_t *handler)
 
 	default:
 		ERROR("rlm_eap_pwd: Group is not supported");
-		return -1;
+		return 0;
 	}
 
-	if ((session = talloc_zero(handler, pwd_session_t)) == NULL) return -1;
+	if ((session = talloc_zero(handler, pwd_session_t)) == NULL) return 0;
 	talloc_set_destructor(session, _free_pwd_session);
 	/*
 	 * set things up so they can be free'd reliably
@@ -221,7 +221,7 @@ static int mod_session_init (void *instance, eap_handler_t *handler)
 	 *	The admin can dynamically change the MTU.
 	 */
 	session->mtu = inst->fragment_size;
-	vp = pairfind(handler->request->packet->vps, PW_FRAMED_MTU, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(handler->request->packet->vps, PW_FRAMED_MTU, 0, TAG_ANY);
 
 	/*
 	 *	session->mtu is *our* MTU.  We need to subtract off the EAP
@@ -246,7 +246,7 @@ static int mod_session_init (void *instance, eap_handler_t *handler)
 	 */
 	session->out_len = sizeof(pwd_id_packet_t) + strlen(inst->server_id);
 	if ((session->out = talloc_zero_array(session, uint8_t, session->out_len)) == NULL) {
-		return -1;
+		return 0;
 	}
 
 	packet = (pwd_id_packet_t *)session->out;
@@ -279,9 +279,8 @@ static int mod_process(void *arg, eap_handler_t *handler)
 	uint8_t exch, *in, *ptr, msk[MSK_EMSK_LEN], emsk[MSK_EMSK_LEN];
 	uint8_t peer_confirm[SHA256_DIGEST_LENGTH];
 	BIGNUM *x = NULL, *y = NULL;
-	char *p;
 
-	if (!handler || ((eap_ds = handler->eap_ds) == NULL) || !inst) return 0;
+	if (((eap_ds = handler->eap_ds) == NULL) || !inst) return 0;
 
 	session = (pwd_session_t *)handler->opaque;
 	request = handler->request;
@@ -426,20 +425,16 @@ static int mod_process(void *arg, eap_handler_t *handler)
 			RDEBUG("pwd unable to create fake request!");
 			return 0;
 		}
-		fake->username = pairmake_packet("User-Name", NULL, T_OP_EQ);
+		fake->username = fr_pair_afrom_num(fake->packet, PW_USER_NAME, 0);
 		if (!fake->username) {
-			RDEBUG("pwd unanable to create value pair for username!");
+			RDEBUG("Failed creating pair for peer id");
 			talloc_free(fake);
 			return 0;
 		}
-		fake->username->vp_length = session->peer_id_len;
-		fake->username->vp_strvalue = p = talloc_array(fake->username, char, fake->username->vp_length + 1);
-		memcpy(p, session->peer_id, session->peer_id_len);
-		p[fake->username->vp_length] = '\0';
+		fr_pair_value_bstrncpy(fake->username, session->peer_id, session->peer_id_len);
+		fr_pair_add(&fake->packet->vps, fake->username);
 
-		pairadd(&fake->packet->vps, fake->username);
-
-		if ((vp = pairfind(request->config, PW_VIRTUAL_SERVER, 0, TAG_ANY)) != NULL) {
+		if ((vp = fr_pair_find_by_num(request->config, PW_VIRTUAL_SERVER, 0, TAG_ANY)) != NULL) {
 			fake->server = vp->vp_strvalue;
 		} else if (inst->virtual_server) {
 			fake->server = inst->virtual_server;
@@ -475,7 +470,7 @@ static int mod_process(void *arg, eap_handler_t *handler)
 		RDEBUG("Got tunneled reply code %d", fake->reply->code);
 		rdebug_pair_list(L_DBG_LVL_1, request, fake->reply->vps, NULL);
 
-		if ((pw = pairfind(fake->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY)) == NULL) {
+		if ((pw = fr_pair_find_by_num(fake->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY)) == NULL) {
 			DEBUG2("failed to find password for %s to do pwd authentication",
 			session->peer_id);
 			talloc_free(fake);

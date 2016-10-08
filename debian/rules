@@ -12,6 +12,9 @@
 
 # Uncomment this to turn on verbose mode.
 export DH_VERBOSE=1
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/default.mk
+
 
 .NOTPARALLEL:
 
@@ -26,7 +29,7 @@ logdir          = /var/log/$(package)
 pkgdocdir       = /usr/share/doc/$(package)
 raddbdir        = /etc/$(package)
 
-modulelist=krb5 ldap sql_mysql sql_iodbc sql_postgresql dhcp
+modulelist=krb5 ldap sql_mysql sql_iodbc sql_postgresql dhcp redis rest yubikey
 pkgs=$(shell dh_listpackages)
 
 # This has to be exported to make some magic below work.
@@ -93,6 +96,7 @@ endif
 		--without-rlm_eap_tnc \
 		--with-rlm_sql_postgresql_lib_dir=`pg_config --libdir` \
 		--with-rlm_sql_postgresql_include_dir=`pg_config --includedir` \
+		--with-iodbc-include-dir='/usr/include/iodbc' \
 		--without-rlm_eap_ikev2 \
 		--without-rlm_sql_oracle \
 		--without-rlm_sql_unixodbc
@@ -103,14 +107,14 @@ endif
 	mv config.sub.dist config.sub
 
 #Architecture
-build: patch build-arch build-indep
+build: build-arch build-indep
 
-build-arch: build-arch-stamp
+build-arch: patch build-arch-stamp
 build-arch-stamp: config.status
 	$(MAKE)
 	touch $@
 
-build-indep: build-indep-stamp
+build-indep: patch build-indep-stamp
 build-indep-stamp: config.status
 	touch $@
 
@@ -162,6 +166,9 @@ install-arch: build-arch-stamp
 	  dh_install --sourcedir=$(freeradius_dir) -p freeradius-$$pkg ; \
 	  rm -f $(freeradius_dir)/usr/lib/freeradius/rlm_$$mod*.so ; \
 	done
+
+	dh_install --sourcedir=$(freeradius_dir) -p freeradius-memcached
+	rm -f $(freeradius_dir)/usr/lib/freeradius/rlm_cache_memcached.so
 
 	dh_install --sourcedir=$(freeradius_dir) -p freeradius-utils
 	dh_install --sourcedir=$(freeradius_dir) -p freeradius

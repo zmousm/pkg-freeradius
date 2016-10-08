@@ -283,9 +283,9 @@ static rlm_rcode_t CC_HINT(nonnull) call_modsingle(rlm_components_t component, m
 	blocked = (request->master_state == REQUEST_STOP_PROCESSING);
 	if (blocked) return RLM_MODULE_NOOP;
 
-	RDEBUG3("modsingle[%s]: calling %s (%s) for request %d",
+	RDEBUG3("modsingle[%s]: calling %s (%s)",
 		comp2str[component], sp->modinst->name,
-		sp->modinst->entry->name, request->number);
+		sp->modinst->entry->name);
 	request->log.indent = 0;
 
 	if (sp->modinst->force) {
@@ -309,14 +309,14 @@ static rlm_rcode_t CC_HINT(nonnull) call_modsingle(rlm_components_t component, m
 	 */
 	blocked = (request->master_state == REQUEST_STOP_PROCESSING);
 	if (blocked) {
-		RWARN("Module %s became unblocked for request %u", sp->modinst->entry->name, request->number);
+		RWARN("Module %s became unblocked", sp->modinst->entry->name);
 	}
 
  fail:
 	request->log.indent = indent;
-	RDEBUG3("modsingle[%s]: returned from %s (%s) for request %d",
+	RDEBUG3("modsingle[%s]: returned from %s (%s)",
 	       comp2str[component], sp->modinst->name,
-	       sp->modinst->entry->name, request->number);
+	       sp->modinst->entry->name);
 
 	return request->rcode;
 }
@@ -449,6 +449,10 @@ redo:
 	 */
 	if (!c) goto finish;
 
+	if (fr_debug_lvl >= 3) {
+		VERIFY_REQUEST(request);
+	}
+
 	rad_assert(c->debug_name != NULL); /* if this happens, all bets are off. */
 
 	/*
@@ -514,8 +518,8 @@ redo:
 		 *	Like MOD_ELSE, but allow for a later "else"
 		 */
 		if (if_taken) {
-			RDEBUG2("... skipping %s for request %d: Preceding \"if\" was taken",
-				unlang_keyword[c->type], request->number);
+			RDEBUG2("... skipping %s: Preceding \"if\" was taken",
+				unlang_keyword[c->type]);
 			was_if = true;
 			if_taken = true;
 			goto next_sibling;
@@ -533,14 +537,14 @@ redo:
 	if (c->type == MOD_ELSE) {
 		if (!was_if) { /* error */
 		elsif_error:
-			RDEBUG2("... skipping %s for request %d: No preceding \"if\"",
-				unlang_keyword[c->type], request->number);
+			RDEBUG2("... skipping %s: No preceding \"if\"",
+				unlang_keyword[c->type]);
 			goto next_sibling;
 		}
 
 		if (if_taken) {
-			RDEBUG2("... skipping %s for request %d: Preceding \"if\" was taken",
-				unlang_keyword[c->type], request->number);
+			RDEBUG2("... skipping %s: Preceding \"if\" was taken",
+				unlang_keyword[c->type]);
 			was_if = false;
 			if_taken = false;
 			goto next_sibling;
@@ -710,7 +714,7 @@ redo:
 		 *	If we don't remove the request data, something could call
 		 *	the xlat outside of a foreach loop and trigger a segv.
 		 */
-		pairfree(&vps);
+		fr_pair_list_free(&vps);
 		request_data_get(request, (void *)radius_get_vp, foreach_depth);
 
 		rad_assert(next != NULL);
@@ -772,6 +776,11 @@ redo:
 		 *	MOD_GROUP.
 		 */
 		if (!g->children) {
+			if (c->type == MOD_CASE) {
+				result = RLM_MODULE_NOOP;
+				goto calculate_result;
+			}
+
 			RDEBUG2("%s { ... } # empty sub-section is ignored", c->name);
 			goto next_sibling;
 		}
@@ -1595,7 +1604,7 @@ int modcall_fixup_update(vp_map_t *map, UNUSED void *ctx)
 
 		case T_OP_SET:
 			if (map->rhs->type == TMPL_TYPE_EXEC) {
-				WARN("%s[%d] Please change ':=' to '=' for list assignment",
+				WARN("%s[%d]: Please change ':=' to '=' for list assignment",
 				     cf_pair_filename(cp), cf_pair_lineno(cp));
 			}
 
@@ -1644,7 +1653,8 @@ int modcall_fixup_update(vp_map_t *map, UNUSED void *ctx)
 
 		} else {
 			/*
-			 *
+			 *	RHS is hex, try to parse it as
+			 *	type-specific data.
 			 */
 			if (map->lhs->auto_converted &&
 			    (map->rhs->name[0] == '0') && (map->rhs->name[1] == 'x') &&
@@ -2145,6 +2155,96 @@ static int all_children_are_modules(CONF_SECTION *cs, char const *name)
 	return 1;
 }
 
+/** Load a named module from "instantiate" or "policy".
+ *
+ * If it's "foo.method", look for "foo", and return "method" as the method
+ * we wish to use, instead of the input component.
+ *
+ * @param[out] pcomponent Where to write the method we found, if any.  If no method is specified
+ *	will be set to MOD_COUNT.
+ * @param[in] real_name Complete name string e.g. foo.authorize.
+ * @param[in] virtual_name Virtual module name e.g. foo.
+ * @param[in] method_name Method override (may be NULL) or the method name e.g. authorize.
+ * @return the CONF_SECTION specifying the virtual module.
+ */
+static CONF_SECTION *virtual_module_find_cs(rlm_components_t *pcomponent,
+					    char const *real_name, char const *virtual_name, char const *method_name)
+{
+	CONF_SECTION *cs, *subcs;
+	rlm_components_t method = *pcomponent;
+	char buffer[256];
+
+	/*
+	 *	Turn the method name into a method enum.
+	 */
+	if (method_name) {
+		rlm_components_t i;
+
+		for (i = MOD_AUTHENTICATE; i < MOD_COUNT; i++) {
+			if (strcmp(comp2str[i], method_name) == 0) break;
+		}
+
+		if (i != MOD_COUNT) {
+			method = i;
+		} else {
+			method_name = NULL;
+			virtual_name = real_name;
+		}
+	}
+
+	/*
+	 *	Look for "foo" in the "instantiate" section.  If we
+	 *	find it, AND there's no method name, we've found the
+	 *	right thing.
+	 *
+	 *	Return it to the caller, with the updated method.
+	 */
+	cs = cf_section_find("instantiate");
+	if (cs) {
+		/*
+		 *	Found "foo".  Load it as "foo", or "foo.method".
+		 */
+		subcs = cf_section_sub_find_name2(cs, NULL, virtual_name);
+		if (subcs) {
+			*pcomponent = method;
+			return subcs;
+		}
+	}
+
+	/*
+	 *	Look for it in "policy".
+	 *
+	 *	If there's no policy section, we can't do anything else.
+	 */
+	cs = cf_section_find("policy");
+	if (!cs) return NULL;
+
+	/*
+	 *	"foo.authorize" means "load policy "foo" as method "authorize".
+	 *
+	 *	And bail out if there's no policy "foo".
+	 */
+	if (method_name) {
+		subcs = cf_section_sub_find_name2(cs, NULL, virtual_name);
+		if (subcs) *pcomponent = method;
+
+		return subcs;
+	}
+
+	/*
+	 *	"foo" means "look for foo.component" first, to allow
+	 *	method overrides.  If that's not found, just look for
+	 *	a policy "foo".
+	 *
+	 */
+	snprintf(buffer, sizeof(buffer), "%s.%s",
+		 virtual_name, comp2str[method]);
+	subcs = cf_section_sub_find_name2(cs, NULL, buffer);
+	if (subcs) return subcs;
+
+	return cf_section_sub_find_name2(cs, NULL, virtual_name);
+}
+
 
 /*
  *	Compile one entry of a module call.
@@ -2421,31 +2521,21 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 	 *	policy { ... name { .. } .. }
 	 *	policy { ... name.method { .. } .. }
 	 *
-	 *	The "instantiate" virtual modules are identical to the
-	 *	policies at this point.  We should probably get rid of
-	 *	the "instantiate" ones, as they're duplicate and
-	 *	confusing.
+	 *	The only difference between things in "instantiate"
+	 *	and "policy" is that "instantiate" will cause modules
+	 *	to be instantiated in a particular order.
 	 */
 	subcs = NULL;
-	cs = cf_section_find("instantiate");
-	if (cs) subcs = cf_section_sub_find_name2(cs, NULL,
-						  modrefname);
-	if (!subcs &&
-	    (cs = cf_section_find("policy")) != NULL) {
+	p = strrchr(modrefname, '.');
+	if (!p) {
+		subcs = virtual_module_find_cs(&method, modrefname, modrefname, NULL);
+	} else {
 		char buffer[256];
 
-		snprintf(buffer, sizeof(buffer), "%s.%s",
-			 modrefname, comp2str[component]);
+		strlcpy(buffer, modrefname, sizeof(buffer));
+		buffer[p - modrefname] = '\0';
 
-		/*
-		 *	Prefer name.section, then name.
-		 */
-		subcs = cf_section_sub_find_name2(cs, NULL,
-							  buffer);
-		if (!subcs) {
-			subcs = cf_section_sub_find_name2(cs, NULL,
-							  modrefname);
-		}
+		subcs = virtual_module_find_cs(&method, modrefname, buffer, buffer + (p - modrefname) + 1);
 	}
 
 	/*
@@ -2483,7 +2573,7 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 		 */
 		if (cf_section_name2(subcs)) {
 			csingle = do_compile_modsingle(parent,
-						       component,
+						       method,
 						       cf_section_to_item(subcs),
 						       grouptype,
 						       modname);
@@ -2498,7 +2588,7 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 			 *	group foo { ...
 			 */
 			csingle = do_compile_modgroup(parent,
-						      component,
+						      method,
 						      subcs,
 						      GROUPTYPE_SIMPLE,
 						      grouptype, MOD_GROUP);
@@ -2536,63 +2626,17 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 		 *	modules belongs in raddb/mods-available/,
 		 *	which isn't loaded into the "modules" section.
 		 */
-		if (cf_section_sub_find_name2(modules, NULL, realname)) {
-			this = module_instantiate(modules, realname);
-			if (this) goto allocate_csingle;
-
-			/*
-			 *
-			 */
-			if (realname != modrefname) {
-				return NULL;
-			}
-
-		} else {
-			/*
-			 *	We were asked to MAYBE load it and it
-			 *	doesn't exist.  Return a soft error.
-			 */
-			if (realname != modrefname) {
-				*modname = modrefname;
-				return NULL;
-			}
-		}
-	}
-
-	/*
-	 *	No module found by that name.  Maybe we're calling
-	 *	module.method
-	 */
-	p = strrchr(modrefname, '.');
-	if (p) {
-		rlm_components_t i;
-		p++;
+		this = module_instantiate_method(modules, realname, &method);
+		if (this) goto allocate_csingle;
 
 		/*
-		 *	Find the component.
+		 *	We were asked to MAYBE load it and it
+		 *	doesn't exist.  Return a soft error.
 		 */
-		for (i = MOD_AUTHENTICATE;
-		     i < MOD_COUNT;
-		     i++) {
-			if (strcmp(p, comp2str[i]) == 0) {
-				char buffer[256];
-
-				strlcpy(buffer, modrefname, sizeof(buffer));
-				buffer[p - modrefname - 1] = '\0';
-				component = i;
-
-				this = module_instantiate(modules, buffer);
-				if (this) {
-					method = i;
-					goto allocate_csingle;
-				}
-			}
+		if (realname != modrefname) {
+			*modname = modrefname;
+			return NULL;
 		}
-
-		/*
-		 *	FIXME: check for "module", and give error "no
-		 *	such component" when we don't find the method.
-		 */
 	}
 
 	/*
@@ -2783,11 +2827,21 @@ static modcallable *do_compile_modgroup(modcallable *parent,
 			rad_assert(parent != NULL);
 			p = mod_callabletogroup(parent);
 
-			rad_assert(p->tail != NULL);
+			if (!p->tail) goto elsif_fail;
 
+			/*
+			 *	We're in the process of compiling the
+			 *	section, so the parent's tail is the
+			 *	previous "if" statement.
+			 */
 			f = mod_callabletogroup(p->tail);
-			rad_assert((f->mc.type == MOD_IF) ||
-				   (f->mc.type == MOD_ELSIF));
+			if ((f->mc.type != MOD_IF) &&
+			    (f->mc.type != MOD_ELSIF)) {
+			elsif_fail:
+				cf_log_err_cs(g->cs, "Invalid location for 'elsif'.  There is no preceding 'if' statement");
+				talloc_free(g);
+				return NULL;
+			}
 
 			/*
 			 *	If we took the previous condition, we
@@ -2814,11 +2868,16 @@ static modcallable *do_compile_modgroup(modcallable *parent,
 			rad_assert(parent != NULL);
 			p = mod_callabletogroup(parent);
 
-			rad_assert(p->tail != NULL);
+			if (!p->tail) goto else_fail;
 
 			f = mod_callabletogroup(p->tail);
-			rad_assert((f->mc.type == MOD_IF) ||
-				   (f->mc.type == MOD_ELSIF));
+			if ((f->mc.type != MOD_IF) &&
+			    (f->mc.type != MOD_ELSIF)) {
+			else_fail:
+				cf_log_err_cs(g->cs, "Invalid location for 'else'.  There is no preceding 'if' statement");
+				talloc_free(g);
+				return NULL;
+			}
 
 			/*
 			 *	If we took the previous condition, we
@@ -3033,13 +3092,13 @@ static bool pass2_xlat_compile(CONF_ITEM const *ci, vp_tmpl_t **pvpt, bool conve
 			if (cf_item_is_pair(ci)) {
 				CONF_PAIR *cp = cf_item_to_pair(ci);
 
-				WARN("%s[%d] Please change %%{%s} to &%s",
+				WARN("%s[%d]: Please change \"%%{%s}\" to &%s",
 				       cf_pair_filename(cp), cf_pair_lineno(cp),
 				       attr->name, attr->name);
 			} else {
 				CONF_SECTION *cs = cf_item_to_section(ci);
 
-				WARN("%s[%d] Please change %%{%s} to &%s",
+				WARN("%s[%d]: Please change \"%%{%s}\" to &%s",
 				       cf_section_filename(cs), cf_section_lineno(cs),
 				       attr->name, attr->name);
 			}
@@ -3124,11 +3183,27 @@ static bool pass2_fixup_undefined(CONF_ITEM const *ci, vp_tmpl_t *vpt)
 	return true;
 }
 
-static bool pass2_callback(UNUSED void *ctx, fr_cond_t *c)
+static bool pass2_callback(void *ctx, fr_cond_t *c)
 {
 	vp_map_t *map;
 	vp_tmpl_t *vpt;
 
+	/*
+	 *	These don't get optimized.
+	 */
+	if ((c->type == COND_TYPE_TRUE) ||
+	    (c->type == COND_TYPE_FALSE)) {
+		return true;
+	}
+
+	/*
+	 *	Call children.
+	 */
+	if (c->type == COND_TYPE_CHILD) return pass2_callback(ctx, c->data.child);
+
+	/*
+	 *	A few simple checks here.
+	 */
 	if (c->type == COND_TYPE_EXISTS) {
 		if (c->data.vpt->type == TMPL_TYPE_XLAT) {
 			return pass2_xlat_compile(c->ci, &c->data.vpt, true, NULL);
@@ -3144,21 +3219,23 @@ static bool pass2_callback(UNUSED void *ctx, fr_cond_t *c)
 			if (!pass2_fixup_undefined(c->ci, c->data.vpt)) return false;
 			c->pass2_fixup = PASS2_FIXUP_NONE;
 		}
-		return true;
-	}
 
-	/*
-	 *	Maps have a paircompare fixup applied to them.
-	 *	Others get ignored.
-	 */
-	if (c->pass2_fixup == PASS2_FIXUP_NONE) {
-		if (c->type == COND_TYPE_MAP) {
-			map = c->data.map;
-			goto check_paircmp;
+		/*
+		 *	Convert virtual &Attr-Foo to "%{Attr-Foo}"
+		 */
+		vpt = c->data.vpt;
+		if ((vpt->type == TMPL_TYPE_ATTR) && vpt->tmpl_da->flags.virtual) {
+			vpt->tmpl_xlat = xlat_from_tmpl_attr(vpt, vpt);
+			vpt->type = TMPL_TYPE_XLAT_STRUCT;
 		}
 
 		return true;
 	}
+
+	/*
+	 *	And tons of complicated checks.
+	 */
+	rad_assert(c->type == COND_TYPE_MAP);
 
 	map = c->data.map;	/* shorter */
 
@@ -3196,7 +3273,6 @@ static bool pass2_callback(UNUSED void *ctx, fr_cond_t *c)
 		c->pass2_fixup = PASS2_FIXUP_NONE;
 	}
 
-check_paircmp:
 	/*
 	 *	Just in case someone adds a new fixup later.
 	 */
@@ -3208,13 +3284,88 @@ check_paircmp:
 	 */
 	if (map->lhs->type == TMPL_TYPE_XLAT) {
 		/*
-		 *	Don't compile the LHS to an attribute
-		 *	reference for now.  When we do that, we've got
-		 *	to check the RHS for type-specific data, and
-		 *	parse it to a TMPL_TYPE_DATA.
+		 *	Compile the LHS to an attribute reference only
+		 *	if the RHS is a literal.
+		 *
+		 *	@todo v3.1: allow anything anywhere.
 		 */
-		if (!pass2_xlat_compile(map->ci, &map->lhs, false, NULL)) {
-			return false;
+		if (map->rhs->type != TMPL_TYPE_LITERAL) {
+			if (!pass2_xlat_compile(map->ci, &map->lhs, false, NULL)) {
+				return false;
+			}
+		} else {
+			if (!pass2_xlat_compile(map->ci, &map->lhs, true, NULL)) {
+				return false;
+			}
+
+			/*
+			 *	Attribute compared to a literal gets
+			 *	the literal cast to the data type of
+			 *	the attribute.
+			 *
+			 *	The code in parser.c did this for
+			 *
+			 *		&Attr == data
+			 *
+			 *	But now we've just converted "%{Attr}"
+			 *	to &Attr, so we've got to do it again.
+			 */
+			if ((map->lhs->type == TMPL_TYPE_ATTR) &&
+			    (map->rhs->type == TMPL_TYPE_LITERAL)) {
+				/*
+				 *	RHS is hex, try to parse it as
+				 *	type-specific data.
+				 */
+				if (map->lhs->auto_converted &&
+				    (map->rhs->name[0] == '0') && (map->rhs->name[1] == 'x') &&
+				    (map->rhs->len > 2) && ((map->rhs->len & 0x01) == 0)) {
+					vpt = map->rhs;
+					map->rhs = NULL;
+
+					if (!map_cast_from_hex(map, T_BARE_WORD, vpt->name)) {
+						map->rhs = vpt;
+						cf_log_err(map->ci, "%s", fr_strerror());
+						return -1;
+					}
+					talloc_free(vpt);
+
+				} else if ((map->rhs->len > 0) ||
+					   (map->op != T_OP_CMP_EQ) ||
+					   (map->lhs->tmpl_da->type == PW_TYPE_STRING) ||
+					   (map->lhs->tmpl_da->type == PW_TYPE_OCTETS)) {
+
+					if (tmpl_cast_in_place(map->rhs, map->lhs->tmpl_da->type, map->lhs->tmpl_da) < 0) {
+						cf_log_err(map->ci, "Failed to parse data type %s from string: %s",
+							   fr_int2str(dict_attr_types, map->lhs->tmpl_da->type, "<UNKNOWN>"),
+							   map->rhs->name);
+						return false;
+					} /* else the cast was successful */
+
+				} else {	/* RHS is empty, it's just a check for empty / non-empty string */
+					vpt = talloc_steal(c, map->lhs);
+					map->lhs = NULL;
+					talloc_free(c->data.map);
+
+					/*
+					 *	"%{Foo}" == '' ---> !Foo
+					 *	"%{Foo}" != '' ---> Foo
+					 */
+					c->type = COND_TYPE_EXISTS;
+					c->data.vpt = vpt;
+					c->negate = !c->negate;
+
+					WARN("%s[%d]: Please change (\"%%{%s}\" %s '') to %c&%s",
+					     cf_section_filename(cf_item_to_section(c->ci)),
+					     cf_section_lineno(cf_item_to_section(c->ci)),
+					     vpt->name, c->negate ? "==" : "!=",
+					     c->negate ? '!' : ' ', vpt->name);
+
+					/*
+					 *	No more RHS, so we can't do more optimizations
+					 */
+					return true;
+				}
+			}
 		}
 	}
 
@@ -3298,6 +3449,15 @@ check_paircmp:
 	}
 
 	/*
+	 *	Convert RHS to expansions, too.
+	 */
+	vpt = c->data.map->rhs;
+	if ((vpt->type == TMPL_TYPE_ATTR) && vpt->tmpl_da->flags.virtual) {
+		vpt->tmpl_xlat = xlat_from_tmpl_attr(vpt, vpt);
+		vpt->type = TMPL_TYPE_XLAT_STRUCT;
+	}
+
+	/*
 	 *	@todo v3.1: do the same thing for the RHS...
 	 */
 
@@ -3340,7 +3500,7 @@ check_paircmp:
 
 	/*
 	 *	Mark it as requiring a paircompare() call, instead of
-	 *	paircmp().
+	 *	fr_pair_cmp().
 	 */
 	c->pass2_fixup = PASS2_PAIRCOMPARE;
 
@@ -3510,6 +3670,14 @@ bool modcall_pass2(modcallable *mc)
 			}
 
 			/*
+			 *	Convert virtual &Attr-Foo to "%{Attr-Foo}"
+			 */
+			if ((g->vpt->type == TMPL_TYPE_ATTR) && g->vpt->tmpl_da->flags.virtual) {
+				g->vpt->tmpl_xlat = xlat_from_tmpl_attr(g->vpt, g->vpt);
+				g->vpt->type = TMPL_TYPE_XLAT_STRUCT;
+			}
+
+			/*
 			 *	We may have: switch Foo-Bar {
 			 *
 			 *	where Foo-Bar is an attribute defined
@@ -3541,9 +3709,9 @@ bool modcall_pass2(modcallable *mc)
 			if ((g->vpt->type == TMPL_TYPE_ATTR) &&
 			    (c->name[0] != '&')) {
 				WARN("%s[%d]: Please change %s to &%s",
-				       cf_section_filename(g->cs),
-				       cf_section_lineno(g->cs),
-				       c->name, c->name);
+				     cf_section_filename(g->cs),
+				     cf_section_lineno(g->cs),
+				     c->name, c->name);
 			}
 
 		do_children:
@@ -3614,6 +3782,12 @@ bool modcall_pass2(modcallable *mc)
 				goto do_children;
 			}
 
+			if (g->vpt->type == TMPL_TYPE_ATTR_UNDEFINED) {
+				if (!pass2_fixup_undefined(cf_section_to_item(g->cs), g->vpt)) {
+					return false;
+				}
+			}
+
 			/*
 			 *	Compile and sanity check xlat
 			 *	expansions.
@@ -3639,6 +3813,14 @@ bool modcall_pass2(modcallable *mc)
 						return false;
 					}
 				}
+			}
+
+			/*
+			 *	Virtual attribute fixes for "case" statements, too.
+			 */
+			if ((g->vpt->type == TMPL_TYPE_ATTR) && g->vpt->tmpl_da->flags.virtual) {
+				g->vpt->tmpl_xlat = xlat_from_tmpl_attr(g->vpt, g->vpt);
+				g->vpt->type = TMPL_TYPE_XLAT_STRUCT;
 			}
 
 			if (!modcall_pass2(g->children)) return false;
@@ -3711,7 +3893,13 @@ bool modcall_pass2(modcallable *mc)
 				char const *name1 = cf_section_name1(g->cs);
 
 				if (strcmp(name1, unlang_keyword[c->type]) != 0) {
-					c->debug_name = talloc_asprintf(c, "%s %s", name1, cf_section_name2(g->cs));
+					name2 = cf_section_name2(g->cs);
+
+					if (!name2) {
+						c->debug_name = name1;
+					} else {
+						c->debug_name = talloc_asprintf(c, "%s %s", name1, name2);
+					}
 				}
 			}
 
@@ -3823,4 +4011,11 @@ void modcall_debug(modcallable *mc, int depth)
 			break;
 		}
 	}
+}
+
+int modcall_pass2_condition(fr_cond_t *c)
+{
+	if (!fr_condition_walk(c, pass2_callback, NULL)) return -1;
+
+	return 0;
 }

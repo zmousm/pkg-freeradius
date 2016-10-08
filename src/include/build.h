@@ -10,7 +10,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#include <freeradius-devel/autoconf.h>	/* Needed for endian macros */
+#include <freeradius-devel/autoconf.h> /* Needed for endian macros */
 
 /*
  *	The ubiquitous stringify macros
@@ -122,7 +122,7 @@ extern "C" {
  *	Other projects seem to use endian.h and variants, but these are
  *	in non standard locations, and may mess up cross compiling.
  *
- *	Here at least the endianess can be set explicitly with
+ *	Here at least the endianness can be set explicitly with
  *	-DLITTLE_ENDIAN or -DBIG_ENDIAN.
  */
 #if !defined(FR_LITTLE_ENDIAN) && !defined(FR_BIG_ENDIAN)

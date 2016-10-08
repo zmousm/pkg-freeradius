@@ -81,7 +81,7 @@ static const CONF_PARSER module_config[] = {
 	{ "locking", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_detail_t, locking), "no" },
 	{ "escape_filenames", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_detail_t, escape), "no" },
 	{ "log_packet_header", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_detail_t, log_srcdst), "no" },
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -132,7 +132,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		inst->escape_func = rad_filename_make_safe;
 	}
 
-	inst->ef = exfile_init(inst, 64, 30, inst->locking);
+	inst->ef = exfile_init(inst, 256, 30, inst->locking);
 	if (!inst->ef) {
 		cf_log_err_cs(conf, "Failed creating log file context");
 		return -1;

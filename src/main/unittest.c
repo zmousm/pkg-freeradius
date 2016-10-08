@@ -37,11 +37,8 @@ RCSID("$Id$")
 /*
  *  Global variables.
  */
-char const *progname = NULL;
 char const *radacct_dir = NULL;
 char const *radlog_dir = NULL;
-char const *radlib_dir = NULL;
-bool check_config = false;
 bool log_stripped_names = false;
 
 static bool memory_report = false;
@@ -145,7 +142,7 @@ static REQUEST *request_setup(FILE *fp)
 	/*
 	 *	Read packet from fp
 	 */
-	if (readvp2(request->packet, &request->packet->vps, fp, &filedone) < 0) {
+	if (fr_pair_list_afrom_file(request->packet, &request->packet->vps, fp, &filedone) < 0) {
 		fr_perror("unittest");
 		talloc_free(request);
 		return NULL;
@@ -295,9 +292,9 @@ static REQUEST *request_setup(FILE *fp)
 			vp->da = da;
 
 			/*
-			 *	Re-do pairmemsteal ourselves,
+			 *	Re-do fr_pair_value_memsteal ourselves,
 			 *	because we play games with
-			 *	vp->da, and pairmemsteal goes
+			 *	vp->da, and fr_pair_value_memsteal goes
 			 *	to GREAT lengths to sanitize
 			 *	and fix and change and
 			 *	double-check the various
@@ -357,8 +354,8 @@ static REQUEST *request_setup(FILE *fp)
 	request->log.lvl = rad_debug_lvl;
 	request->log.func = vradlog_request;
 
-	request->username = pairfind(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
-	request->password = pairfind(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY);
+	request->username = fr_pair_find_by_num(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
+	request->password = fr_pair_find_by_num(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY);
 
 	return request;
 }
@@ -646,11 +643,6 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-	if ((progname = strrchr(argv[0], FR_DIR_SEP)) == NULL)
-		progname = argv[0];
-	else
-		progname++;
-
 	rad_debug_lvl = 0;
 	set_radius_dir(NULL, RADIUS_DIR);
 
@@ -857,7 +849,7 @@ int main(int argc, char *argv[])
 		}
 
 
-		if (readvp2(request, &filter_vps, fp, &filedone) < 0) {
+		if (fr_pair_list_afrom_file(request, &filter_vps, fp, &filedone) < 0) {
 			fprintf(stderr, "Failed reading attributes from %s: %s\n",
 				filter_file, fr_strerror());
 			rcode = EXIT_FAILURE;
@@ -890,15 +882,15 @@ int main(int argc, char *argv[])
 	/*
 	 *	Update the list with the response type.
 	 */
-	vp = radius_paircreate(request->reply, &request->reply->vps,
+	vp = radius_pair_create(request->reply, &request->reply->vps,
 			       PW_RESPONSE_PACKET_TYPE, 0);
 	vp->vp_integer = request->reply->code;
 
 	{
 		VALUE_PAIR const *failed[2];
 
-		if (filter_vps && !pairvalidate(failed, filter_vps, request->reply->vps)) {
-			pairvalidate_debug(request, failed);
+		if (filter_vps && !fr_pair_validate(failed, filter_vps, request->reply->vps)) {
+			fr_pair_validate_debug(request, failed);
 			fr_perror("Output file %s does not match attributes in filter %s (%s)",
 				  output_file ? output_file : input_file, filter_file, fr_strerror());
 			rcode = EXIT_FAILURE;
@@ -943,7 +935,7 @@ static void NEVER_RETURNS usage(int status)
 {
 	FILE *output = status?stderr:stdout;
 
-	fprintf(output, "Usage: %s [options]\n", progname);
+	fprintf(output, "Usage: %s [options]\n", main_config.name);
 	fprintf(output, "Options:\n");
 	fprintf(output, "  -d raddb_dir  Configuration files are in \"raddb_dir/*\".\n");
 	fprintf(output, "  -D dict_dir   Dictionary files are in \"dict_dir/*\".\n");

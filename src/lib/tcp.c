@@ -26,9 +26,6 @@ RCSID("$Id$")
 
 #ifdef WITH_TCP
 
-/* FIXME: into common RADIUS header? */
-#define MAX_PACKET_LEN 4096
-
 RADIUS_PACKET *fr_tcp_recv(int sockfd, int flags)
 {
 	RADIUS_PACKET *packet = rad_alloc(NULL, false);
@@ -167,15 +164,6 @@ int fr_tcp_read_packet(RADIUS_PACKET *packet, int flags)
 				 packet->sockfd);
 		}
 
-
-		if (is_radius_code(packet->code)) {
-			DEBUG("Received %s packet from %s",
-			      fr_packet_codes[packet->code], buffer);
-		} else {
-			DEBUG("Received packet from %s code %d",
-			      buffer, packet->code);
-		}
-		DEBUG(", id=%d, length=%zu\n", packet->id, packet->data_len);
 	}
 
 	return 1;		/* done reading the packet */

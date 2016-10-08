@@ -161,27 +161,27 @@ static int mschapv1_encode(RADIUS_PACKET *packet, VALUE_PAIR **request,
 	VALUE_PAIR *challenge, *reply;
 	uint8_t nthash[16];
 
-	pairdelete(&packet->vps, PW_MSCHAP_CHALLENGE, VENDORPEC_MICROSOFT, TAG_ANY);
-	pairdelete(&packet->vps, PW_MSCHAP_RESPONSE, VENDORPEC_MICROSOFT, TAG_ANY);
+	fr_pair_delete_by_num(&packet->vps, PW_MSCHAP_CHALLENGE, VENDORPEC_MICROSOFT, TAG_ANY);
+	fr_pair_delete_by_num(&packet->vps, PW_MSCHAP_RESPONSE, VENDORPEC_MICROSOFT, TAG_ANY);
 
-	challenge = paircreate(packet, PW_MSCHAP_CHALLENGE, VENDORPEC_MICROSOFT);
+	challenge = fr_pair_afrom_num(packet, PW_MSCHAP_CHALLENGE, VENDORPEC_MICROSOFT);
 	if (!challenge) {
 		return 0;
 	}
 
-	pairadd(request, challenge);
+	fr_pair_add(request, challenge);
 	challenge->vp_length = 8;
 	challenge->vp_octets = p = talloc_array(challenge, uint8_t, challenge->vp_length);
 	for (i = 0; i < challenge->vp_length; i++) {
 		p[i] = fr_rand();
 	}
 
-	reply = paircreate(packet, PW_MSCHAP_RESPONSE, VENDORPEC_MICROSOFT);
+	reply = fr_pair_afrom_num(packet, PW_MSCHAP_RESPONSE, VENDORPEC_MICROSOFT);
 	if (!reply) {
 		return 0;
 	}
 
-	pairadd(request, reply);
+	fr_pair_add(request, reply);
 	reply->vp_length = 50;
 	reply->vp_octets = p = talloc_array(reply, uint8_t, reply->vp_length);
 	memset(p, 0, reply->vp_length);
@@ -364,7 +364,7 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 		/*
 		 *	Read the request VP's.
 		 */
-		if (readvp2(request->packet, &request->packet->vps, packets, &packets_done) < 0) {
+		if (fr_pair_list_afrom_file(request->packet, &request->packet->vps, packets, &packets_done) < 0) {
 			char const *input;
 
 			if ((files->packets[0] == '-') && (files->packets[1] == '\0')) {
@@ -391,7 +391,7 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 		if (filters) {
 			bool filters_done;
 
-			if (readvp2(request, &request->filter, filters, &filters_done) < 0) {
+			if (fr_pair_list_afrom_file(request, &request->filter, filters, &filters_done) < 0) {
 				REDEBUG("Error parsing \"%s\"", files->filters);
 				goto error;
 			}
@@ -435,7 +435,7 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 			/*
 			 *	This allows efficient list comparisons later
 			 */
-			pairsort(&request->filter, attrtagcmp);
+			fr_pair_list_sort(&request->filter, fr_pair_cmp_by_da_tag);
 		}
 
 		/*
@@ -537,9 +537,9 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 				vp->da = da;
 
 				/*
-				 *	Re-do pairmemsteal ourselves,
+				 *	Re-do fr_pair_value_memsteal ourselves,
 				 *	because we play games with
-				 *	vp->da, and pairmemsteal goes
+				 *	vp->da, and fr_pair_value_memsteal goes
 				 *	to GREAT lengths to sanitize
 				 *	and fix and change and
 				 *	double-check the various
@@ -575,14 +575,14 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 				/*
 				 *	CHAP-Password is octets, so it may not be zero terminated.
 				 */
-				request->password = pairmake(request->packet, &request->packet->vps, "Cleartext-Password",
+				request->password = fr_pair_make(request->packet, &request->packet->vps, "Cleartext-Password",
 							     "", T_OP_EQ);
-				pairbstrncpy(request->password, vp->vp_strvalue, vp->vp_length);
+				fr_pair_value_bstrncpy(request->password, vp->vp_strvalue, vp->vp_length);
 				break;
 
 			case PW_USER_PASSWORD:
 			case PW_MS_CHAP_PASSWORD:
-				request->password = pairmake(request->packet, &request->packet->vps, "Cleartext-Password",
+				request->password = fr_pair_make(request->packet, &request->packet->vps, "Cleartext-Password",
 							     vp->vp_strvalue, T_OP_EQ);
 				break;
 
@@ -635,10 +635,8 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 					break;
 
 				default:
-					REDEBUG("Can't determine expected response to Status-Server request, specify "
-					        "a well known RADIUS port, or add a Response-Packet-Type attribute "
-					        "to the request of filter");
-					goto error;
+					request->filter_code = PW_CODE_UNDEFINED;
+					break;
 				}
 				break;
 
@@ -888,16 +886,16 @@ static int send_one_packet(rc_request_t *request)
 		if (request->password) {
 			VALUE_PAIR *vp;
 
-			if ((vp = pairfind(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY)) != NULL) {
-				pairstrcpy(vp, request->password->vp_strvalue);
+			if ((vp = fr_pair_find_by_num(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY)) != NULL) {
+				fr_pair_value_strcpy(vp, request->password->vp_strvalue);
 
-			} else if ((vp = pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY)) != NULL) {
+			} else if ((vp = fr_pair_find_by_num(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY)) != NULL) {
 				uint8_t buffer[17];
 
 				rad_chap_encode(request->packet, buffer, fr_rand() & 0xff, request->password);
-				pairmemcpy(vp, buffer, 17);
+				fr_pair_value_memcpy(vp, buffer, 17);
 
-			} else if (pairfind(request->packet->vps, PW_MS_CHAP_PASSWORD, 0, TAG_ANY) != NULL) {
+			} else if (fr_pair_find_by_num(request->packet->vps, PW_MS_CHAP_PASSWORD, 0, TAG_ANY) != NULL) {
 				mschapv1_encode(request->packet, &request->packet->vps, request->password->vp_strvalue);
 
 			} else {
@@ -974,6 +972,9 @@ static int send_one_packet(rc_request_t *request)
 	 */
 	if (rad_send(request->packet, NULL, secret) < 0) {
 		REDEBUG("Failed to send packet for ID %d", request->packet->id);
+		deallocate_id(request);
+		request->done = true;
+		return -1;
 	}
 
 	fr_packet_header_print(fr_log_fp, request->packet, false);
@@ -1111,7 +1112,7 @@ static int recv_one_packet(int wait_time)
 	 *	If we had an expected response code, check to see if the
 	 *	packet matched that.
 	 */
-	if (request->reply->code != request->filter_code) {
+	if ((request->filter_code != PW_CODE_UNDEFINED) && (request->reply->code != request->filter_code)) {
 		if (is_radius_code(request->reply->code)) {
 			REDEBUG("%s: Expected %s got %s", request->name, fr_packet_codes[request->filter_code],
 				fr_packet_codes[request->reply->code]);
@@ -1128,12 +1129,12 @@ static int recv_one_packet(int wait_time)
 	} else {
 		VALUE_PAIR const *failed[2];
 
-		pairsort(&request->reply->vps, attrtagcmp);
-		if (pairvalidate(failed, request->filter, request->reply->vps)) {
+		fr_pair_list_sort(&request->reply->vps, fr_pair_cmp_by_da_tag);
+		if (fr_pair_validate(failed, request->filter, request->reply->vps)) {
 			RDEBUG("%s: Response passed filter", request->name);
 			stats.passed++;
 		} else {
-			pairvalidate_debug(request, failed);
+			fr_pair_validate_debug(request, failed);
 			REDEBUG("%s: Response for failed filter", request->name);
 			stats.failed++;
 		}
@@ -1152,16 +1153,16 @@ packet_done:
 
 int main(int argc, char **argv)
 {
-	int c;
-	char const *radius_dir = RADDBDIR;
-	char const *dict_dir = DICTDIR;
-	char filesecret[256];
-	FILE *fp;
-	int do_summary = false;
-	int persec = 0;
-	int parallel = 1;
+	int		c;
+	char		const *radius_dir = RADDBDIR;
+	char		const *dict_dir = DICTDIR;
+	char		filesecret[256];
+	FILE		*fp;
+	int		do_summary = false;
+	int		persec = 0;
+	int		parallel = 1;
 	rc_request_t	*this;
-	int force_af = AF_UNSPEC;
+	int		force_af = AF_UNSPEC;
 
 	/*
 	 *	It's easier having two sets of flags to set the
@@ -1387,44 +1388,11 @@ int main(int argc, char **argv)
 	/*
 	 *	Resolve hostname.
 	 */
-	if (force_af == AF_UNSPEC) force_af = AF_INET;
-	server_ipaddr.af = force_af;
 	if (strcmp(argv[1], "-") != 0) {
-		char *p;
-		char const *hostname = argv[1];
-		char const *portname = argv[1];
-		char buffer[256];
-
-		if (*argv[1] == '[') { /* IPv6 URL encoded */
-			p = strchr(argv[1], ']');
-			if ((size_t) (p - argv[1]) >= sizeof(buffer)) {
-				usage();
-			}
-
-			memcpy(buffer, argv[1] + 1, p - argv[1] - 1);
-			buffer[p - argv[1] - 1] = '\0';
-
-			hostname = buffer;
-			portname = p + 1;
-
-		}
-		p = strchr(portname, ':');
-		if (p && (strchr(p + 1, ':') == NULL)) {
-			*p = '\0';
-			portname = p + 1;
-		} else {
-			portname = NULL;
-		}
-
-		if (ip_hton(&server_ipaddr, force_af, hostname, false) < 0) {
-			ERROR("Failed to find IP address for host %s: %s", hostname, strerror(errno));
+		if (fr_pton_port(&server_ipaddr, &server_port, argv[1], -1, force_af, true) < 0) {
+			ERROR("%s", fr_strerror());
 			exit(1);
 		}
-
-		/*
-		 *	Strip port from hostname if needed.
-		 */
-		if (portname) server_port = atoi(portname);
 
 		/*
 		 *	Work backwards from the port to determine the packet type
@@ -1574,7 +1542,10 @@ int main(int argc, char **argv)
 				/*
 				 *	Send the current packet.
 				 */
-				send_one_packet(this);
+				if (send_one_packet(this) < 0) {
+					talloc_free(this);
+					break;
+				}
 
 				/*
 				 *	Wait a little before sending

@@ -39,7 +39,8 @@ typedef struct state_entry_t {
 
 	int		tries;
 
-	VALUE_PAIR	*vps;
+	TALLOC_CTX		*ctx;
+	VALUE_PAIR		*vps;
 
 	void 		*opaque;
 	void 		(*free_opaque)(void *opaque);
@@ -125,6 +126,9 @@ static void state_entry_free(fr_state_t *state, state_entry_t *entry)
 	(void) talloc_get_type_abort(entry, state_entry_t);
 #endif
 	rbtree_deletebydata(state->tree, entry);
+
+	if (entry->ctx) talloc_free(entry->ctx);
+
 	talloc_free(entry);
 }
 
@@ -180,7 +184,7 @@ void fr_state_delete(fr_state_t *state)
 /*
  *	Create a new entry.  Called with the mutex held.
  */
-static state_entry_t *fr_state_create(fr_state_t *state, RADIUS_PACKET *packet, state_entry_t *old)
+static state_entry_t *fr_state_create(fr_state_t *state, const char *server, RADIUS_PACKET *packet, state_entry_t *old)
 {
 	size_t i;
 	uint32_t x;
@@ -208,7 +212,7 @@ static state_entry_t *fr_state_create(fr_state_t *state, RADIUS_PACKET *packet, 
 		 *	Unused.  We can delete it, even if now isn't
 		 *	the time to clean it up.
 		 */
-		if (!entry->vps && !entry->opaque) {
+		if (!entry->ctx && !entry->opaque) {
 			state_entry_free(state, entry);
 			continue;
 		}
@@ -244,15 +248,13 @@ static state_entry_t *fr_state_create(fr_state_t *state, RADIUS_PACKET *packet, 
 	 *	The EAP module creates it's own State attribute, so we
 	 *	want to use that one in preference to one we create.
 	 */
-	vp = pairfind(packet->vps, PW_STATE, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(packet->vps, PW_STATE, 0, TAG_ANY);
 
 	/*
 	 *	If possible, base the new one off of the old one.
 	 */
 	if (old) {
 		entry->tries = old->tries + 1;
-
-		rad_assert(old->vps == NULL);
 
 		/*
 		 *	Track State
@@ -294,10 +296,14 @@ static state_entry_t *fr_state_create(fr_state_t *state, RADIUS_PACKET *packet, 
 		memcpy(entry->state, vp->vp_octets, sizeof(entry->state));
 
 	} else {
-		vp = paircreate(packet, PW_STATE, 0);
-		pairmemcpy(vp, entry->state, sizeof(entry->state));
-		pairadd(&packet->vps, vp);
+		vp = fr_pair_afrom_num(packet, PW_STATE, 0);
+		fr_pair_value_memcpy(vp, entry->state, sizeof(entry->state));
+		fr_pair_add(&packet->vps, vp);
 	}
+
+	/*	Make unique for different virtual servers handling same request
+	 */
+	if (server) *((uint32_t *)(&entry->state[4])) ^= fr_hash_string(server);
 
 	if (!rbtree_insert(state->tree, entry)) {
 		talloc_free(entry);
@@ -328,17 +334,21 @@ static state_entry_t *fr_state_create(fr_state_t *state, RADIUS_PACKET *packet, 
 /*
  *	Find the entry, based on the State attribute.
  */
-static state_entry_t *fr_state_find(fr_state_t *state, RADIUS_PACKET *packet)
+static state_entry_t *fr_state_find(fr_state_t *state, const char *server, RADIUS_PACKET *packet)
 {
 	VALUE_PAIR *vp;
 	state_entry_t *entry, my_entry;
 
-	vp = pairfind(packet->vps, PW_STATE, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(packet->vps, PW_STATE, 0, TAG_ANY);
 	if (!vp) return NULL;
 
 	if (vp->vp_length != sizeof(my_entry.state)) return NULL;
 
 	memcpy(my_entry.state, vp->vp_octets, sizeof(my_entry.state));
+
+	/*	Make unique for different virtual servers handling same request
+	 */
+	if (server) *((uint32_t *)(&my_entry.state[4])) ^= fr_hash_string(server);
 
 	entry = rbtree_finddata(state->tree, &my_entry);
 
@@ -358,11 +368,11 @@ void fr_state_discard(REQUEST *request, RADIUS_PACKET *original)
 	state_entry_t *entry;
 	fr_state_t *state = &global_state;
 
-	pairfree(&request->state);
+	fr_pair_list_free(&request->state);
 	request->state = NULL;
 
 	PTHREAD_MUTEX_LOCK(&state->mutex);
-	entry = fr_state_find(state, original);
+	entry = fr_state_find(state, request->server, original);
 	if (!entry) {
 		PTHREAD_MUTEX_UNLOCK(&state->mutex);
 		return;
@@ -380,34 +390,48 @@ void fr_state_get_vps(REQUEST *request, RADIUS_PACKET *packet)
 {
 	state_entry_t *entry;
 	fr_state_t *state = &global_state;
+	TALLOC_CTX *old_ctx = NULL;
 
 	rad_assert(request->state == NULL);
 
 	/*
 	 *	No State, don't do anything.
 	 */
-	if (!pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY)) {
+	if (!fr_pair_find_by_num(request->packet->vps, PW_STATE, 0, TAG_ANY)) {
 		RDEBUG3("session-state: No State attribute");
 		return;
 	}
 
 	PTHREAD_MUTEX_LOCK(&state->mutex);
-	entry = fr_state_find(state, packet);
+	entry = fr_state_find(state, request->server, packet);
 
 	/*
 	 *	This has to be done in a mutex lock, because talloc
 	 *	isn't thread-safe.
 	 */
 	if (entry) {
-		pairfilter(request, &request->state, &entry->vps, 0, 0, TAG_ANY);
-		RDEBUG2("session-state: Found cached attributes");
-		rdebug_pair_list(L_DBG_LVL_1, request, request->state, NULL);
+		RDEBUG2("Restoring &session-state");
+
+		if (request->state_ctx) old_ctx = request->state_ctx;
+
+		request->state_ctx = entry->ctx;
+		request->state = entry->vps;
+
+		entry->ctx = NULL;
+		entry->vps = NULL;
+
+		rdebug_pair_list(L_DBG_LVL_2, request, request->state, "&session-state:");
 
 	} else {
 		RDEBUG2("session-state: No cached attributes");
 	}
 
 	PTHREAD_MUTEX_UNLOCK(&state->mutex);
+
+	/*
+	 *	Free this outside of the mutex for less contention.
+	 */
+	if (old_ctx) talloc_free(old_ctx);
 
 	VERIFY_REQUEST(request);
 	return;
@@ -435,22 +459,24 @@ bool fr_state_put_vps(REQUEST *request, RADIUS_PACKET *original, RADIUS_PACKET *
 	PTHREAD_MUTEX_LOCK(&state->mutex);
 
 	if (original) {
-		old = fr_state_find(state, original);
+		old = fr_state_find(state, request->server, original);
 	} else {
 		old = NULL;
 	}
 
-	entry = fr_state_create(state, packet, old);
+	entry = fr_state_create(state, request->server, packet, old);
 	if (!entry) {
 		PTHREAD_MUTEX_UNLOCK(&state->mutex);
 		return false;
 	}
 
-	/*
-	 *	This has to be done in a mutex lock, because talloc
-	 *	isn't thread-safe.
-	 */
-	pairfilter(entry, &entry->vps, &request->state, 0, 0, TAG_ANY);
+	rad_assert(entry->ctx == NULL);
+	entry->ctx = request->state_ctx;
+	entry->vps = request->state;
+
+	request->state_ctx = NULL;
+	request->state = NULL;
+
 	PTHREAD_MUTEX_UNLOCK(&state->mutex);
 
 	rad_assert(request->state == NULL);
@@ -462,7 +488,7 @@ bool fr_state_put_vps(REQUEST *request, RADIUS_PACKET *original, RADIUS_PACKET *
  *	Find the opaque data associated with a State attribute.
  *	Leave the data in the entry.
  */
-void *fr_state_find_data(fr_state_t *state, UNUSED REQUEST *request, RADIUS_PACKET *packet)
+void *fr_state_find_data(fr_state_t *state, REQUEST *request, RADIUS_PACKET *packet)
 {
 	void *data;
 	state_entry_t *entry;
@@ -470,7 +496,7 @@ void *fr_state_find_data(fr_state_t *state, UNUSED REQUEST *request, RADIUS_PACK
 	if (!state) return false;
 
 	PTHREAD_MUTEX_LOCK(&state->mutex);
-	entry = fr_state_find(state, packet);
+	entry = fr_state_find(state, request->server, packet);
 	if (!entry) {
 		PTHREAD_MUTEX_UNLOCK(&state->mutex);
 		return NULL;
@@ -487,7 +513,7 @@ void *fr_state_find_data(fr_state_t *state, UNUSED REQUEST *request, RADIUS_PACK
  *	Get the opaque data associated with a State attribute.
  *	and remove the data from the entry.
  */
-void *fr_state_get_data(fr_state_t *state, UNUSED REQUEST *request, RADIUS_PACKET *packet)
+void *fr_state_get_data(fr_state_t *state, REQUEST *request, RADIUS_PACKET *packet)
 {
 	void *data;
 	state_entry_t *entry;
@@ -495,7 +521,7 @@ void *fr_state_get_data(fr_state_t *state, UNUSED REQUEST *request, RADIUS_PACKE
 	if (!state) return NULL;
 
 	PTHREAD_MUTEX_LOCK(&state->mutex);
-	entry = fr_state_find(state, packet);
+	entry = fr_state_find(state, request->server, packet);
 	if (!entry) {
 		PTHREAD_MUTEX_UNLOCK(&state->mutex);
 		return NULL;
@@ -513,7 +539,7 @@ void *fr_state_get_data(fr_state_t *state, UNUSED REQUEST *request, RADIUS_PACKE
  *	Get the opaque data associated with a State attribute.
  *	and remove the data from the entry.
  */
-bool fr_state_put_data(fr_state_t *state, UNUSED REQUEST *request, RADIUS_PACKET *original, RADIUS_PACKET *packet,
+bool fr_state_put_data(fr_state_t *state, REQUEST *request, RADIUS_PACKET *original, RADIUS_PACKET *packet,
 		       void *data, void (*free_data)(void *))
 {
 	state_entry_t *entry, *old;
@@ -523,12 +549,12 @@ bool fr_state_put_data(fr_state_t *state, UNUSED REQUEST *request, RADIUS_PACKET
 	PTHREAD_MUTEX_LOCK(&state->mutex);
 
 	if (original) {
-		old = fr_state_find(state, original);
+		old = fr_state_find(state, request->server, original);
 	} else {
 		old = NULL;
 	}
 
-	entry = fr_state_create(state, packet, old);
+	entry = fr_state_create(state, request->server, packet, old);
 	if (!entry) {
 		PTHREAD_MUTEX_UNLOCK(&state->mutex);
 		return false;

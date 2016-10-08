@@ -142,7 +142,15 @@ static char const *dhcp_message_types[] = {
 	"DHCP-Release",
 	"DHCP-Inform",
 	"DHCP-Force-Renew",
+	"DHCP-Lease-Query",
+	"DHCP-Lease-Unassigned",
+	"DHCP-Lease-Unknown",
+	"DHCP-Lease-Active",
+	"DHCP-Bulk-Lease-Query",
+	"DHCP-Lease-Query-Done"
 };
+
+#define DHCP_MAX_MESSAGE_TYPE (sizeof(dhcp_message_types) / sizeof(dhcp_message_types[0]))
 
 static int dhcp_header_sizes[] = {
 	1, 1, 1, 1,
@@ -294,14 +302,14 @@ RADIUS_PACKET *fr_dhcp_recv(int sockfd)
 		return NULL;
 	}
 
-	if (packet->data[1] != 1) {
+	if (packet->data[1] > 1) {
 		fr_strerror_printf("DHCP can only receive ethernet requests, not type %02x",
 		      packet->data[1]);
 		rad_free(&packet);
 		return NULL;
 	}
 
-	if (packet->data[2] != 6) {
+	if ((packet->data[2] != 0) && (packet->data[2] != 6)) {
 		fr_strerror_printf("Ethernet HW length is wrong length %d",
 			packet->data[2]);
 		rad_free(&packet);
@@ -323,15 +331,15 @@ RADIUS_PACKET *fr_dhcp_recv(int sockfd)
 	packet->id = ntohl(magic);
 
 	code = dhcp_get_option((dhcp_packet_t *) packet->data,
-			       packet->data_len, 53);
+			       packet->data_len, PW_DHCP_MESSAGE_TYPE);
 	if (!code) {
 		fr_strerror_printf("No message-type option was found in the packet");
 		rad_free(&packet);
 		return NULL;
 	}
 
-	if ((code[1] < 1) || (code[2] == 0) || (code[2] > 8)) {
-		fr_strerror_printf("Unknown value for message-type option");
+	if ((code[1] < 1) || (code[2] == 0) || (code[2] >= DHCP_MAX_MESSAGE_TYPE)) {
+		fr_strerror_printf("Unknown value %d for message-type option", code[2]);
 		rad_free(&packet);
 		return NULL;
 	}
@@ -391,7 +399,7 @@ RADIUS_PACKET *fr_dhcp_recv(int sockfd)
 		char src_ip_buf[256], dst_ip_buf[256];
 
 		if ((packet->code >= PW_DHCP_DISCOVER) &&
-		    (packet->code <= PW_DHCP_INFORM)) {
+		    (packet->code < (1024 + DHCP_MAX_MESSAGE_TYPE))) {
 			name = dhcp_message_types[packet->code - PW_DHCP_OFFSET];
 		} else {
 			snprintf(type_buf, sizeof(type_buf), "%d",
@@ -446,7 +454,7 @@ int fr_dhcp_send(RADIUS_PACKET *packet)
 		char dst_ip_buf[INET6_ADDRSTRLEN];
 
 		if ((packet->code >= PW_DHCP_DISCOVER) &&
-		    (packet->code <= PW_DHCP_INFORM)) {
+		    (packet->code < (1024 + DHCP_MAX_MESSAGE_TYPE))) {
 			name = dhcp_message_types[packet->code - PW_DHCP_OFFSET];
 		} else {
 			snprintf(type_buf, sizeof(type_buf), "%d",
@@ -645,7 +653,7 @@ static int fr_dhcp_decode_suboption(TALLOC_CTX *ctx, VALUE_PAIR **tlv, uint8_t c
 		if (!da) {
 			da = dict_unknown_afrom_fields(ctx, attr, (*tlv)->da->vendor);
 			if (!da) {
-				pairfree(&head);
+				fr_pair_list_free(&head);
 				return -1;
 			}
 		}
@@ -654,17 +662,17 @@ static int fr_dhcp_decode_suboption(TALLOC_CTX *ctx, VALUE_PAIR **tlv, uint8_t c
 		a_p = p + 2;
 		num_entries = fr_dhcp_array_members(&a_len, da);
 		for (i = 0; i < num_entries; i++) {
-			vp = pairalloc(ctx, da);
+			vp = fr_pair_afrom_da(ctx, da);
 			if (!vp) {
-				pairfree(&head);
+				fr_pair_list_free(&head);
 				return -1;
 			}
 			vp->op = T_OP_EQ;
-			pairsteal(ctx, vp); /* for unknown attributes hack */
+			fr_pair_steal(ctx, vp); /* for unknown attributes hack */
 
 			if (fr_dhcp_attr2vp(ctx, &vp, a_p, a_len) < 0) {
 				dict_attr_free(&da);
-				pairfree(&head);
+				fr_pair_list_free(&head);
 				goto malformed;
 			}
 			fr_cursor_merge(&cursor, vp);
@@ -701,8 +709,8 @@ static int fr_dhcp_decode_suboption(TALLOC_CTX *ctx, VALUE_PAIR **tlv, uint8_t c
 	return 0;
 
 malformed:
-	pair2unknown(*tlv);
-	pairmemcpy(*tlv, data, len);
+	fr_pair_to_unknown(*tlv);
+	fr_pair_value_memcpy(*tlv, data, len);
 
 	return 0;
 }
@@ -756,7 +764,7 @@ static int fr_dhcp_attr2vp(TALLOC_CTX *ctx, VALUE_PAIR **vp_p, uint8_t const *da
 		q = end = data + len;
 
 		if (!vp->da->flags.array) {
-			pairbstrncpy(vp, (char const *)p, q - p);
+			fr_pair_value_bstrncpy(vp, (char const *)p, q - p);
 			break;
 		}
 
@@ -770,14 +778,14 @@ static int fr_dhcp_attr2vp(TALLOC_CTX *ctx, VALUE_PAIR **vp_p, uint8_t const *da
 			/* Malformed but recoverable */
 			if (!q) q = end;
 
-			pairbstrncpy(vp, (char const *)p, q - p);
+			fr_pair_value_bstrncpy(vp, (char const *)p, q - p);
 			p = q + 1;
 
 			/* Need another VP for the next round */
 			if (p < end) {
-				vp = pairalloc(ctx, vp->da);
+				vp = fr_pair_afrom_da(ctx, vp->da);
 				if (!vp) {
-					pairfree(vp_p);
+					fr_pair_list_free(vp_p);
 					return -1;
 				}
 				fr_cursor_insert(&cursor, vp);
@@ -798,11 +806,11 @@ static int fr_dhcp_attr2vp(TALLOC_CTX *ctx, VALUE_PAIR **vp_p, uint8_t const *da
 	 *	vp's original DICT_ATTR with an unknown one.
 	 */
 	raw:
-		if (pair2unknown(vp) < 0) return -1;
+		if (fr_pair_to_unknown(vp) < 0) return -1;
 
 	case PW_TYPE_OCTETS:
 		if (len > 255) return -1;
-		pairmemcpy(vp, data, len);
+		fr_pair_value_memcpy(vp, data, len);
 		break;
 
 	/*
@@ -864,6 +872,16 @@ ssize_t fr_dhcp_decode_options(TALLOC_CTX *ctx, VALUE_PAIR **out, uint8_t const 
 		a_p = p + 2;
 
 		/*
+		 *	Ensure we've not been given a bad length value
+		 */
+		if ((a_p + a_len) > q) {
+			fr_strerror_printf("Length field value of option %u is incorrect.  "
+					   "Got %u bytes, expected <= %zu bytes", p[0], p[1], q - a_p);
+			fr_pair_list_free(out);
+			return -1;
+		}
+
+		/*
 		 *	Unknown attribute, create an octets type
 		 *	attribute with the contents of the sub-option.
 		 */
@@ -871,15 +889,15 @@ ssize_t fr_dhcp_decode_options(TALLOC_CTX *ctx, VALUE_PAIR **out, uint8_t const 
 		if (!da) {
 			da = dict_unknown_afrom_fields(ctx, p[0], DHCP_MAGIC_VENDOR);
 			if (!da) {
-				pairfree(out);
+				fr_pair_list_free(out);
 				return -1;
 			}
-			vp = pairalloc(ctx, da);
+			vp = fr_pair_afrom_da(ctx, da);
 			if (!vp) {
-				pairfree(out);
+				fr_pair_list_free(out);
 				return -1;
 			}
-			pairmemcpy(vp, a_p, a_len);
+			fr_pair_value_memcpy(vp, a_p, a_len);
 			fr_cursor_insert(&cursor, vp);
 
 			goto next;
@@ -891,16 +909,16 @@ ssize_t fr_dhcp_decode_options(TALLOC_CTX *ctx, VALUE_PAIR **out, uint8_t const 
 		 */
 		num_entries = fr_dhcp_array_members(&a_len, da);
 		for (i = 0; i < num_entries; i++) {
-			vp = pairalloc(ctx, da);
+			vp = fr_pair_afrom_da(ctx, da);
 			if (!vp) {
-				pairfree(out);
+				fr_pair_list_free(out);
 				return -1;
 			}
 			vp->op = T_OP_EQ;
 
 			if (fr_dhcp_attr2vp(ctx, &vp, a_p, a_len) < 0) {
-				pairfree(&vp);
-				pairfree(out);
+				fr_pair_list_free(&vp);
+				fr_pair_list_free(out);
 				return -1;
 			}
 			fr_cursor_merge(&cursor, vp);
@@ -934,7 +952,7 @@ int fr_dhcp_decode(RADIUS_PACKET *packet)
 		fprintf(fr_log_fp, "\n");
 	}
 
-	if (packet->data[1] != 1) {
+	if (packet->data[1] > 1) {
 		fr_strerror_printf("Packet is not Ethernet: %u",
 		      packet->data[1]);
 		return -1;
@@ -944,27 +962,33 @@ int fr_dhcp_decode(RADIUS_PACKET *packet)
 	 *	Decode the header.
 	 */
 	for (i = 0; i < 14; i++) {
-		char *q;
 
-		vp = pairmake(packet, NULL, dhcp_header_names[i], NULL, T_OP_EQ);
+		vp = fr_pair_make(packet, NULL, dhcp_header_names[i], NULL, T_OP_EQ);
 		if (!vp) {
 			char buffer[256];
 			strlcpy(buffer, fr_strerror(), sizeof(buffer));
 			fr_strerror_printf("Cannot decode packet due to internal error: %s", buffer);
-			pairfree(&head);
+			fr_pair_list_free(&head);
 			return -1;
 		}
 
 		/*
-		 *	If chaddr does != 6 bytes it's probably not ethernet, and we should store
+		 *	If chaddr != 6 bytes it's probably not ethernet, and we should store
 		 *	it as an opaque type (octets).
 		 */
-		if ((i == 11) && (packet->data[1] == 1) && (packet->data[2] != sizeof(vp->vp_ether))) {
-			DICT_ATTR const *da = dict_unknown_afrom_fields(packet, vp->da->attr, vp->da->vendor);
-			if (!da) {
-				return -1;
+		if (i == 11) {
+			/*
+			 *	Skip chaddr if it doesn't exist.
+			 */
+			if ((packet->data[1] == 0) || (packet->data[2] == 0)) continue;
+
+			if ((packet->data[1] == 1) && (packet->data[2] != sizeof(vp->vp_ether))) {
+				DICT_ATTR const *da = dict_unknown_afrom_fields(packet, vp->da->attr, vp->da->vendor);
+				if (!da) {
+					return -1;
+				}
+				vp->da = da;
 			}
-			vp->da = da;
 		}
 
 		switch (vp->da->type) {
@@ -990,18 +1014,24 @@ int fr_dhcp_decode(RADIUS_PACKET *packet)
 			break;
 
 		case PW_TYPE_STRING:
-			vp->vp_strvalue = q = talloc_array(vp, char, dhcp_header_sizes[i] + 1);
-			vp->type = VT_DATA;
-			memcpy(q, p, dhcp_header_sizes[i]);
-			q[dhcp_header_sizes[i]] = '\0';
-			vp->vp_length = strlen(vp->vp_strvalue);
-			if (vp->vp_length == 0) {
-				pairfree(&vp);
+			/*
+			 *	According to RFC 2131, these are null terminated strings.
+			 *	We don't trust everyone to abide by the RFC, though.
+			 */
+			if (*p != '\0') {
+				uint8_t *end;
+				int len;
+				end = memchr(p, '\0', dhcp_header_sizes[i]);
+				len = end ? end - p : dhcp_header_sizes[i];
+				fr_pair_value_bstrncpy(vp, p, len);
 			}
+			if (vp->vp_length == 0) fr_pair_list_free(&vp);
 			break;
 
 		case PW_TYPE_OCTETS:
-			pairmemcpy(vp, p, packet->data[2]);
+			if (packet->data[2] == 0) break;
+
+			fr_pair_value_memcpy(vp, p, packet->data[2]);
 			break;
 
 		case PW_TYPE_ETHERNET:
@@ -1011,7 +1041,7 @@ int fr_dhcp_decode(RADIUS_PACKET *packet)
 
 		default:
 			fr_strerror_printf("BAD TYPE %d", vp->da->type);
-			pairfree(&vp);
+			fr_pair_list_free(&vp);
 			break;
 		}
 		p += dhcp_header_sizes[i];
@@ -1061,19 +1091,19 @@ int fr_dhcp_decode(RADIUS_PACKET *packet)
 		/*
 		 *	DHCP Opcode is request
 		 */
-		vp = pairfind(head, 256, DHCP_MAGIC_VENDOR, TAG_ANY);
+		vp = fr_pair_find_by_num(head, 256, DHCP_MAGIC_VENDOR, TAG_ANY);
 		if (vp && vp->vp_integer == 3) {
 			/*
 			 *	Vendor is "MSFT 98"
 			 */
-			vp = pairfind(head, 63, DHCP_MAGIC_VENDOR, TAG_ANY);
+			vp = fr_pair_find_by_num(head, 63, DHCP_MAGIC_VENDOR, TAG_ANY);
 			if (vp && (strcmp(vp->vp_strvalue, "MSFT 98") == 0)) {
-				vp = pairfind(head, 262, DHCP_MAGIC_VENDOR, TAG_ANY);
+				vp = fr_pair_find_by_num(head, 262, DHCP_MAGIC_VENDOR, TAG_ANY);
 
 				/*
 				 *	Reply should be broadcast.
 				 */
-				if (vp) vp->vp_integer |= 0x8000;
+				if (vp) vp->vp_short |= 0x8000;
 				packet->data[10] |= 0x80;
 			}
 		}
@@ -1089,8 +1119,8 @@ int fr_dhcp_decode(RADIUS_PACKET *packet)
 	 *	Client can request a LARGER size, but not a smaller
 	 *	one.  They also cannot request a size larger than MTU.
 	 */
-	maxms = pairfind(packet->vps, 57, DHCP_MAGIC_VENDOR, TAG_ANY);
-	mtu = pairfind(packet->vps, 26, DHCP_MAGIC_VENDOR, TAG_ANY);
+	maxms = fr_pair_find_by_num(packet->vps, 57, DHCP_MAGIC_VENDOR, TAG_ANY);
+	mtu = fr_pair_find_by_num(packet->vps, 26, DHCP_MAGIC_VENDOR, TAG_ANY);
 
 	if (mtu && (mtu->vp_integer < DEFAULT_PACKET_SIZE)) {
 		fr_strerror_printf("DHCP Fatal: Client says MTU is smaller than minimum permitted by the specification");
@@ -1124,12 +1154,12 @@ int8_t fr_dhcp_attr_cmp(void const *a, void const *b)
 	/*
 	 *	DHCP-Message-Type is first, for simplicity.
 	 */
-	if ((my_a->da->attr == 53) && (my_b->da->attr != 53)) return -1;
+	if ((my_a->da->attr == PW_DHCP_MESSAGE_TYPE) && (my_b->da->attr != PW_DHCP_MESSAGE_TYPE)) return -1;
 
 	/*
 	 *	Relay-Agent is last
 	 */
-	if ((my_a->da->attr == 82) && (my_b->da->attr != 82)) return 1;
+	if ((my_a->da->attr == PW_DHCP_OPTION_82) && (my_b->da->attr != PW_DHCP_OPTION_82)) return 1;
 
 	if (my_a->da->attr < my_b->da->attr) return -1;
 	if (my_a->da->attr > my_b->da->attr) return 1;
@@ -1278,6 +1308,7 @@ static ssize_t fr_dhcp_vp2data_tlv(uint8_t *out, ssize_t outlen, vp_cursor_t *cu
 			return -1;
 		}
 
+		debug_pair(vp);
 		*opt_len += len;
 		p += len;
 	};
@@ -1305,7 +1336,7 @@ ssize_t fr_dhcp_encode_option(UNUSED TALLOC_CTX *ctx, uint8_t *out, size_t outle
 	if (!vp) return -1;
 
 	if (vp->da->vendor != DHCP_MAGIC_VENDOR) goto next; /* not a DHCP option */
-	if (vp->da->attr == 53) goto next; /* already done */
+	if (vp->da->attr == PW_DHCP_MESSAGE_TYPE) goto next; /* already done */
 	if ((vp->da->attr > 255) && (DHCP_BASE_ATTR(vp->da->attr) != PW_DHCP_OPTION_82)) goto next;
 
 	if (vp->da->flags.extended) {
@@ -1339,6 +1370,7 @@ ssize_t fr_dhcp_encode_option(UNUSED TALLOC_CTX *ctx, uint8_t *out, size_t outle
 
 		} else {
 			len = fr_dhcp_vp2data(p, freespace, vp);
+			if (len >= 0) debug_pair(vp);
 			fr_cursor_next(cursor);
 			previous = vp->da;
 		}
@@ -1367,6 +1399,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	vp_cursor_t cursor;
 	VALUE_PAIR *vp;
 	uint32_t lvalue;
+	uint16_t	svalue;
 	size_t dhcp_size;
 	ssize_t len;
 #ifndef NDEBUG
@@ -1386,7 +1419,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	if (packet->code == 0) packet->code = PW_DHCP_NAK;
 
 	/* store xid */
-	if ((vp = pairfind(packet->vps, 260, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+	if ((vp = fr_pair_find_by_num(packet->vps, 260, DHCP_MAGIC_VENDOR, TAG_ANY))) {
 		packet->id = vp->vp_integer;
 	} else {
 		packet->id = fr_rand();
@@ -1394,7 +1427,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 
 #ifndef NDEBUG
 	if ((packet->code >= PW_DHCP_DISCOVER) &&
-	    (packet->code <= PW_DHCP_INFORM)) {
+	    (packet->code < (1024 + DHCP_MAX_MESSAGE_TYPE))) {
 		name = dhcp_message_types[packet->code - PW_DHCP_OFFSET];
 	} else {
 		name = "?Unknown?";
@@ -1434,7 +1467,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	 */
 
 	/* DHCP-DHCP-Maximum-Msg-Size */
-	vp = pairfind(packet->vps, 57, DHCP_MAGIC_VENDOR, TAG_ANY);
+	vp = fr_pair_find_by_num(packet->vps, 57, DHCP_MAGIC_VENDOR, TAG_ANY);
 	if (vp && (vp->vp_integer > mms)) {
 		mms = vp->vp_integer;
 
@@ -1442,7 +1475,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	}
 #endif
 
-	vp = pairfind(packet->vps, 256, DHCP_MAGIC_VENDOR, TAG_ANY);
+	vp = fr_pair_find_by_num(packet->vps, 256, DHCP_MAGIC_VENDOR, TAG_ANY);
 	if (vp) {
 		*p++ = vp->vp_integer & 0xff;
 	} else {
@@ -1450,22 +1483,22 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	}
 
 	/* DHCP-Hardware-Type */
-	if ((vp = pairfind(packet->vps, 257, DHCP_MAGIC_VENDOR, TAG_ANY))) {
-		*p++ = vp->vp_integer & 0xFF;
+	if ((vp = fr_pair_find_by_num(packet->vps, 257, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+		*p++ = vp->vp_byte;
 	} else {
 		*p++ = 1;		/* hardware type = ethernet */
 	}
 
 	/* DHCP-Hardware-Address-Length */
-	if ((vp = pairfind(packet->vps, 258, DHCP_MAGIC_VENDOR, TAG_ANY))) {
-		*p++ = vp->vp_integer & 0xFF;
+	if ((vp = fr_pair_find_by_num(packet->vps, 258, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+		*p++ = vp->vp_byte;
 	} else {
 		*p++ = 6;		/* 6 bytes of ethernet */
 	}
 
 	/* DHCP-Hop-Count */
-	if ((vp = pairfind(packet->vps, 259, DHCP_MAGIC_VENDOR, TAG_ANY))) {
-		*p = vp->vp_integer & 0xff;
+	if ((vp = fr_pair_find_by_num(packet->vps, 259, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+		*p = vp->vp_byte;
 	}
 	p++;
 
@@ -1475,27 +1508,27 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	p += 4;
 
 	/* DHCP-Number-of-Seconds */
-	if ((vp = pairfind(packet->vps, 261, DHCP_MAGIC_VENDOR, TAG_ANY))) {
-		lvalue = htonl(vp->vp_integer);
-		memcpy(p, &lvalue, 2);
+	if ((vp = fr_pair_find_by_num(packet->vps, 261, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+		svalue = htons(vp->vp_short);
+		memcpy(p, &svalue, 2);
 	}
 	p += 2;
 
 	/* DHCP-Flags */
-	if ((vp = pairfind(packet->vps, 262, DHCP_MAGIC_VENDOR, TAG_ANY))) {
-		lvalue = htons(vp->vp_integer);
-		memcpy(p, &lvalue, 2);
+	if ((vp = fr_pair_find_by_num(packet->vps, 262, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+		svalue = htons(vp->vp_short);
+		memcpy(p, &svalue, 2);
 	}
 	p += 2;
 
 	/* DHCP-Client-IP-Address */
-	if ((vp = pairfind(packet->vps, 263, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+	if ((vp = fr_pair_find_by_num(packet->vps, 263, DHCP_MAGIC_VENDOR, TAG_ANY))) {
 		memcpy(p, &vp->vp_ipaddr, 4);
 	}
 	p += 4;
 
 	/* DHCP-Your-IP-address */
-	if ((vp = pairfind(packet->vps, 264, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+	if ((vp = fr_pair_find_by_num(packet->vps, 264, DHCP_MAGIC_VENDOR, TAG_ANY))) {
 		lvalue = vp->vp_ipaddr;
 	} else {
 		lvalue = htonl(INADDR_ANY);
@@ -1504,7 +1537,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	p += 4;
 
 	/* DHCP-Server-IP-Address */
-	vp = pairfind(packet->vps, 265, DHCP_MAGIC_VENDOR, TAG_ANY);
+	vp = fr_pair_find_by_num(packet->vps, 265, DHCP_MAGIC_VENDOR, TAG_ANY);
 	if (vp) {
 		lvalue = vp->vp_ipaddr;
 	} else {
@@ -1516,7 +1549,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	/*
 	 *	DHCP-Gateway-IP-Address
 	 */
-	if ((vp = pairfind(packet->vps, 266, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+	if ((vp = fr_pair_find_by_num(packet->vps, 266, DHCP_MAGIC_VENDOR, TAG_ANY))) {
 		lvalue = vp->vp_ipaddr;
 	} else {
 		lvalue = htonl(INADDR_ANY);
@@ -1525,15 +1558,22 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	p += 4;
 
 	/* DHCP-Client-Hardware-Address */
-	if ((vp = pairfind(packet->vps, 267, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+	if ((vp = fr_pair_find_by_num(packet->vps, 267, DHCP_MAGIC_VENDOR, TAG_ANY))) {
 		if (vp->vp_length == sizeof(vp->vp_ether)) {
+			/*
+			 *	Ensure that we mark the packet as being Ethernet.
+			 *	This is mainly for DHCP-Lease-Query responses.
+			 */
+			packet->data[1] = 1;
+			packet->data[2] = 6;
+
 			memcpy(p, vp->vp_ether, vp->vp_length);
 		} /* else ignore it */
 	}
 	p += DHCP_CHADDR_LEN;
 
 	/* DHCP-Server-Host-Name */
-	if ((vp = pairfind(packet->vps, 268, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+	if ((vp = fr_pair_find_by_num(packet->vps, 268, DHCP_MAGIC_VENDOR, TAG_ANY))) {
 		if (vp->vp_length > DHCP_SNAME_LEN) {
 			memcpy(p, vp->vp_strvalue, DHCP_SNAME_LEN);
 		} else {
@@ -1553,7 +1593,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	 */
 
 	/* DHCP-Boot-Filename */
-	vp = pairfind(packet->vps, 269, DHCP_MAGIC_VENDOR, TAG_ANY);
+	vp = fr_pair_find_by_num(packet->vps, 269, DHCP_MAGIC_VENDOR, TAG_ANY);
 	if (vp) {
 		if (vp->vp_length > DHCP_FILE_LEN) {
 			memcpy(p, vp->vp_strvalue, DHCP_FILE_LEN);
@@ -1579,7 +1619,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 		for (i = 0; i < 14; i++) {
 			char *q;
 
-			vp = pairmake(packet, NULL,
+			vp = fr_pair_make(packet, NULL,
 				      dhcp_header_names[i], NULL, T_OP_EQ);
 			if (!vp) {
 				char buffer[256];
@@ -1615,7 +1655,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 				break;
 
 			case PW_TYPE_OCTETS: /* only for Client HW Address */
-				pairmemcpy(vp, p, packet->data[2]);
+				fr_pair_value_memcpy(vp, p, packet->data[2]);
 				break;
 
 			case PW_TYPE_ETHERNET: /* only for Client HW Address */
@@ -1624,14 +1664,14 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 
 			default:
 				fr_strerror_printf("Internal sanity check failed %d %d", vp->da->type, __LINE__);
-				pairfree(&vp);
+				fr_pair_list_free(&vp);
 				break;
 			}
 
 			p += dhcp_header_sizes[i];
 
 			debug_pair(vp);
-			pairfree(&vp);
+			fr_pair_list_free(&vp);
 		}
 
 		/*
@@ -1645,12 +1685,11 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	p[2] = packet->code - PW_DHCP_OFFSET;
 	p += 3;
 
-
 	/*
 	 *  Pre-sort attributes into contiguous blocks so that fr_dhcp_encode_option
 	 *  operates correctly. This changes the order of the list, but never mind...
 	 */
-	pairsort(&packet->vps, fr_dhcp_attr_cmp);
+	fr_pair_list_sort(&packet->vps, fr_dhcp_attr_cmp);
 	fr_cursor_init(&cursor, &packet->vps);
 
 	/*
@@ -1660,7 +1699,6 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 	while ((vp = fr_cursor_current(&cursor))) {
 		len = fr_dhcp_encode_option(packet, p, packet->data_len - (p - packet->data), &cursor);
 		if (len < 0) break;
-		if (len > 0) debug_pair(vp);
 		p += len;
 	};
 
@@ -1806,7 +1844,7 @@ int fr_dhcp_send_raw_packet(int sockfd, struct sockaddr_ll *p_ll, RADIUS_PACKET 
 
 	/* set ethernet source address to our MAC address (DHCP-Client-Hardware-Address). */
 	u_char dhmac[ETH_ADDR_LEN] = { 0 };
-	if ((vp = pairfind(packet->vps, 267, DHCP_MAGIC_VENDOR, TAG_ANY))) {
+	if ((vp = fr_pair_find_by_num(packet->vps, 267, DHCP_MAGIC_VENDOR, TAG_ANY))) {
 		if (vp->length == sizeof(vp->vp_ether)) {
 			memcpy(dhmac, vp->vp_ether, vp->length);
 		}
@@ -1863,7 +1901,7 @@ int fr_dhcp_send_raw_packet(int sockfd, struct sockaddr_ll *p_ll, RADIUS_PACKET 
 		char dst_ip_buf[INET6_ADDRSTRLEN];
 
 		if ((packet->code >= PW_DHCP_DISCOVER) &&
-		    (packet->code <= PW_DHCP_INFORM)) {
+		    (packet->code < (1024 + DHCP_MAX_MESSAGE_TYPE))) {
 			name = dhcp_message_types[packet->code - PW_DHCP_OFFSET];
 		} else {
 			snprintf(type_buf, sizeof(type_buf), "%d",
@@ -1952,7 +1990,7 @@ RADIUS_PACKET *fr_dhcp_recv_raw_packet(int sockfd, struct sockaddr_ll *p_ll, RAD
 	 * Check if it matches the source HW address used (DHCP-Client-Hardware-Address = 267)
 	 */
 	if ( (memcmp(&eth_bcast, &eth_hdr->ether_dst, ETH_ADDR_LEN) != 0) &&
-			(vp = pairfind(request->vps, 267, DHCP_MAGIC_VENDOR, TAG_ANY)) &&
+			(vp = fr_pair_find_by_num(request->vps, 267, DHCP_MAGIC_VENDOR, TAG_ANY)) &&
 			(vp->length == sizeof(vp->vp_ether)) &&
 			(memcmp(vp->vp_ether, &eth_hdr->ether_dst, ETH_ADDR_LEN) != 0) ) {
 		/* No match. */
@@ -2022,7 +2060,7 @@ RADIUS_PACKET *fr_dhcp_recv_raw_packet(int sockfd, struct sockaddr_ll *p_ll, RAD
 	packet->id = xid;
 
 	code = dhcp_get_option((dhcp_packet_t *) packet->data,
-			       packet->data_len, 53);
+			       packet->data_len, PW_DHCP_MESSAGE_TYPE);
 	if (!code) {
 		fr_strerror_printf("No message-type option was found in the packet");
 		rad_free(&packet);
@@ -2066,7 +2104,7 @@ RADIUS_PACKET *fr_dhcp_recv_raw_packet(int sockfd, struct sockaddr_ll *p_ll, RAD
 		char src_ip_buf[256], dst_ip_buf[256];
 
 		if ((packet->code >= PW_DHCP_DISCOVER) &&
-		    (packet->code <= PW_DHCP_INFORM)) {
+		    (packet->code < (1024 + DHCP_MAX_MESSAGE_TYPE))) {
 			name = dhcp_message_types[packet->code - PW_DHCP_OFFSET];
 		} else {
 			snprintf(type_buf, sizeof(type_buf), "%d", packet->code - PW_DHCP_OFFSET);

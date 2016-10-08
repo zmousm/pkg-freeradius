@@ -27,7 +27,6 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/rad_assert.h>
 
-#include <wbclient.h>
 #include <core/ntstatus.h>
 
 #include "rlm_mschap.h"
@@ -105,6 +104,10 @@ int do_auth_wbclient(rlm_mschap_t *inst, REQUEST *request,
 
 	memcpy(authparams.password.response.challenge, challenge,
 	       sizeof(authparams.password.response.challenge));
+
+	authparams.parameter_control |= WBC_MSV1_0_ALLOW_MSVCHAPV2 |
+					WBC_MSV1_0_ALLOW_WORKSTATION_TRUST_ACCOUNT |
+					WBC_MSV1_0_ALLOW_SERVER_TRUST_ACCOUNT;
 
 
 	/*

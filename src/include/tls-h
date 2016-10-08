@@ -106,6 +106,12 @@ typedef struct _tls_info_t {
 	int		version;
 } tls_info_t;
 
+#if OPENSSL_VERSION_NUMBER < 0x10001000L
+#define ssl_session ssl->session
+#else
+#define ssl_session session
+#endif
+
 /** Contains EAP-REQUEST specific data (ie FR_TLS_DATA(fragment), EAPTLS-ALERT, EAPTLS-REQUEST ...)
  *
  * The tls_session_t Structure gets stored as opaque in eap_handler_t
@@ -113,6 +119,9 @@ typedef struct _tls_info_t {
 typedef struct _tls_session_t {
 	SSL_CTX		*ctx;
 	SSL 		*ssl;
+#if OPENSSL_VERSION_NUMBER >= 0x10001000L
+	SSL_SESSION	*session;
+#endif
 	tls_info_t	info;
 
 	BIO 		*into_ssl;
@@ -289,6 +298,11 @@ void		tls_global_init(void);
 #ifdef ENABLE_OPENSSL_VERSION_CHECK
 int		tls_global_version_check(char const *acknowledged);
 #endif
+
+int		tls_error_log(REQUEST *request, char const *msg, ...) CC_HINT(format (printf, 2, 3));
+int		tls_error_io_log(REQUEST *request, tls_session_t *session, int ret, char const *msg, ...)
+				 CC_HINT(format (printf, 4, 5));
+
 void		tls_global_cleanup(void);
 tls_session_t	*tls_new_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *conf, REQUEST *request, bool client_cert);
 tls_session_t	*tls_new_client_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *conf, int fd);
@@ -298,6 +312,7 @@ SSL_CTX		*tls_init_ctx(fr_tls_server_conf_t *conf, int client);
 int 		tls_handshake_recv(REQUEST *, tls_session_t *ssn);
 int 		tls_handshake_send(REQUEST *, tls_session_t *ssn);
 void 		tls_session_information(tls_session_t *ssn);
+void		tls_session_id(SSL_SESSION *ssn, char *buffer, size_t bufsize);
 
 /*
  *	Low-level TLS stuff
@@ -331,19 +346,17 @@ struct fr_tls_server_conf_t {
 	char const	*ca_file;
 	char const	*dh_file;
 	char const	*rsa_file;
-	bool		rsa_key;
-	bool		dh_key;
-	uint32_t	rsa_key_length;
-	uint32_t	dh_key_length;
 	uint32_t	verify_depth;
 	bool		file_type;
 	bool		include_length;
+	bool		auto_chain;
+	bool		disable_single_dh_use;
 	bool		disable_tlsv1;
 	bool		disable_tlsv1_1;
 	bool		disable_tlsv1_2;
 
 	/*
-	 *	Always < 4096 (due to radius limit), 0 by default = 2048
+	 *	Always < 4096 (due to radius limit), 0 by default = 1024
 	 */
 	uint32_t	fragment_size;
 	bool		check_crl;
@@ -361,6 +374,7 @@ struct fr_tls_server_conf_t {
 	char		session_context_id[SSL_MAX_SSL_SESSION_ID_LENGTH];
 	time_t		session_last_flushed;
 
+	bool		verify_skip_if_ocsp_ok;
 	char const	*verify_tmp_dir;
 	char const	*verify_client_cert_cmd;
 	bool		require_client_cert;

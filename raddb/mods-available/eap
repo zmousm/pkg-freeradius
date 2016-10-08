@@ -11,9 +11,6 @@
 #  common side effect of setting 'Auth-Type := EAP' is that the
 #  users then cannot use ANY other authentication method.
 #
-#  EAP types NOT listed here may be supported via the "eap2" module.
-#  See experimental.conf for documentation.
-#
 eap {
 	#  Invoke the default supported EAP type when
 	#  EAP-Identity response is received.
@@ -200,6 +197,15 @@ eap {
 		#
 		ca_file = ${cadir}/ca.pem
 
+	 	#  OpenSSL will automatically create certificate chains,
+	 	#  unless we tell it to not do that.  The problem is that
+	 	#  it sometimes gets the chains right from a certificate
+	 	#  signature view, but wrong from the clients view.
+		#
+		#  When setting "auto_chain = no", the server certificate
+		#  file MUST include the full certificate chain.
+	#	auto_chain = yes
+
 		#
 		#  If OpenSSL supports TLS-PSK, then we can use
 		#  a PSK identity and (hex) password.  When the
@@ -228,7 +234,7 @@ eap {
 		#  For DH cipher suites to work, you have to
 		#  run OpenSSL to create the DH file first:
 		#
-		#  	openssl dhparam -out certs/dh 1024
+		#  	openssl dhparam -out certs/dh 2048
 		#
 		dh_file = ${certdir}/dh
 
@@ -241,7 +247,7 @@ eap {
 		#  write to files in its configuration
 		#  directory.
 		#
-#		random_file = /dev/urandom
+	#	random_file = /dev/urandom
 
 		#
 		#  This can never exceed the size of a RADIUS
@@ -263,6 +269,7 @@ eap {
 		#  First packet of a fragment series.
 		#
 	#	include_length = yes
+
 
 		#  Check the Certificate Revocation List
 		#
@@ -313,7 +320,19 @@ eap {
 		# Set this option to specify the allowed
 		# TLS cipher suites.  The format is listed
 		# in "man 1 ciphers".
+		#
+		# For EAP-FAST, use "ALL:!EXPORT:!eNULL:!SSLv2"
+		#
 		cipher_list = "DEFAULT"
+
+		# Work-arounds for OpenSSL nonsense
+		# OpenSSL 1.0.1f and 1.0.1g do not calculate
+		# the EAP keys correctly.  The fix is to upgrade
+		# OpenSSL, or disable TLS 1.2 here. 
+		#
+		#  For EAP-FAST, this MUST be set to "yes".
+		#
+#		disable_tlsv1_2 = no
 
 		#
 
@@ -366,16 +385,6 @@ eap {
 			enable = yes
 
 			#
-			#  Internal "name" of the session cache. Used to distinguish which
-			#  TLS context sessions belong to.
-			#
-			#  The server will generate a random value if unset. This will change
-			#  across server restart so you MUST set the "name" if you want to
-			#  persist sessions (see below).
-			#
-#                       name = "EAP module"
-
-			#
 			#  Lifetime of the cached entries, in hours. The sessions will be
 			#  deleted/invalidated after this time.
 			#
@@ -391,14 +400,13 @@ eap {
 			max_entries = 255
 
 			#
-			#  Internal "name" of the session cache.
-			#  Used to distinguish which TLS context
-			#  sessions belong to.
+			#  Internal "name" of the session cache. Used to
+			#  distinguish which TLS context sessions belong to.
 			#
-			#  The server will generate a random value
-			#  if unset. This will change across server
-			#  restart so you MUST set the "name" if you
-			#  want to persist sessions (see below).
+			#  The server will generate a random value if unset.
+			#  This will change across server restart so you MUST
+			#  set the "name" if you want to persist sessions (see
+			#  below).
 			#
 			#name = "EAP module"
 
@@ -428,7 +436,21 @@ eap {
 		#  default configuration.  Uncomment it, and configure
 		#  the correct paths below to enable it.
 		#
+		#  If OCSP checking is enabled, and the OCSP checks fail,
+		#  the verify section is not run.
+		#
+		#  If OCSP checking is disabled, the verify section is
+		#  run on successful certificate validation.
+		#
 		verify {
+			#  If the OCSP checks succeed, the verify section
+			#  is run to allow additional checks.
+			#
+			#  If you want to skip verify on OCSP success,
+			#  uncomment this configuration item, and set it
+			#  to "yes".
+	#		skip_if_ocsp_ok = no
+
 			#  A temporary directory where the client
 			#  certificates are stored.  This directory
 			#  MUST be owned by the UID of the server,
@@ -809,4 +831,43 @@ eap {
 		#  identify it.
 #		identity = "FreeRADIUS"
 	}
+
+	## EAP-FAST
+	#
+	#  The FAST module implements the EAP-FAST protocol
+	#
+#	fast {
+		# Point to the common TLS configuration
+		#
+		# cipher_list though must include "ADH" for anonymous provisioning.
+		# This is not as straight forward as appending "ADH" alongside
+		# "DEFAULT" as "DEFAULT" contains "!aNULL" so instead it is
+		# recommended "ALL:!EXPORT:!eNULL:!SSLv2" is used
+		#
+#		tls = tls-common
+
+		# PAC lifetime in seconds (default: seven days)
+		#
+#		pac_lifetime = 604800
+
+		# Authority ID of the server
+		#
+		# if you are running a cluster of RADIUS servers, you should make
+		# the value chosen here (and for "pac_opaque_key") the same on all
+		# your RADIUS servers.  This value should be unique to your
+		# installation.  We suggest using a domain name.
+		#
+#		authority_identity = "1234"
+
+		# PAC Opaque encryption key (must be exactly 32 bytes in size)
+		#
+		# This value MUST be secret, and MUST be generated using
+		# a secure method, such as via 'openssl rand -hex 32'
+		#
+#		pac_opaque_key = "0123456789abcdef0123456789ABCDEF"
+
+		# Same as for TTLS, PEAP, etc.
+		#
+#		virtual_server = inner-tunnel
+#	}
 }

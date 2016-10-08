@@ -30,7 +30,7 @@ RCSID("$Id$")
 
 #include <ctype.h>
 
-#define MAX_QUERY_LEN 1024
+#define MAX_QUERY_LEN 2048
 
 /*
  *	Note: When your counter spans more than 1 period (ie 3 months
@@ -100,8 +100,7 @@ static const CONF_PARSER module_config[] = {
 
 	{ "reply-name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_sqlcounter_t, reply_name), NULL },
 	{ "reply_name", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_ATTRIBUTE, rlm_sqlcounter_t, reply_name), "Session-Timeout" },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static int find_next_reset(rlm_sqlcounter_t *inst, time_t timeval)
@@ -218,7 +217,7 @@ static int find_prev_reset(rlm_sqlcounter_t *inst, time_t timeval)
 		 *  Round down to the prev nearest week.
 		 */
 		tm->tm_hour = 0;
-		tm->tm_mday -= (7 - tm->tm_wday) +(7*(num-1));
+		tm->tm_mday -= tm->tm_wday +(7*(num-1));
 		inst->last_reset = mktime(tm);
 	} else if (strcmp(inst->reset, "monthly") == 0 || last == 'm') {
 		tm->tm_hour = 0;
@@ -522,7 +521,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	if ((inst->key_attr->vendor == 0) && (inst->key_attr->attr == PW_USER_NAME)) {
 		key_vp = request->username;
 	} else {
-		key_vp = pair_find_by_da(request->packet->vps, inst->key_attr, TAG_ANY);
+		key_vp = fr_pair_find_by_da(request->packet->vps, inst->key_attr, TAG_ANY);
 	}
 	if (!key_vp) {
 		RWDEBUG2("Couldn't find key attribute, request:%s, doing nothing...", inst->key_attr->name);
@@ -536,7 +535,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		return rcode;
 	}
 
-	limit = pair_find_by_da(request->config, da, TAG_ANY);
+	limit = fr_pair_find_by_da(request->config, da, TAG_ANY);
 	if (limit == NULL) {
 		/* Yes this really is 'check' as distinct from control */
 		RWDEBUG2("Couldn't find check attribute, control:%s, doing nothing...", inst->limit_name);
@@ -576,7 +575,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	if (limit->vp_integer64 <= counter) {
 		/* User is denied access, send back a reply message */
 		snprintf(msg, sizeof(msg), "Your maximum %s usage time has been reached", inst->reset);
-		pairmake_reply("Reply-Message", msg, T_OP_EQ);
+		pair_make_reply("Reply-Message", msg, T_OP_EQ);
 
 		REDEBUG2("Maximum %s usage time reached", inst->reset);
 		REDEBUG2("Rejecting user, &control:%s value (%" PRIu64 ") is less than counter value (%" PRIu64 ")",
@@ -612,7 +611,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	/*
 	 *	Limit the reply attribute to the minimum of the existing value, or this new one.
 	 */
-	reply_item = pair_find_by_da(request->reply->vps, inst->reply_attr, TAG_ANY);
+	reply_item = fr_pair_find_by_da(request->reply->vps, inst->reply_attr, TAG_ANY);
 	if (reply_item) {
 		if (reply_item->vp_integer64 <= res) {
 			RDEBUG2("Leaving existing &reply:%s value of %" PRIu64, inst->reply_attr->name,
@@ -621,7 +620,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 			return RLM_MODULE_OK;
 		}
 	} else {
-		reply_item = radius_paircreate(request->reply, &request->reply->vps, inst->reply_attr->attr,
+		reply_item = radius_pair_create(request->reply, &request->reply->vps, inst->reply_attr->attr,
 					       inst->reply_attr->vendor);
 	}
 	reply_item->vp_integer64 = res;

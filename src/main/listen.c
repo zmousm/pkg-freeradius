@@ -70,42 +70,14 @@ static void print_packet(RADIUS_PACKET *packet)
 static rad_listen_t *listen_alloc(TALLOC_CTX *ctx, RAD_LISTEN_TYPE type);
 
 #ifdef WITH_COMMAND_SOCKET
+#ifdef WITH_TCP
 static int command_tcp_recv(rad_listen_t *listener);
 static int command_tcp_send(rad_listen_t *listener, REQUEST *request);
 static int command_write_magic(int newfd, listen_socket_t *sock);
 #endif
+#endif
 
 static fr_protocol_t master_listen[];
-
-/*
- *	Xlat for %{listen:foo}
- */
-static ssize_t xlat_listen(UNUSED void *instance, REQUEST *request,
-			   char const *fmt, char *out,
-			   size_t outlen)
-{
-	char const *value = NULL;
-	CONF_PAIR *cp;
-
-	if (!fmt || !out || (outlen < 1)) return 0;
-
-	if (!request->listener) {
-		RWDEBUG("No listener associated with this request");
-		*out = '\0';
-		return 0;
-	}
-
-	cp = cf_pair_find(request->listener->cs, fmt);
-	if (!cp || !(value = cf_pair_value(cp))) {
-		RDEBUG("Listener does not contain config item \"%s\"", fmt);
-		*out = '\0';
-		return 0;
-	}
-
-	strlcpy(out, value, outlen);
-
-	return strlen(out);
-}
 
 /*
  *	Find a per-socket client.
@@ -272,7 +244,7 @@ RADCLIENT *client_listener_find(rad_listen_t *listener,
 	request->packet = rad_recv(NULL, listener->fd, 0x02); /* MSG_PEEK */
 	if (!request->packet) {				/* badly formed, etc */
 		talloc_free(request);
-		ERROR("Receive - %s", fr_strerror());
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
 		goto unknown;
 	}
 	(void) talloc_steal(request, request->packet);
@@ -796,9 +768,11 @@ int common_socket_print(rad_listen_t const *this, char *buffer, size_t bufsize)
 
 	ADDSTRING(name);
 
+#ifdef WITH_TCP
 	if (this->dual) {
 		ADDSTRING("+acct");
 	}
+#endif
 
 	if (sock->interface) {
 		ADDSTRING(" interface ");
@@ -920,8 +894,7 @@ static CONF_PARSER performance_config[] = {
 	{ "synchronous", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rad_listen_t, synchronous), NULL },
 
 	{ "workers", FR_CONF_OFFSET(PW_TYPE_INTEGER, rad_listen_t, workers), NULL },
-
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -933,8 +906,7 @@ static CONF_PARSER limit_config[] = {
 	{ "lifetime", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_socket_t, limit.lifetime), "0" },
 	{ "idle_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, listen_socket_t, limit.idle_timeout), STRINGIFY(30) },
 #endif
-
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -1354,6 +1326,11 @@ static int auth_socket_send(rad_listen_t *listener, REQUEST *request)
 		return -1;
 	}
 
+	if (request->reply->data_len > (MAX_PACKET_LEN - 100)) {
+		RWARN("Packet is large, and possibly truncated - %zd vs max %d",
+		      request->reply->data_len, MAX_PACKET_LEN);
+	}
+
 	return 0;
 }
 
@@ -1394,6 +1371,11 @@ static int acct_socket_send(rad_listen_t *listener, REQUEST *request)
 		return -1;
 	}
 
+	if (request->reply->data_len > (MAX_PACKET_LEN - 100)) {
+		RWARN("Packet is large, and possibly truncated - %zd vs max %d",
+		      request->reply->data_len, MAX_PACKET_LEN);
+	}
+
 	return 0;
 }
 #endif
@@ -1414,6 +1396,11 @@ static int proxy_socket_send(rad_listen_t *listener, REQUEST *request)
 		RERROR("Failed sending proxied request: %s",
 			       fr_strerror());
 		return -1;
+	}
+
+	if (request->proxy->data_len > (MAX_PACKET_LEN - 100)) {
+		RWARN("Packet is large, and possibly truncated - %zd vs max %d",
+		      request->proxy->data_len, MAX_PACKET_LEN);
 	}
 
 	return 0;
@@ -1442,7 +1429,7 @@ static int stats_socket_recv(rad_listen_t *listener)
 	FR_STATS_INC(auth, total_requests);
 
 	if (rcode < 20) {	/* RADIUS_HDR_LEN */
-		ERROR("Receive - %s", fr_strerror());
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
 		FR_STATS_INC(auth, total_malformed_requests);
 		return 0;
 	}
@@ -1474,7 +1461,7 @@ static int stats_socket_recv(rad_listen_t *listener)
 	packet = rad_recv(NULL, listener->fd, 1); /* require message authenticator */
 	if (!packet) {
 		FR_STATS_INC(auth, total_malformed_requests);
-		ERROR("Receive - %s", fr_strerror());
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
 		return 0;
 	}
 
@@ -1628,7 +1615,7 @@ static int acct_socket_recv(rad_listen_t *listener)
 	FR_STATS_INC(acct, total_requests);
 
 	if (rcode < 20) {	/* RADIUS_HDR_LEN */
-		ERROR("Receive - %s", fr_strerror());
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
 		FR_STATS_INC(acct, total_malformed_requests);
 		return 0;
 	}
@@ -1685,7 +1672,7 @@ static int acct_socket_recv(rad_listen_t *listener)
 	packet = rad_recv(ctx, listener->fd, 0);
 	if (!packet) {
 		FR_STATS_INC(acct, total_malformed_requests);
-		ERROR("Receive - %s", fr_strerror());
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
 		talloc_free(ctx);
 		return 0;
 	}
@@ -1715,13 +1702,13 @@ static int do_proxy(REQUEST *request)
 		return 0;
 	}
 
-	vp = pairfind(request->config, PW_HOME_SERVER_POOL, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->config, PW_HOME_SERVER_POOL, 0, TAG_ANY);
 
 	if (vp) {
 		if (!home_pool_byname(vp->vp_strvalue, HOME_TYPE_COA)) {
 			REDEBUG2("Cannot proxy to unknown pool %s",
 				 vp->vp_strvalue);
-			return 0;
+			return -1;
 		}
 
 		return 1;
@@ -1730,8 +1717,8 @@ static int do_proxy(REQUEST *request)
 	/*
 	 *	We have a destination IP address.  It will (later) proxied.
 	 */
-	vp = pairfind(request->config, PW_PACKET_DST_IP_ADDRESS, 0, TAG_ANY);
-	if (!vp) vp = pairfind(request->config, PW_PACKET_DST_IPV6_ADDRESS, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->config, PW_PACKET_DST_IP_ADDRESS, 0, TAG_ANY);
+	if (!vp) vp = fr_pair_find_by_num(request->config, PW_PACKET_DST_IPV6_ADDRESS, 0, TAG_ANY);
 
 	if (!vp) return 0;
 
@@ -1745,6 +1732,7 @@ int rad_coa_recv(REQUEST *request)
 {
 	int rcode = RLM_MODULE_OK;
 	int ack, nak;
+	int proxy_status;
 	VALUE_PAIR *vp;
 
 	/*
@@ -1777,10 +1765,10 @@ int rad_coa_recv(REQUEST *request)
 		 *	with Service-Type = Authorize-Only, it MUST
 		 *	have a State attribute in it.
 		 */
-		vp = pairfind(request->packet->vps, PW_SERVICE_TYPE, 0, TAG_ANY);
+		vp = fr_pair_find_by_num(request->packet->vps, PW_SERVICE_TYPE, 0, TAG_ANY);
 		if (request->packet->code == PW_CODE_COA_REQUEST) {
-			if (vp && (vp->vp_integer == 17)) {
-				vp = pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY);
+			if (vp && (vp->vp_integer == PW_AUTHORIZE_ONLY)) {
+				vp = fr_pair_find_by_num(request->packet->vps, PW_STATE, 0, TAG_ANY);
 				if (!vp || (vp->vp_length == 0)) {
 					REDEBUG("CoA-Request with Service-Type = Authorize-Only MUST contain a State attribute");
 					request->reply->code = PW_CODE_COA_NAK;
@@ -1813,8 +1801,14 @@ int rad_coa_recv(REQUEST *request)
 		case RLM_MODULE_NOTFOUND:
 		case RLM_MODULE_OK:
 		case RLM_MODULE_UPDATED:
-			if (do_proxy(request)) return RLM_MODULE_OK;
-			request->reply->code = ack;
+			proxy_status = do_proxy(request);
+			if (proxy_status == 1) return RLM_MODULE_OK;
+
+			if (proxy_status < 0) {
+				request->reply->code = nak;
+			} else {
+				request->reply->code = ack;
+			}
 			break;
 		}
 
@@ -1834,8 +1828,8 @@ int rad_coa_recv(REQUEST *request)
 	 *	Copy State from the request to the reply.
 	 *	See RFC 5176 Section 3.3.
 	 */
-	vp = paircopy_by_num(request->reply, request->packet->vps, PW_STATE, 0, TAG_ANY);
-	if (vp) pairadd(&request->reply->vps, vp);
+	vp = fr_pair_list_copy_by_num(request->reply, request->packet->vps, PW_STATE, 0, TAG_ANY);
+	if (vp) fr_pair_add(&request->reply->vps, vp);
 
 	/*
 	 *	We may want to over-ride the reply.
@@ -1904,7 +1898,7 @@ static int coa_socket_recv(rad_listen_t *listener)
 	if (rcode < 0) return 0;
 
 	if (rcode < 20) {	/* RADIUS_HDR_LEN */
-		ERROR("Receive - %s", fr_strerror());
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
 		FR_STATS_INC(coa, total_malformed_requests);
 		return 0;
 	}
@@ -1954,7 +1948,7 @@ static int coa_socket_recv(rad_listen_t *listener)
 	packet = rad_recv(ctx, listener->fd, client->message_authenticator);
 	if (!packet) {
 		FR_STATS_INC(coa, total_malformed_requests);
-		ERROR("Receive - %s", fr_strerror());
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
 		talloc_free(ctx);
 		return 0;
 	}
@@ -1977,11 +1971,14 @@ static int coa_socket_recv(rad_listen_t *listener)
 static int proxy_socket_recv(rad_listen_t *listener)
 {
 	RADIUS_PACKET	*packet;
+#ifdef WITH_TCP
+	listen_socket_t *sock;
+#endif
 	char		buffer[128];
 
 	packet = rad_recv(NULL, listener->fd, 0);
 	if (!packet) {
-		ERROR("Receive - %s", fr_strerror());
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
 		return 0;
 	}
 
@@ -2019,6 +2016,11 @@ static int proxy_socket_recv(rad_listen_t *listener)
 		rad_free(&packet);
 		return 0;
 	}
+
+#ifdef WITH_TCP
+	sock = listener->data;
+	packet->proto = sock->proto;
+#endif
 
 	if (!request_proxy_reply(packet)) {
 #ifdef WITH_STATS
@@ -2112,6 +2114,11 @@ static int client_socket_encode(UNUSED rad_listen_t *listener, REQUEST *request)
 		return -1;
 	}
 
+	if (request->reply->data_len > (MAX_PACKET_LEN - 100)) {
+		RWARN("Packet is large, and possibly truncated - %zd vs max %d",
+		      request->reply->data_len, MAX_PACKET_LEN);
+	}
+
 	if (rad_sign(request->reply, request->packet, request->client->secret) < 0) {
 		RERROR("Failed signing packet: %s", fr_strerror());
 
@@ -2147,7 +2154,7 @@ static int client_socket_decode(UNUSED rad_listen_t *listener, REQUEST *request)
 		const char *identity = SSL_get_psk_identity(sock->ssn->ssl);
 		if (identity) {
 			RDEBUG("Retrieved psk identity: %s", identity);
-			pairmake_packet("TLS-PSK-Identity", identity, T_OP_SET);
+			pair_make_request("TLS-PSK-Identity", identity, T_OP_SET);
 		}
 #endif
 	}
@@ -2164,6 +2171,11 @@ static int proxy_socket_encode(UNUSED rad_listen_t *listener, REQUEST *request)
 		RERROR("Failed encoding proxied packet: %s", fr_strerror());
 
 		return -1;
+	}
+
+	if (request->proxy->data_len > (MAX_PACKET_LEN - 100)) {
+		RWARN("Packet is large, and possibly truncated - %zd vs max %d",
+		      request->proxy->data_len, MAX_PACKET_LEN);
 	}
 
 	if (rad_sign(request->proxy, NULL, request->home_server->secret) < 0) {
@@ -2212,6 +2224,8 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 	  common_socket_parse, common_socket_free,
 	  proxy_socket_recv, proxy_socket_send,
 	  common_socket_print, proxy_socket_encode, proxy_socket_decode },
+#else
+	{ 0, "proxy", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
 #endif
 
 	/* authentication */
@@ -2226,6 +2240,8 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 	  common_socket_parse, common_socket_free,
 	  acct_socket_recv, acct_socket_send,
 	  common_socket_print, client_socket_encode, client_socket_decode},
+#else
+	{ 0, "acct", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
 #endif
 
 #ifdef WITH_DETAIL
@@ -2236,15 +2252,11 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 	  detail_print, detail_encode, detail_decode },
 #endif
 
-#ifdef WITH_VMPS
 	/* vlan query protocol */
 	{ 0, "vmps", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
-#endif
 
-#ifdef WITH_DHCP
 	/* dhcp query protocol */
 	{ 0, "dhcp", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
-#endif
 
 #ifdef WITH_COMMAND_SOCKET
 	/* TCP command socket */
@@ -2252,6 +2264,8 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 	  command_socket_parse, command_socket_free,
 	  command_domain_accept, command_domain_send,
 	  command_socket_print, command_socket_encode, command_socket_decode },
+#else
+	{ 0, "command", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
 #endif
 
 #ifdef WITH_COA
@@ -2260,6 +2274,8 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 	  common_socket_parse, NULL,
 	  coa_socket_recv, auth_socket_send, /* CoA packets are same as auth */
 	  common_socket_print, client_socket_encode, client_socket_decode },
+#else
+	{ 0, "coa", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
 #endif
 
 };
@@ -2348,6 +2364,17 @@ static int listen_bind(rad_listen_t *this)
 				sock->my_port = ntohs(svp->s_port);
 			} else {
 				sock->my_port = PW_COA_UDP_PORT;
+			}
+			break;
+#endif
+
+#ifdef WITH_DHCP
+		case RAD_LISTEN_DHCP:
+			svp = getservbyname ("bootps", "udp");
+			if (svp != NULL) {
+				sock->my_port = ntohs(svp->s_port);
+			} else {
+				sock->my_port = 67;
 			}
 			break;
 #endif
@@ -2795,10 +2822,6 @@ rad_listen_t *proxy_new_listener(TALLOC_CTX *ctx, home_server_t *home, uint16_t 
 	 */
 	this->print(this, buffer, sizeof(buffer));
 
-	if (rad_debug_lvl >= 2) {
-		DEBUG("Opening new proxy socket '%s'", buffer);
-	}
-
 #ifdef WITH_TCP
 	sock->opened = sock->last_packet = now;
 
@@ -2820,7 +2843,7 @@ rad_listen_t *proxy_new_listener(TALLOC_CTX *ctx, home_server_t *home, uint16_t 
 
 	if (this->fd < 0) {
 		this->print(this, buffer,sizeof(buffer));
-		ERROR("Failed opening proxy socket '%s' : %s",
+		ERROR("Failed opening new proxy socket '%s' : %s",
 		      buffer, fr_strerror());
 		home->last_failed_open = now;
 		listen_free(&this);
@@ -2834,7 +2857,7 @@ rad_listen_t *proxy_new_listener(TALLOC_CTX *ctx, home_server_t *home, uint16_t 
 		DEBUG("Trying SSL to port %d\n", home->port);
 		sock->ssn = tls_new_client_session(sock, home->tls, this->fd);
 		if (!sock->ssn) {
-			ERROR("Failed starting SSL to '%s'", buffer);
+			ERROR("Failed starting SSL to new proxy socket '%s'", buffer);
 			home->last_failed_open = now;
 			listen_free(&this);
 			return NULL;
@@ -2869,6 +2892,12 @@ rad_listen_t *proxy_new_listener(TALLOC_CTX *ctx, home_server_t *home, uint16_t 
 			listen_free(&this);
 			return NULL;
 		}
+
+		this->print(this, buffer, sizeof(buffer));
+	}
+
+	if (rad_debug_lvl >= 3) {
+		DEBUG("Opened new proxy socket '%s'", buffer);
 	}
 
 	home->limit.num_connections++;
@@ -3089,9 +3118,6 @@ int listen_init(CONF_SECTION *config, rad_listen_t **head, bool spawn_flag)
 	rad_listen_t	*this;
 	fr_ipaddr_t	server_ipaddr;
 	uint16_t	auth_port = 0;
-#ifdef WITH_PROXY
-	bool		defined_proxy = false;
-#endif
 
 	/*
 	 *	We shouldn't be called with a pre-existing list.
@@ -3134,7 +3160,7 @@ int listen_init(CONF_SECTION *config, rad_listen_t **head, bool spawn_flag)
 		override = true;
 
 #ifdef WITH_VMPS
-		if (strcmp(progname, "vmpsd") == 0) {
+		if (strcmp(main_config.name, "vmpsd") == 0) {
 			this = listen_alloc(config, RAD_LISTEN_VQP);
 			if (!auth_port) auth_port = 1589;
 		} else
@@ -3174,7 +3200,7 @@ int listen_init(CONF_SECTION *config, rad_listen_t **head, bool spawn_flag)
 		/*
 		 *	No acct for vmpsd
 		 */
-		if (strcmp(progname, "vmpsd") == 0) goto add_sockets;
+		if (strcmp(main_config.name, "vmpsd") == 0) goto add_sockets;
 #endif
 
 #ifdef WITH_ACCOUNTING
@@ -3308,18 +3334,11 @@ add_sockets:
 	 *	add them to the event list.
 	 */
 	for (this = *head; this != NULL; this = this->next) {
-#ifdef WITH_PROXY
-		if (this->type == RAD_LISTEN_PROXY) {
-			defined_proxy = true;
-		}
-
-#endif
-
 #ifdef WITH_TLS
 		if (!check_config && !spawn_flag && this->tls) {
 			cf_log_err_cs(this->cs, "Threading must be enabled for TLS sockets to function properly");
 			cf_log_err_cs(this->cs, "You probably need to do '%s -fxx -l stdout' for debugging",
-				      progname);
+				      main_config.name);
 			return -1;
 		}
 #endif
@@ -3364,63 +3383,10 @@ add_sockets:
 		}
 	}
 
-#ifdef WITH_TCP
-	if (!home_servers_udp) defined_proxy = true;
-#endif
-
-	/*
-	 *	If we're proxying requests, open the proxy FD.
-	 *	Otherwise, don't do anything.
-	 */
-#ifdef WITH_PROXY
-	if ((main_config.proxy_requests == true) &&
-	    !check_config &&
-	    (*head != NULL) && !defined_proxy) {
-		uint16_t	port = 0;
-		home_server_t	home;
-
-		memset(&home, 0, sizeof(home));
-
-		/*
-		 *	Open a default UDP port
-		 */
-		home.proto = IPPROTO_UDP;
-		home.src_ipaddr = server_ipaddr;
-		port = 0;
-
-		/*
-		 *	Address is still unspecified, use IPv4.
-		 */
-		if (home.src_ipaddr.af == AF_UNSPEC) {
-			home.src_ipaddr.af = AF_INET;
-			/* everything else is already set to zero */
-		}
-
-		home.ipaddr.af = home.src_ipaddr.af;
-		/* everything else is already set to zero */
-
-		/*
-		 *	It's OK to allocate a UDP listener from the
-		 *	main config.  The listener will never be
-		 *	deleted until the server stops and the config
-		 *	is freed.
-		 */
-		this = proxy_new_listener(config, &home, port);
-		if (!this) {
-			listen_free(head);
-			return -1;
-		}
-
-		radius_update_listener(this);
-	}
-#endif
-
 	/*
 	 *	Haven't defined any sockets.  Die.
 	 */
 	if (!*head) return -1;
-
-	xlat_register("listen", xlat_listen, NULL, NULL);
 
 	return 0;
 }

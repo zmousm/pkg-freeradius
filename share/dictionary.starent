@@ -228,7 +228,7 @@ ATTRIBUTE	SN-Firewall-Policy			239	octets
 ATTRIBUTE	SN-Transparent-Data			247	octets
 ATTRIBUTE	SN-MS-ISDN				248	octets
 ATTRIBUTE	SN-Routing-Area-Id			249	string
-#ATTRIBUTE	SN-Rulebase				249	string
+ATTRIBUTE	SN-Rulebase				250	string
 ATTRIBUTE	SN-Call-Id				251	integer
 ATTRIBUTE	SN-IMSI					252	octets
 ATTRIBUTE	SN-Long-Duration-Notification		253	integer
@@ -284,7 +284,7 @@ ATTRIBUTE	SN-CBB-Policy				302	string
 ATTRIBUTE	SN-QOS-HLR-Profile			303	octets
 ATTRIBUTE	SN-Fast-Reauth-Username			304	octets
 ATTRIBUTE	SN-Pseudonym-Username			305	octets
-ATTRIBUTE	SN-WiMAX-Auth-Only			206	integer
+ATTRIBUTE	SN-WiMAX-Auth-Only			306	integer
 ATTRIBUTE	SN-TrafficSelector-Class		307	integer
 ATTRIBUTE	SN-DHCP-Options				309	octets
 ATTRIBUTE	SN-Handoff-Indicator			310	integer

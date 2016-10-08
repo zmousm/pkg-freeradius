@@ -202,7 +202,7 @@ static const CONF_PARSER thread_config[] = {
 	{ "auto_limit_acct", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &thread_pool.auto_limit_acct), NULL },
 #endif
 #endif
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 #endif
 
@@ -669,15 +669,15 @@ static void *request_handler_thread(void *arg)
 			VALUE_PAIR *vp;
 			REQUEST *request = self->request;
 
-			vp = radius_paircreate(request, &request->config,
+			vp = radius_pair_create(request, &request->config,
 					       181, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
 
-			vp = radius_paircreate(request, &request->config,
+			vp = radius_pair_create(request, &request->config,
 					       182, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
 
-			vp = radius_paircreate(request, &request->config,
+			vp = radius_pair_create(request, &request->config,
 					       183, VENDORPEC_FREERADIUS);
 			if (vp) {
 				vp->vp_integer = thread_pool.max_queue_size - thread_pool.num_queued;

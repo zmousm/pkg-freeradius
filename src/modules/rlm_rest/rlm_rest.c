@@ -43,8 +43,7 @@ static CONF_PARSER tls_config[] = {
 	{ "random_file", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, tls_random_file), NULL },
 	{ "check_cert", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, tls_check_cert), "yes" },
 	{ "check_cert_cn", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, tls_check_cert_cn), "yes" },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 /*
@@ -75,15 +74,13 @@ static const CONF_PARSER section_config[] = {
 
 	/* TLS Parameters */
 	{ "tls", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) tls_config },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static const CONF_PARSER module_config[] = {
 	{ "connect_uri", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_t, connect_uri), NULL },
 	{ "connect_timeout", FR_CONF_OFFSET(PW_TYPE_TIMEVAL, rlm_rest_t, connect_timeout_tv), "4.0" },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static int rlm_rest_perform(rlm_rest_t *instance, rlm_rest_section_t *section, void *handle, REQUEST *request,
@@ -235,7 +232,7 @@ static ssize_t rest_xlat(void *instance, REQUEST *request,
 
 	RDEBUG("Expanding URI components");
 
-	handle = fr_connection_get(inst->conn_pool);
+	handle = fr_connection_get(inst->pool);
 	if (!handle) return -1;
 
 	/*
@@ -282,14 +279,20 @@ static ssize_t rest_xlat(void *instance, REQUEST *request,
 	ret = rest_request_config(instance, &section, request, handle, section.method, section.body,
 				  uri, NULL, NULL);
 	talloc_free(uri);
-	if (ret < 0) return -1;
+	if (ret < 0) {
+		outlen = -1;
+		goto finish;
+	}
 
 	/*
 	 *  Send the CURL request, pre-parse headers, aggregate incoming
 	 *  HTTP body data into a single contiguous buffer.
 	 */
 	ret = rest_request_perform(instance, &section, request, handle);
-	if (ret < 0) return -1;
+	if (ret < 0) {
+		outlen = -1;
+		goto finish;
+	}
 
 	hcode = rest_get_handle_code(handle);
 	switch (hcode) {
@@ -336,7 +339,7 @@ error:
 finish:
 	rlm_rest_cleanup(instance, &section, handle);
 
-	fr_connection_release(inst->conn_pool, handle);
+	fr_connection_release(inst->pool, handle);
 
 	return outlen;
 }
@@ -359,7 +362,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 
 	if (!section->name) return RLM_MODULE_NOOP;
 
-	handle = fr_connection_get(inst->conn_pool);
+	handle = fr_connection_get(inst->pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(instance, section, handle, request, NULL, NULL);
@@ -427,7 +430,7 @@ finish:
 
 	rlm_rest_cleanup(instance, section, handle);
 
-	fr_connection_release(inst->conn_pool, handle);
+	fr_connection_release(inst->pool, handle);
 
 	return rcode;
 }
@@ -464,7 +467,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		return RLM_MODULE_INVALID;
 	}
 
-	handle = fr_connection_get(inst->conn_pool);
+	handle = fr_connection_get(inst->pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(instance, section, handle, request, username->vp_strvalue, password->vp_strvalue);
@@ -532,7 +535,7 @@ finish:
 
 	rlm_rest_cleanup(instance, section, handle);
 
-	fr_connection_release(inst->conn_pool, handle);
+	fr_connection_release(inst->pool, handle);
 
 	return rcode;
 }
@@ -552,7 +555,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 
 	if (!section->name) return RLM_MODULE_NOOP;
 
-	handle = fr_connection_get(inst->conn_pool);
+	handle = fr_connection_get(inst->pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(inst, section, handle, request, NULL, NULL);
@@ -588,7 +591,7 @@ finish:
 
 	rlm_rest_cleanup(inst, section, handle);
 
-	fr_connection_release(inst->conn_pool, handle);
+	fr_connection_release(inst->pool, handle);
 
 	return rcode;
 }
@@ -608,7 +611,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 
 	if (!section->name) return RLM_MODULE_NOOP;
 
-	handle = fr_connection_get(inst->conn_pool);
+	handle = fr_connection_get(inst->pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(inst, section, handle, request, NULL, NULL);
@@ -644,7 +647,7 @@ finish:
 
 	rlm_rest_cleanup(inst, section, handle);
 
-	fr_connection_release(inst->conn_pool, handle);
+	fr_connection_release(inst->pool, handle);
 
 	return rcode;
 }
@@ -837,8 +840,8 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	inst->connect_timeout = ((inst->connect_timeout_tv.tv_usec * 1000) +
 				 (inst->connect_timeout_tv.tv_sec / 1000));
-	inst->conn_pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, mod_conn_alive, NULL);
-	if (!inst->conn_pool) return -1;
+	inst->pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, mod_conn_alive, NULL);
+	if (!inst->pool) return -1;
 
 	return 0;
 }
@@ -851,7 +854,7 @@ static int mod_detach(void *instance)
 {
 	rlm_rest_t *inst = instance;
 
-	fr_connection_pool_free(inst->conn_pool);
+	fr_connection_pool_free(inst->pool);
 
 	/* Free any memory used by libcurl */
 	rest_cleanup();

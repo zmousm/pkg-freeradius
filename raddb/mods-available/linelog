@@ -103,8 +103,14 @@ linelog {
 	#  needed to configure one "linelog" module for each log message.
 
 	#
-	#  Reference the Packet-Type (Access-Request, etc.)  If it doesn't
-	#  exist, reference the "format" entry, above.
+	#  Reference the Packet-Type (Access-Accept, etc.)  If it doesn't
+	#  exist, reference the "defaukt" entry.
+	#
+	#  This is for "linelog" being used in the post-auth section
+	#  If you want to use it in "authorize", you need to change
+	#  the reference to "messages.%{%{Packet-Type}:-default}",
+	#  and then add the appropriate messages.
+	#
 	reference = "messages.%{%{reply:Packet-Type}:-default}"
 
 	#
@@ -146,10 +152,10 @@ linelog log_accounting {
 		#  Don't log anything for these packets.
 		Alive = ""
 
-		Accounting-On = "NAS %{Packet-Src-IP-Address} (%{NAS-IP-Address}) just came online"
-		Accounting-Off = "NAS %{Packet-Src-IP-Address} (%{NAS-IP-Address}) just went offline"
+		Accounting-On = "NAS %{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}} (%{%{NAS-IP-Address}:-%{NAS-IPv6-Address}}) just came online"
+		Accounting-Off = "NAS %{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}} (%{%{NAS-IP-Address}:-%{NAS-IPv6-Address}}) just went offline"
 
 		# don't log anything for other Acct-Status-Types.
-		unknown = "NAS %{Packet-Src-IP-Address} (%{NAS-IP-Address}) sent unknown Acct-Status-Type %{Acct-Status-Type}"
+		unknown = "NAS %{%{Packet-Src-IP-Address}:-%{Packet-Src-IPv6-Address}} (%{%{NAS-IP-Address}:-%{NAS-IPv6-Address}}) sent unknown Acct-Status-Type %{Acct-Status-Type}"
 	}
 }

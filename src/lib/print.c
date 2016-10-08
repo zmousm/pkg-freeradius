@@ -26,30 +26,35 @@ RCSID("$Id$")
 
 #include	<ctype.h>
 
-/*
- *	Checks for utf-8, taken from:
+/** Checks for utf-8, taken from http://www.w3.org/International/questions/qa-forms-utf-8
  *
- *  http://www.w3.org/International/questions/qa-forms-utf-8
- *
- *	Note that we don't care about the length of the input string,
- *	because '\0' is an invalid UTF-8 character.
+ * @param str input string.
+ * @param inlen length of input string.  May be -1 if str is \0 terminated.
  */
-int fr_utf8_char(uint8_t const *str)
+int fr_utf8_char(uint8_t const *str, ssize_t inlen)
 {
+	if (inlen == 0) return 0;
+
+	if (inlen < 0) inlen = 4;	/* longest char */
+
 	if (*str < 0x20) return 0;
 
-	if (*str <= 0x7e) return 1; /* 1 */
+	if (*str <= 0x7e) return 1;	/* 1 */
 
 	if (*str <= 0xc1) return 0;
 
-	if ((str[0] >= 0xc2) &&	/* 2 */
+	if (inlen < 2) return 0;
+
+	if ((str[0] >= 0xc2) &&		/* 2 */
 	    (str[0] <= 0xdf) &&
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0xbf)) {
 		return 2;
 	}
 
-	if ((str[0] == 0xe0) &&	/* 3 */
+	if (inlen < 3) return 0;
+
+	if ((str[0] == 0xe0) &&		/* 3 */
 	    (str[1] >= 0xa0) &&
 	    (str[1] <= 0xbf) &&
 	    (str[2] >= 0x80) &&
@@ -57,7 +62,7 @@ int fr_utf8_char(uint8_t const *str)
 		return 3;
 	}
 
-	if ((str[0] >= 0xe1) &&	/* 4a */
+	if ((str[0] >= 0xe1) &&		/* 4a */
 	    (str[0] <= 0xec) &&
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0xbf) &&
@@ -66,7 +71,7 @@ int fr_utf8_char(uint8_t const *str)
 		return 3;
 	}
 
-	if ((str[0] >= 0xee) &&	/* 4b */
+	if ((str[0] >= 0xee) &&		/* 4b */
 	    (str[0] <= 0xef) &&
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0xbf) &&
@@ -75,7 +80,7 @@ int fr_utf8_char(uint8_t const *str)
 		return 3;
 	}
 
-	if ((str[0] == 0xed) &&	/* 5 */
+	if ((str[0] == 0xed) &&		/* 5 */
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0x9f) &&
 	    (str[2] >= 0x80) &&
@@ -83,7 +88,9 @@ int fr_utf8_char(uint8_t const *str)
 		return 3;
 	}
 
-	if ((str[0] == 0xf0) &&	/* 6 */
+	if (inlen < 4) return 0;
+
+	if ((str[0] == 0xf0) &&		/* 6 */
 	    (str[1] >= 0x90) &&
 	    (str[1] <= 0xbf) &&
 	    (str[2] >= 0x80) &&
@@ -93,7 +100,7 @@ int fr_utf8_char(uint8_t const *str)
 		return 4;
 	}
 
-	if ((str[0] >= 0xf1) &&	/* 6 */
+	if ((str[0] >= 0xf1) &&		/* 6 */
 	    (str[1] <= 0xf3) &&
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0xbf) &&
@@ -105,7 +112,7 @@ int fr_utf8_char(uint8_t const *str)
 	}
 
 
-	if ((str[0] == 0xf4) &&	/* 7 */
+	if ((str[0] == 0xf4) &&		/* 7 */
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0x8f) &&
 	    (str[2] >= 0x80) &&
@@ -132,14 +139,14 @@ char const *fr_utf8_strchr(int *chr_len, char const *str, char const *chr)
 {
 	int cchr;
 
-	cchr = fr_utf8_char((uint8_t const *)chr);
+	cchr = fr_utf8_char((uint8_t const *)chr, -1);
 	if (cchr == 0) cchr = 1;
 	if (chr_len) *chr_len = cchr;
 
 	while (*str) {
 		int schr;
 
-		schr = fr_utf8_char((uint8_t const *) str);
+		schr = fr_utf8_char((uint8_t const *) str, -1);
 		if (schr == 0) schr = 1;
 		if (schr != cchr) goto next;
 
@@ -159,52 +166,35 @@ char const *fr_utf8_strchr(int *chr_len, char const *str, char const *chr)
  * @note Will always \0 terminate unless outlen == 0.
  *
  * @param[in] in string to escape.
- * @param[in] inlen length of string to escape (lets us deal with embedded NULLs)
+ * @param[in] inlen length of string to escape (lets us deal with embedded NULs)
  * @param[out] out where to write the escaped string.
  * @param[out] outlen the length of the buffer pointed to by out.
  * @param[in] quote the quotation character
- * @return the number of bytes written to the out buffer, or a number >= outlen if truncation has occurred.
+ * @return the number of bytes it WOULD HAVE written to the buffer, not including the trailing NUL
  */
 size_t fr_prints(char *out, size_t outlen, char const *in, ssize_t inlen, char quote)
 {
 	uint8_t const	*p = (uint8_t const *) in;
-	int		utf8 = 0;
-	size_t		freespace = outlen;
-
-	/*
-	 *	IF YOU MODIFY THIS FUNCTION, YOU MUST MAKE
-	 *	EQUIVALENT MODIFICATIONS TO fr_prints_len
-	 */
-
-	/* Can't '\0' terminate */
-	if (freespace == 0) return inlen;
+	size_t		utf8;
+	size_t		used;
+	size_t		freespace;
 
 	/* No input, so no output... */
 	if (!in) {
-	no_input:
-		*out = '\0';
+		if (out && outlen) *out = '\0';
 		return 0;
 	}
 
 	/* Figure out the length of the input string */
 	if (inlen < 0) inlen = strlen(in);
 
-	/* Not enough space to hold one char */
-	if (freespace < 2) {
-		/* And there's input data... */
-		if (inlen > 0) {
-			*out = '\0';
-			return inlen;
-		}
-
-		goto no_input;
-	}
-
 	/*
 	 *	No quotation character, just use memcpy, ensuring we
 	 *	don't overflow the output buffer.
 	 */
 	if (!quote) {
+		if (!out) return inlen;
+
 		if ((size_t)inlen >= outlen) {
 			memcpy(out, in, outlen - 1);
 			out[outlen - 1] = '\0';
@@ -212,8 +202,19 @@ size_t fr_prints(char *out, size_t outlen, char const *in, ssize_t inlen, char q
 			memcpy(out, in, inlen);
 			out[inlen] = '\0';
 		}
+
 		return inlen;
 	}
+
+	/*
+	 *	Check the output buffer and length.  Zero both of them
+	 *	out if either are zero.
+	 */
+	freespace = outlen;
+	if (freespace == 0) out = NULL;
+	if (!out) freespace = 0;
+
+	used = 0;
 
 	while (inlen > 0) {
 		int sp = 0;
@@ -274,47 +275,82 @@ size_t fr_prints(char *out, size_t outlen, char const *in, ssize_t inlen, char q
 
 	do_escape:
 		if (sp) {
-			if (freespace < 3) break; /* \ + <c> + \0 */
-			*out++ = '\\';
-			*out++ = sp;
-			freespace -= 2;
+			if ((freespace > 0) && (freespace <= 2)) {
+				if (out) out[used] = '\0';
+				out = NULL;
+				freespace = 0;
+
+			} else if (freespace > 2) { /* room for char AND trailing zero */
+				if (out) {
+					out[used] = '\\';
+					out[used + 1] = sp;
+				}
+				freespace -= 2;
+			}
+
+			used += 2;
 			p++;
 			inlen--;
 			continue;
 		}
 
 		/*
-		 *	Double quoted strings have octal escaping for
-		 *	things.  Single quoted strings don't.
+		 *	All strings are UTF-8 clean.
 		 */
-		if (quote != '\'') {
-			utf8 = fr_utf8_char(p);
-			if (utf8 == 0) {
-				if (freespace < 5) break; /* \ + <o><o><o> + \0 */
-				snprintf(out, freespace, "\\%03o", *p);
-				out += 4;
-				freespace -= 4;
+		utf8 = fr_utf8_char(p, inlen);
+
+		/*
+		 *	If we have an invalid UTF-8 character, it gets
+		 *	copied over as a 1-byte character for single
+		 *	quoted strings.  Which means that the output
+		 *	isn't strictly UTF-8, but oh well...
+		 *
+		 *	For double quoted strints, the invalid
+		 *	characters get escaped as octal encodings.
+		 */
+		if (utf8 == 0) {
+			if (quote == '\'') {
+				utf8 = 1;
+
+			} else {
+				if ((freespace > 0) && (freespace <= 4)) {
+					if (out) out[used] = '\0';
+					out = NULL;
+					freespace = 0;
+
+				} else if (freespace > 4) { /* room for char AND trailing zero */
+					if (out) snprintf(out + used, freespace, "\\%03o", *p);
+					freespace -= 4;
+				}
+
+				used += 4;
 				p++;
 				inlen--;
 				continue;
 			}
 		}
 
-		do {
-			if (freespace < 2) goto finish; /* <c> + \0 */
-			*out++ = *p++;
-			freespace--;
-			inlen--;
-		} while (--utf8 > 0);
+		if ((freespace > 0) && (freespace <= utf8)) {
+			if (out) out[used] = '\0';
+			out = NULL;
+			freespace = 0;
+
+		} else if (freespace > utf8) { /* room for char AND trailing zero */
+			memcpy(out + used, p, utf8);
+			freespace -= utf8;
+		}
+
+		used += utf8;
+		p += utf8;
+		inlen -= utf8;
 	}
 
-finish:
-	*out = '\0';
+	/*
+	 *	Ensure that the output buffer is always zero terminated.
+	 */
+	if (out && freespace) out[used] = '\0';
 
-	/* Indicate truncation occurred */
-	if (inlen > 0) return outlen + inlen;
-
-	return outlen - freespace;
+	return used;
 }
 
 /** Find the length of the buffer required to fully escape a string with fr_prints
@@ -326,92 +362,11 @@ finish:
  * @param in string to calculate the escaped length for.
  * @param inlen length of the input string, if < 0 strlen will be used to check the length.
  * @param[in] quote the quotation character.
- * @return the size of buffer required to hold the escaped string including the NULL byte.
+ * @return the size of buffer required to hold the escaped string including the NUL byte.
  */
 size_t fr_prints_len(char const *in, ssize_t inlen, char quote)
 {
-	uint8_t const	*p = (uint8_t const *) in;
-	size_t		outlen = 1;	/* Need one byte for \0 */
-	int		utf8 = 0;
-
-	if (!in) return outlen;
-
-	if (inlen < 0) inlen = strlen(in);
-
-	if (!quote) return inlen + 1;
-
-	while (inlen > 0) {
-		int sp = 0;
-
-		/*
-		 *	Hack: never print trailing zero. Some clients send pings
-		 *	with an off-by-one length (confused with strings in C).
-		 */
-		if ((inlen == 1) && (*p == '\0')) {
-			inlen--;
-			break;
-		}
-
-		if (quote && (*p == quote)) {
-			sp = quote;
-			goto do_escape;
-		}
-
-		if (quote == '\'') {
-			if (*p == '\\') {
-				sp = '\\';
-			}
-			goto do_escape;
-		}
-
-		switch (*p) {
-		case '\r':
-			sp = 'r';
-			break;
-
-		case '\n':
-			sp = 'n';
-			break;
-
-		case '\t':
-			sp = 't';
-			break;
-
-		case '\\':
-			sp = '\\';
-			break;
-
-		default:
-			sp = '\0';
-			break;
-		}
-
-	do_escape:
-		if (sp) {
-			outlen += 2;
-			p++;
-			inlen--;
-			continue;
-		}
-
-		if (quote != '\'') {
-			utf8 = fr_utf8_char(p);
-			if (utf8 == 0) {
-				outlen += 4;
-				p++;
-				inlen--;
-				continue;
-			}
-		} else {
-			utf8 = 1;
-		}
-
-		outlen += utf8;
-		p += utf8;
-		inlen -= utf8;
-	}
-
-	return outlen;
+	return fr_prints(NULL, 0, in, inlen, quote) + 1;
 }
 
 /** Escape string that may contain binary data, and write it to a new buffer
@@ -437,6 +392,7 @@ char *fr_aprints(TALLOC_CTX *ctx, char const *in, ssize_t inlen, char quote)
 
 	out = talloc_array(ctx, char, len);
 	ret = fr_prints(out, len, in, inlen, quote);
+
 	/*
 	 *	This is a fatal error, but fr_assert is the strongest
 	 *	assert we're allowed to use in library functions.
@@ -479,6 +435,10 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, char quot
 char *vp_aprints_value(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote)
 {
 	VERIFY_VP(vp);
+
+	if (vp->type == VT_XLAT) {
+		return fr_aprints(ctx, vp->value.xlat, talloc_array_length(vp->value.xlat) - 1, quote);
+	}
 
 	return value_data_aprints(ctx, vp->da->type, vp->da, &vp->data, vp->vp_length, quote);
 }
@@ -533,7 +493,7 @@ char *vp_aprints_type(TALLOC_CTX *ctx, PW_TYPE type)
  *  JSON value to.
  *
  * @param out Where to write the string.
- * @param outlen Lenth of output buffer.
+ * @param outlen Length of output buffer.
  * @param vp to print.
  * @return the length of data written to out, or a value >= outlen on truncation.
  */
@@ -692,7 +652,7 @@ static char const *vp_tokens[] = {
  * to a string.
  *
  * @param out Where to write the string.
- * @param outlen Lenth of output buffer.
+ * @param outlen Length of output buffer.
  * @param vp to print.
  * @return the length of data written to out, or a value >= outlen on truncation.
  */
@@ -833,5 +793,3 @@ char *vp_aprints(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote)
 
 	return str;
 }
-
-

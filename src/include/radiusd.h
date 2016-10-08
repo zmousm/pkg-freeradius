@@ -165,6 +165,11 @@ typedef struct main_config {
 	bool		allow_core_dumps;		//!< Whether the server is allowed to drop a core when
 							//!< receiving a fatal signal.
 
+	bool		write_pid;			//!< write the PID file
+
+	bool		exiting;			//!< are we exiting?
+
+
 #ifdef ENABLE_OPENSSL_VERSION_CHECK
 	char const	*allow_vulnerable_openssl;	//!< The CVE number of the last security issue acknowledged.
 #endif
@@ -219,6 +224,8 @@ struct rad_request {
 
 	VALUE_PAIR		*config;	//!< #VALUE_PAIR (s) used to set per request parameters
 						//!< for modules and the server core at runtime.
+
+	TALLOC_CTX		*state_ctx;	//!< for request->state
 	VALUE_PAIR		*state;		//!< #VALUE_PAIR (s) available over the lifetime of the authentication
 						//!< attempt. Useful where the attempt involves a sequence of
 						//!< many request/challenge packets, like OTP, and EAP.
@@ -268,8 +275,6 @@ struct rad_request {
 	bool			in_request_hash;
 #ifdef WITH_PROXY
 	bool			in_proxy_hash;
-
-	struct timeval		proxy_retransmit;
 
 	uint32_t		num_proxied_requests;	//!< How many times this request was proxied.
 							//!< Retransmissions are driven by requests from the NAS.
@@ -339,7 +344,6 @@ typedef enum request_fail {
  *
  *	We really shouldn't have this many.
  */
-extern char const	*progname;
 extern log_lvl_t	rad_debug_lvl;
 extern char const	*radacct_dir;
 extern char const	*radlog_dir;
@@ -502,7 +506,7 @@ int radius_callback_compare(REQUEST *request, VALUE_PAIR *req,
 			    VALUE_PAIR *check, VALUE_PAIR *check_pairs,
 			    VALUE_PAIR **reply_pairs);
 int radius_find_compare(DICT_ATTR const *attribute);
-VALUE_PAIR	*radius_paircreate(TALLOC_CTX *ctx, VALUE_PAIR **vps, unsigned int attribute, unsigned int vendor);
+VALUE_PAIR	*radius_pair_create(TALLOC_CTX *ctx, VALUE_PAIR **vps, unsigned int attribute, unsigned int vendor);
 
 void module_failure_msg(REQUEST *request, char const *fmt, ...) CC_HINT(format (printf, 2, 3));
 void vmodule_failure_msg(REQUEST *request, char const *fmt, va_list ap) CC_HINT(format (printf, 2, 0));
@@ -518,9 +522,9 @@ int radius_copy_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, char con
  * @param _b value
  * @param _c op
  */
-#define pairmake_packet(_a, _b, _c) pairmake(request->packet, &request->packet->vps, _a, _b, _c)
-#define pairmake_reply(_a, _b, _c) pairmake(request->reply, &request->reply->vps, _a, _b, _c)
-#define pairmake_config(_a, _b, _c) pairmake(request, &request->config, _a, _b, _c)
+#define pair_make_request(_a, _b, _c) fr_pair_make(request->packet, &request->packet->vps, _a, _b, _c)
+#define pair_make_reply(_a, _b, _c) fr_pair_make(request->reply, &request->reply->vps, _a, _b, _c)
+#define pair_make_config(_a, _b, _c) fr_pair_make(request, &request->config, _a, _b, _c)
 
 /* threads.c */
 int	thread_pool_init(CONF_SECTION *cs, bool *spawn_flag);
@@ -541,7 +545,6 @@ void	thread_pool_queue_stats(int array[RAD_LISTEN_MAX], int pps[2]);
 /* main_config.c */
 /* Define a global config structure */
 extern bool			log_dates_utc;
-extern bool 			check_config;
 extern main_config_t		main_config;
 extern bool			event_loop_started;
 

@@ -64,7 +64,7 @@ RCSID("$Id$")
 /*
  *	For configuration file stuff.
  */
-char const *progname = "radmin";
+static char const *progname = "radmin";
 static char const *radmin_version = "radmin version " RADIUSD_VERSION_STRING
 #ifdef RADIUSD_VERSION_COMMIT
 " (git #" STRINGIFY(RADIUSD_VERSION_COMMIT) ")"
@@ -78,8 +78,6 @@ static char const *radmin_version = "radmin version " RADIUSD_VERSION_STRING
  *	have a "libfreeradius-server", or "libfreeradius-util".
  */
 main_config_t main_config;
-
-bool check_config = false;
 
 static bool echo = false;
 static char const *secret = "testing123";
@@ -605,7 +603,7 @@ int main(int argc, char **argv)
 
 	if (!quiet) {
 		printf("%s - FreeRADIUS Server administration tool.\n", radmin_version);
-		printf("Copyright (C) 2008-2015 The FreeRADIUS server project and contributors.\n");
+		printf("Copyright (C) 2008-2016 The FreeRADIUS server project and contributors.\n");
 		printf("There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A\n");
 		printf("PARTICULAR PURPOSE.\n");
 		printf("You may redistribute copies of FreeRADIUS under the terms of the\n");

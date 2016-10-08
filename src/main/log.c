@@ -446,7 +446,7 @@ int vradlog(log_type_t type, char const *msg, va_list ap)
 			continue;
 
 		default:
-			clen = fr_utf8_char(p);
+			clen = fr_utf8_char(p, -1);
 			if (!clen) {
 				*p = '?';
 				continue;
@@ -601,7 +601,7 @@ inline bool radlog_debug_enabled(log_type_t type, log_lvl_t lvl, REQUEST *reques
 	 *	then don't log the message.
 	 */
 	if ((type & L_DBG) &&
-	    ((request && request->log.func && (lvl <= request->log.lvl)) ||
+	    ((request->log.func && (lvl <= request->log.lvl)) ||
 	     ((rad_debug_lvl != 0) && (lvl <= rad_debug_lvl)))) {
 		return true;
 	}

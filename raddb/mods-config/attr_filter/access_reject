@@ -16,4 +16,5 @@ DEFAULT
 	Reply-Message =* ANY,
 	MS-CHAP-Error =* ANY,
 	Proxy-State =* ANY,
-	Error-Cause =* ANY
+	FreeRADIUS-Response-Delay =* ANY,
+	FreeRADIUS-Response-Delay-USec =* ANY

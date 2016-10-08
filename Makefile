@@ -7,6 +7,11 @@
 # Version:	$Id$
 #
 
+#
+#  The default rule is "all".
+#
+all:
+
 $(if $(wildcard Make.inc),,$(error Missing 'Make.inc' Run './configure [options]' and retry))
 
 include Make.inc
@@ -42,7 +47,7 @@ raddb/test.conf:
 $(BUILD_DIR)/tests/radiusd-c: raddb/test.conf ${BUILD_DIR}/bin/radiusd | build.raddb
 	@$(MAKE) -C raddb/certs
 	@printf "radiusd -C... "
-	@if ! ./build/make/jlibtool --mode=execute ./build/bin/radiusd -XCMd ./raddb -D ./share -n test > $(BUILD_DIR)/tests/radiusd.config.log; then \
+	@if ! FR_LIBRARY_PATH=./build/lib/local/.libs/ ./build/make/jlibtool --mode=execute ./build/bin/radiusd -XCMd ./raddb -D ./share -n test > $(BUILD_DIR)/tests/radiusd.config.log; then \
 		rm -f raddb/test.conf; \
 		cat $(BUILD_DIR)/tests/radiusd.config.log; \
 		echo "fail"; \
@@ -59,7 +64,7 @@ test: ${BUILD_DIR}/bin/radiusd ${BUILD_DIR}/bin/radclient tests.unit tests.xlat 
 #  the above tests
 ifneq "$(findstring travis,${prefix})" ""
 travis-test: raddb/test.conf test
-	@./build/make/jlibtool --mode=execute ./build/bin/radiusd -xxxv -n test
+	@FR_LIBRARY_PATH=./build/lib/local/.libs/ ./build/make/jlibtool --mode=execute ./build/bin/radiusd -xxxv -n test
 	@rm -f raddb/test.conf
 	@$(MAKE) install
 	@perl -p -i -e 's/allow_vulnerable_openssl = no/allow_vulnerable_openssl = yes/' ${raddbdir}/radiusd.conf
@@ -85,23 +90,6 @@ endif
 #
 export DESTDIR := $(R)
 
-.PHONY: install.bindir
-install.bindir:
-	@[ -d $(R)$(bindir) ] || $(INSTALL) -d -m 755 $(R)$(bindir)
-
-.PHONY: install.sbindir
-install.sbindir:
-	@[ -d $(R)$(sbindir) ] || $(INSTALL) -d -m 755 $(R)$(sbindir)
-
-.PHONY: install.dirs
-install.dirs: install.bindir install.sbindir
-	@$(INSTALL) -d -m 755	$(R)$(mandir)
-	@$(INSTALL) -d -m 755	$(R)$(RUNDIR)
-	@$(INSTALL) -d -m 700	$(R)$(logdir)
-	@$(INSTALL) -d -m 700	$(R)$(radacctdir)
-	@$(INSTALL) -d -m 755	$(R)$(datadir)
-	@$(INSTALL) -d -m 755	$(R)$(dictdir)
-
 DICTIONARIES := $(wildcard share/dictionary*)
 install.share: $(addprefix $(R)$(dictdir)/,$(notdir $(DICTIONARIES)))
 
@@ -114,14 +102,20 @@ install.man: $(subst man/,$(R)$(mandir)/,$(MANFILES))
 
 $(R)$(mandir)/%: man/%
 	@echo INSTALL $(notdir $<)
-	@$(INSTALL) -m 644 $< $@
+	@sed -e "s,/etc/raddb,$(raddbdir),g" \
+		-e "s,/usr/local/share,$(datarootdir),g" \
+		$< > $<.subst
+	@$(INSTALL) -m 644 $<.subst $@
+	@rm $<.subst
 
 #
 #  Don't install rlm_test
 #
 ALL_INSTALL := $(patsubst %rlm_test.la,,$(ALL_INSTALL))
 
-install: install.dirs install.share install.man
+install: install.share install.man
+	@$(INSTALL) -d -m 700	$(R)$(logdir)
+	@$(INSTALL) -d -m 700	$(R)$(radacctdir)
 
 ifneq ($(RADMIN),)
 ifneq ($(RGROUP),)
@@ -249,14 +243,11 @@ BRANCH = $(shell git rev-parse --abbrev-ref HEAD)
 freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz: .git
 	git archive --format=tar --prefix=freeradius-server-$(RADIUSD_VERSION_STRING)/ $(BRANCH) | gzip > $@
 
-freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz.sig: freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz
-	gpg --default-key aland@freeradius.org -b $<
-
 freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2: .git
 	git archive --format=tar --prefix=freeradius-server-$(RADIUSD_VERSION_STRING)/ $(BRANCH) | bzip2 > $@
 
-freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2.sig: freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2
-	gpg --default-key aland@freeradius.org -b $<
+%.sig: %
+	gpg --default-key packages@freeradius.org -b $<
 
 # high-level targets
 .PHONY: dist-check

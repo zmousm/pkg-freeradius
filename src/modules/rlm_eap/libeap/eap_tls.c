@@ -782,8 +782,8 @@ fr_tls_status_t eaptls_process(eap_handler_t *handler)
 
 	SSL_set_ex_data(tls_session->ssl, FR_TLS_EX_INDEX_REQUEST, request);
 
-	if (handler->certs) pairadd(&request->packet->vps,
-				    paircopy(request->packet, handler->certs));
+	if (handler->certs) fr_pair_add(&request->packet->vps,
+				    fr_pair_list_copy(request->packet, handler->certs));
 
 	/*
 	 *	This case is when SSL generates Alert then we
@@ -901,19 +901,16 @@ fr_tls_status_t eaptls_process(eap_handler_t *handler)
 	status = eaptls_operation(status, handler);
 	if (status == FR_TLS_SUCCESS) {
 #define MAX_SESSION_SIZE (256)
-		size_t size;
 		VALUE_PAIR *vps;
 		char buffer[2 * MAX_SESSION_SIZE + 1];
+
 		/*
 		 *	Restore the cached VPs before processing the
 		 *	application data.
 		 */
-		size = tls_session->ssl->session->session_id_length;
-		if (size > MAX_SESSION_SIZE) size = MAX_SESSION_SIZE;
+		tls_session_id(tls_session->ssl_session, buffer, MAX_SESSION_SIZE);
 
-		fr_bin2hex(buffer, tls_session->ssl->session->session_id, size);
-
-		vps = SSL_SESSION_get_ex_data(tls_session->ssl->session, fr_tls_ex_index_vps);
+		vps = SSL_SESSION_get_ex_data(tls_session->ssl_session, fr_tls_ex_index_vps);
 		if (!vps) {
 			RWDEBUG("No information in cached session %s", buffer);
 		} else {
@@ -945,11 +942,11 @@ fr_tls_status_t eaptls_process(eap_handler_t *handler)
 					 */
 					if (!handler->certs) {
 						rdebug_pair(L_DBG_LVL_2, request, vp, "request:");
-						pairadd(&request->packet->vps, paircopyvp(request->packet, vp));
+						fr_pair_add(&request->packet->vps, fr_pair_copy(request->packet, vp));
 					}
 				} else {
 					rdebug_pair(L_DBG_LVL_2, request, vp, "reply:");
-					pairadd(&request->reply->vps, paircopyvp(request->reply, vp));
+					fr_pair_add(&request->reply->vps, fr_pair_copy(request->reply, vp));
 				}
 			}
 			REXDENT();

@@ -110,10 +110,10 @@ int rlm_ldap_map_getvalue(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, v
 		for (i = 0; i < self->count; i++) {
 			if (!self->values[i]->bv_len) continue;
 
-			vp = pairalloc(ctx, map->lhs->tmpl_da);
+			vp = fr_pair_afrom_da(ctx, map->lhs->tmpl_da);
 			rad_assert(vp);
 
-			if (pairparsevalue(vp, self->values[i]->bv_val, self->values[i]->bv_len) < 0) {
+			if (fr_pair_value_from_str(vp, self->values[i]->bv_val, self->values[i]->bv_len) < 0) {
 				char *escaped;
 
 				escaped = fr_aprints(vp, self->values[i]->bv_val, self->values[i]->bv_len, '"');
@@ -309,7 +309,6 @@ int rlm_ldap_map_do(const rlm_ldap_t *inst, REQUEST *request, LDAP *handle,
 	rlm_ldap_result_t	result;
 	char const		*name;
 
-	RINDENT();
 	for (map = expanded->maps; map != NULL; map = map->next) {
 		int ret;
 
@@ -347,7 +346,7 @@ int rlm_ldap_map_do(const rlm_ldap_t *inst, REQUEST *request, LDAP *handle,
 	next:
 		ldap_value_free_len(result.values);
 	}
-	REXDENT();
+
 
 	/*
 	 *	Retrieve any valuepair attributes from the result, these are generic values specifying
@@ -360,7 +359,6 @@ int rlm_ldap_map_do(const rlm_ldap_t *inst, REQUEST *request, LDAP *handle,
 		values = ldap_get_values_len(handle, entry, inst->valuepair_attr);
 		count = ldap_count_values_len(values);
 
-		RINDENT();
 		for (i = 0; i < count; i++) {
 			vp_map_t *attr;
 			char *value;
@@ -383,7 +381,6 @@ int rlm_ldap_map_do(const rlm_ldap_t *inst, REQUEST *request, LDAP *handle,
 			talloc_free(attr);
 			talloc_free(value);
 		}
-		REXDENT();
 		ldap_value_free_len(values);
 	}
 

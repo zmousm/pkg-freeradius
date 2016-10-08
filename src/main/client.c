@@ -89,6 +89,8 @@ void client_free(RADCLIENT *client)
 		 *	from the queue and delete it.
 		 */
 		client = fr_fifo_peek(deleted_clients);
+		rad_assert(client != NULL);
+
 		if ((client->created + 120) >= now) return;
 
 		client = fr_fifo_pop(deleted_clients);
@@ -476,9 +478,7 @@ RADCLIENT *client_find_old(fr_ipaddr_t const *ipaddr)
 static fr_ipaddr_t cl_ipaddr;
 static uint32_t cl_netmask;
 static char const *cl_srcipaddr = NULL;
-#ifdef WITH_TCP
 static char const *hs_proto = NULL;
-#endif
 
 #ifdef WITH_TCP
 static CONF_PARSER limit_config[] = {
@@ -488,7 +488,7 @@ static CONF_PARSER limit_config[] = {
 
 	{ "idle_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, RADCLIENT, limit.idle_timeout), "30" },
 
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 #endif
 
@@ -524,13 +524,11 @@ static const CONF_PARSER client_config[] = {
 	{ "rate_limit", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, RADCLIENT, rate_limit), NULL },
 #endif
 
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
-/*
- *	Create the linked list of clients from the new configuration
- *	type.  This way we don't have to change too much in the other
- *	source-files.
+/** Create the linked list of clients from the new configuration type
+ *
  */
 #ifdef WITH_TLS
 RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, bool tls_required)
@@ -540,8 +538,8 @@ RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls
 {
 	bool		global = false, in_server = false;
 	CONF_SECTION	*cs;
-	RADCLIENT	*c;
-	RADCLIENT_LIST	*clients;
+	RADCLIENT	*c = NULL;
+	RADCLIENT_LIST	*clients = NULL;
 
 	/*
 	 *	Be forgiving.  If there's already a clients, return
@@ -557,22 +555,14 @@ RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls
 
 	if (strcmp("server", cf_section_name1(section)) == 0) in_server = true;
 
-	/*
-	 *	Associate the clients structure with the section.
-	 */
-	if (cf_data_add(section, "clients", clients, NULL) < 0) {
-		cf_log_err_cs(section,
-			   "Failed to associate clients with section %s",
-		       cf_section_name1(section));
-		client_list_free(clients);
-		return NULL;
-	}
-
 	for (cs = cf_subsection_find_next(section, NULL, "client");
-	     cs != NULL;
+	     cs;
 	     cs = cf_subsection_find_next(section, cs, "client")) {
 		c = client_afrom_cs(cs, cs, in_server, false);
 		if (!c) {
+		error:
+			client_free(c);
+			client_list_free(clients);
 			return NULL;
 		}
 
@@ -583,9 +573,7 @@ RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls
 		 */
 		if (tls_required != c->tls_required) {
 			cf_log_err_cs(cs, "Client does not have the same TLS configuration as the listener");
-			client_free(c);
-			client_list_free(clients);
-			return NULL;
+			goto error;
 		}
 #endif
 
@@ -597,12 +585,12 @@ RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls
 #ifdef WITH_DYNAMIC_CLIENTS
 #ifdef HAVE_DIRENT_H
 		if (c->client_server) {
-			char const *value;
-			CONF_PAIR *cp;
+			char const	*value;
+			CONF_PAIR	*cp;
 			DIR		*dir;
 			struct dirent	*dp;
-			struct stat stat_buf;
-			char buf2[2048];
+			struct stat	stat_buf;
+			char		buf2[2048];
 
 			/*
 			 *	Find the directory where individual
@@ -613,10 +601,8 @@ RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls
 
 			value = cf_pair_value(cp);
 			if (!value) {
-				cf_log_err_cs(cs,
-					   "The \"directory\" entry must not be empty");
-				client_free(c);
-				return NULL;
+				cf_log_err_cs(cs, "The \"directory\" entry must not be empty");
+				goto error;
 			}
 
 			DEBUG("including dynamic clients in %s", value);
@@ -624,8 +610,7 @@ RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls
 			dir = opendir(value);
 			if (!dir) {
 				cf_log_err_cs(cs, "Error reading directory %s: %s", value, fr_syserror(errno));
-				client_free(c);
-				return NULL;
+				goto error;
 			}
 
 			/*
@@ -645,33 +630,27 @@ RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls
 					    isdigit((int)*p) ||
 					    (*p == ':') ||
 					    (*p == '.')) continue;
-						break;
+					break;
 				}
 				if (*p != '\0') continue;
 
-				snprintf(buf2, sizeof(buf2), "%s/%s",
-					 value, dp->d_name);
+				snprintf(buf2, sizeof(buf2), "%s/%s", value, dp->d_name);
 
-				if ((stat(buf2, &stat_buf) != 0) ||
-				    S_ISDIR(stat_buf.st_mode)) continue;
+				if ((stat(buf2, &stat_buf) != 0) || S_ISDIR(stat_buf.st_mode)) continue;
 
 				dc = client_read(buf2, in_server, true);
 				if (!dc) {
-					cf_log_err_cs(cs,
-						   "Failed reading client file \"%s\"", buf2);
-					client_free(c);
+					cf_log_err_cs(cs, "Failed reading client file \"%s\"", buf2);
 					closedir(dir);
-					return NULL;
+					goto error;
 				}
 
 				/*
 				 *	Validate, and add to the list.
 				 */
 				if (!client_add_dynamic(clients, c, dc)) {
-
-					client_free(c);
 					closedir(dir);
-					return NULL;
+					goto error;
 				}
 			} /* loop over the directory */
 			closedir(dir);
@@ -681,13 +660,19 @@ RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls
 	add_client:
 #endif /* WITH_DYNAMIC_CLIENTS */
 		if (!client_add(clients, c)) {
-			cf_log_err_cs(cs,
-				   "Failed to add client %s",
-				   cf_section_name2(cs));
-			client_free(c);
-			return NULL;
+			cf_log_err_cs(cs, "Failed to add client %s", cf_section_name2(cs));
+			goto error;
 		}
 
+	}
+
+	/*
+	 *	Associate the clients structure with the section.
+	 */
+	if (cf_data_add(section, "clients", clients, NULL) < 0) {
+		cf_log_err_cs(section, "Failed to associate clients with section %s", cf_section_name1(section));
+		client_list_free(clients);
+		return NULL;
 	}
 
 	/*
@@ -695,9 +680,7 @@ RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls
 	 *	The old one is still referenced from the original
 	 *	configuration, and will be freed when that is freed.
 	 */
-	if (global) {
-		root_clients = clients;
-	}
+	if (global) root_clients = clients;
 
 	return clients;
 }
@@ -721,7 +704,7 @@ static const CONF_PARSER dynamic_config[] = {
 	{ "FreeRADIUS-Client-NAS-Type",  FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, nas_type), NULL },
 	{ "FreeRADIUS-Client-Virtual-Server",  FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, server), NULL },
 
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 /** Add a dynamic client
@@ -955,9 +938,24 @@ RADCLIENT *client_afrom_cs(TALLOC_CTX *ctx, CONF_SECTION *cs, bool in_server, bo
 	 *	No "ipaddr" or "ipv6addr", use old-style "client <ipaddr> {" syntax.
 	 */
 	} else {
-		cf_log_err_cs(cs, "No 'ipaddr' or 'ipv4addr' or 'ipv6addr' configuration "
-			      "directive found in client %s", name2);
-		goto error;
+		WARN("No 'ipaddr' or 'ipv4addr' or 'ipv6addr' field found in client %s. "
+		     "Please fix your configuration", name2);
+		WARN("Support for old-style clients will be removed in a future release");
+
+#ifdef WITH_TCP
+		if (cf_pair_find(cs, "proto") != NULL) {
+			cf_log_err_cs(cs, "Cannot use 'proto' inside of old-style client definition");
+			goto error;
+		}
+#endif
+		if (fr_pton(&c->ipaddr, name2, -1, AF_UNSPEC, true) < 0) {
+			cf_log_err_cs(cs, "Failed parsing client name \"%s\" as ip address or hostname: %s", name2,
+				      fr_strerror());
+			goto error;
+		}
+
+		c->longname = talloc_typed_strdup(c, name2);
+		if (!c->shortname) c->shortname = talloc_typed_strdup(c, c->longname);
 	}
 
 	c->proto = IPPROTO_UDP;
@@ -1173,7 +1171,7 @@ RADCLIENT *client_afrom_query(TALLOC_CTX *ctx, char const *identifier, char cons
 
 	c = talloc_zero(ctx, RADCLIENT);
 
-	if (fr_pton(&c->ipaddr, identifier, -1, true) < 0) {
+	if (fr_pton(&c->ipaddr, identifier, -1, AF_UNSPEC, true) < 0) {
 		ERROR("%s", fr_strerror());
 		talloc_free(c);
 

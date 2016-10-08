@@ -28,6 +28,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include "eap_tls.h"
 #include <openssl/hmac.h>
 
+
 /*
  * TLS PRF from RFC 2246
  */
@@ -42,6 +43,10 @@ static void P_hash(EVP_MD const *evp_md,
 
 	HMAC_CTX_init(&ctx_a);
 	HMAC_CTX_init(&ctx_out);
+#ifdef EVP_MD_CTX_FLAG_NON_FIPS_ALLOW
+	HMAC_CTX_set_flags(&ctx_a, EVP_MD_CTX_FLAG_NON_FIPS_ALLOW);
+	HMAC_CTX_set_flags(&ctx_out, EVP_MD_CTX_FLAG_NON_FIPS_ALLOW);
+#endif
 	HMAC_Init_ex(&ctx_a, secret, secret_len, evp_md, NULL);
 	HMAC_Init_ex(&ctx_out, secret, secret_len, evp_md, NULL);
 
@@ -80,6 +85,49 @@ static void P_hash(EVP_MD const *evp_md,
 	memset(a, 0, sizeof(a));
 }
 
+/*  EAP-FAST Pseudo-Random Function (T-PRF): RFC 4851, Section 5.5 */
+void T_PRF(unsigned char const *secret, unsigned int secret_len,
+	   char const *prf_label,
+	   unsigned char const *seed,  unsigned int seed_len,
+	   unsigned char *out, unsigned int out_len)
+{
+	size_t prf_size = strlen(prf_label);
+	size_t pos;
+	uint8_t	*buf;
+
+	if (prf_size > 128) prf_size = 128;
+	prf_size++;	/* include trailing zero */
+
+	buf = talloc_size(NULL, SHA1_DIGEST_LENGTH + prf_size + seed_len + 2 + 1);
+
+	memcpy(buf + SHA1_DIGEST_LENGTH, prf_label, prf_size);
+	if (seed) memcpy(buf + SHA1_DIGEST_LENGTH + prf_size, seed, seed_len);
+	*(uint16_t *)&buf[SHA1_DIGEST_LENGTH + prf_size + seed_len] = htons(out_len);
+	buf[SHA1_DIGEST_LENGTH + prf_size + seed_len + 2] = 1;
+
+	// T1 is just the seed
+	fr_hmac_sha1(buf, buf + SHA1_DIGEST_LENGTH, prf_size + seed_len + 2 + 1, secret, secret_len);
+
+#define MIN(a,b) (((a)>(b)) ? (b) : (a))
+	memcpy(out, buf, MIN(out_len, SHA1_DIGEST_LENGTH));
+
+	pos = SHA1_DIGEST_LENGTH;
+	while (pos < out_len) {
+		buf[SHA1_DIGEST_LENGTH + prf_size + seed_len + 2]++;
+
+		fr_hmac_sha1(buf, buf, SHA1_DIGEST_LENGTH + prf_size + seed_len + 2 + 1, secret, secret_len);
+		memcpy(&out[pos], buf, MIN(out_len - pos, SHA1_DIGEST_LENGTH));
+
+		if (out_len - pos <= SHA1_DIGEST_LENGTH)
+			break;
+
+		pos += SHA1_DIGEST_LENGTH;
+	}
+
+	memset(buf, 0, SHA1_DIGEST_LENGTH + prf_size + seed_len + 2 + 1);
+	talloc_free(buf);
+}
+
 static void PRF(unsigned char const *secret, unsigned int secret_len,
 		unsigned char const *seed,   unsigned int seed_len,
 		unsigned char *out, unsigned char *buf, unsigned int out_len)
@@ -107,11 +155,6 @@ void eaptls_gen_mppe_keys(REQUEST *request, SSL *s, char const *prf_label)
 	uint8_t out[4 * EAPTLS_MPPE_KEY_LEN];
 	uint8_t *p;
 	size_t prf_size;
-
-	if (!s->s3) {
-		ERROR("No SSLv3 information");
-		return;
-	}
 
 	prf_size = strlen(prf_label);
 
@@ -162,14 +205,14 @@ void eaptls_gen_mppe_keys(REQUEST *request, SSL *s, char const *prf_label)
  */
 void eapttls_gen_challenge(SSL *s, uint8_t *buffer, size_t size)
 {
+#if OPENSSL_VERSION_NUMBER >= 0x10001000L
+	SSL_export_keying_material(s, buffer, size, FR_TLS_PRF_CHALLENGE,
+				   sizeof(FR_TLS_PRF_CHALLENGE) - 1, NULL, 0, 0);
+
+#else
 	uint8_t out[32], buf[32];
 	uint8_t seed[sizeof(FR_TLS_PRF_CHALLENGE)-1 + 2*SSL3_RANDOM_SIZE];
 	uint8_t *p = seed;
-
-	if (!s->s3) {
-		ERROR("No SSLv3 information");
-		return;
-	}
 
 	memcpy(p, FR_TLS_PRF_CHALLENGE, sizeof(FR_TLS_PRF_CHALLENGE)-1);
 	p += sizeof(FR_TLS_PRF_CHALLENGE)-1;
@@ -179,8 +222,8 @@ void eapttls_gen_challenge(SSL *s, uint8_t *buffer, size_t size)
 
 	PRF(s->session->master_key, s->session->master_key_length,
 	    seed, sizeof(seed), out, buf, sizeof(out));
-
 	memcpy(buffer, out, size);
+#endif
 }
 
 /*
@@ -192,21 +235,47 @@ void eaptls_gen_eap_key(RADIUS_PACKET *packet, SSL *s, uint32_t header)
 	VALUE_PAIR *vp;
 	uint8_t *p;
 
-	if (!s->s3) {
-		ERROR("No SSLv3 information");
-		return;
-	}
-
-	vp = paircreate(packet, PW_EAP_SESSION_ID, 0);
+	vp = fr_pair_afrom_num(packet, PW_EAP_SESSION_ID, 0);
 	if (!vp) return;
 
 	vp->vp_length = 1 + 2 * SSL3_RANDOM_SIZE;
 	p = talloc_array(vp, uint8_t, vp->vp_length);
 
 	p[0] = header & 0xff;
+
+#ifdef HAVE_SSL_GET_CLIENT_RANDOM
+	SSL_get_client_random(s, p + 1, SSL3_RANDOM_SIZE);
+	SSL_get_server_random(s, p + 1 + SSL3_RANDOM_SIZE, SSL3_RANDOM_SIZE);
+#else
 	memcpy(p + 1, s->s3->client_random, SSL3_RANDOM_SIZE);
 	memcpy(p + 1 + SSL3_RANDOM_SIZE,
 	       s->s3->server_random, SSL3_RANDOM_SIZE);
+#endif
 	vp->vp_octets = p;
-	pairadd(&packet->vps, vp);
+	fr_pair_add(&packet->vps, vp);
 }
+
+/*
+ *	Same as before, but for EAP-FAST the order of {server,client}_random is flipped
+ */
+void eap_fast_tls_gen_challenge(SSL *s, uint8_t *buffer, uint8_t *scratch, size_t size, char const *prf_label)
+{
+	uint8_t seed[128 + 2*SSL3_RANDOM_SIZE];
+	uint8_t *p = seed;
+	size_t len;
+
+	len = strlen(prf_label);
+	if (len > 128) len = 128;
+
+	memcpy(p, prf_label, len);
+	p += len;
+	memcpy(p, s->s3->server_random, SSL3_RANDOM_SIZE);
+	p += SSL3_RANDOM_SIZE;
+	memcpy(p, s->s3->client_random, SSL3_RANDOM_SIZE);
+	p += SSL3_RANDOM_SIZE;
+
+	PRF(s->session->master_key, s->session->master_key_length,
+	    seed, p - seed, buffer, scratch, size);
+}
+
+

@@ -436,6 +436,22 @@ static bool condition_check_types(fr_cond_t *c, PW_TYPE lhs_type)
 		return true;
 	}
 
+	/*
+	 *	Same checks as above, but with the types swapped, and
+	 *	with explicit cast for the interpretor.
+	 */
+	if ((lhs_type == PW_TYPE_IPV4_ADDR) &&
+	    (c->data.map->rhs->tmpl_da->type == PW_TYPE_IPV4_PREFIX)) {
+		c->cast = c->data.map->rhs->tmpl_da;
+		return true;
+	}
+
+	if ((lhs_type == PW_TYPE_IPV6_ADDR) &&
+	    (c->data.map->rhs->tmpl_da->type == PW_TYPE_IPV6_PREFIX)) {
+		c->cast = c->data.map->rhs->tmpl_da;
+		return true;
+	}
+
 	return false;
 }
 
@@ -1089,19 +1105,24 @@ static ssize_t condition_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *st
 				 */
 				if ((c->data.map->lhs->type == TMPL_TYPE_ATTR) &&
 				    (c->data.map->rhs->type == TMPL_TYPE_LITERAL)) {
-					PW_TYPE type;
+					PW_TYPE type = c->data.map->lhs->tmpl_da->type;
 
 					switch (c->data.map->lhs->tmpl_da->type) {
 					case PW_TYPE_IPV4_ADDR:
-						type = PW_TYPE_IPV4_PREFIX;
+						if (strchr(c->data.map->rhs->name, '/') != NULL) {
+							type = PW_TYPE_IPV4_PREFIX;
+							c->cast = dict_attrbyvalue(PW_CAST_BASE + type, 0);
+						}
 						break;
 
 					case PW_TYPE_IPV6_ADDR:
-						type = PW_TYPE_IPV6_PREFIX;
+						if (strchr(c->data.map->rhs->name, '/') != NULL) {
+							type = PW_TYPE_IPV6_PREFIX;
+							c->cast = dict_attrbyvalue(PW_CAST_BASE + type, 0);
+						}
 						break;
 
 					default:
-						type = c->data.map->lhs->tmpl_da->type;
 						break;
 					}
 
@@ -1147,6 +1168,23 @@ static ssize_t condition_tokenize(TALLOC_CTX *ctx, CONF_ITEM *ci, char const *st
 						c->data.map->lhs->tmpl_da = da;
 					}
 				} /* attr to literal comparison */
+
+				/*
+				 *	The RHS will turn into... something.  Allow for prefixes
+				 *	there, too.
+				 */
+				if ((c->data.map->lhs->type == TMPL_TYPE_ATTR) &&
+				    ((c->data.map->rhs->type == TMPL_TYPE_XLAT) ||
+				     (c->data.map->rhs->type == TMPL_TYPE_XLAT_STRUCT) ||
+				     (c->data.map->rhs->type == TMPL_TYPE_EXEC))) {
+					if (c->data.map->lhs->tmpl_da->type == PW_TYPE_IPV4_ADDR) {
+						c->cast = dict_attrbyvalue(PW_CAST_BASE + PW_TYPE_IPV4_PREFIX, 0);
+					}
+
+					if (c->data.map->lhs->tmpl_da->type == PW_TYPE_IPV6_ADDR) {
+						c->cast = dict_attrbyvalue(PW_CAST_BASE + PW_TYPE_IPV6_PREFIX, 0);
+					}
+				}
 
 				/*
 				 *	If the LHS is a bare word, AND it looks like

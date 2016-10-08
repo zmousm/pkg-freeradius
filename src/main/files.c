@@ -89,7 +89,7 @@ int pairlist_read(TALLOC_CTX *ctx, char const *file, PAIR_LIST **list, int compl
 	PAIR_LIST *pl = NULL, *t;
 	PAIR_LIST **last = &pl;
 	int lineno = 0;
-	int old_lineno = 0;
+	int entry_lineno = 0;
 	FR_TOKEN parsecode;
 #ifdef HAVE_REGEX_H
 	VALUE_PAIR *vp;
@@ -150,7 +150,7 @@ parse_again:
 			 */		      
 			ptr = buffer;
 			getword(&ptr, entry, sizeof(entry), false);
-			old_lineno = lineno;
+			entry_lineno = lineno;
 
 			/*
 			 *	Include another file if we see
@@ -209,7 +209,7 @@ parse_again:
 			 */
 			rad_assert(check_tmp == NULL);
 			rad_assert(reply_tmp == NULL);
-			parsecode = userparse(ctx, ptr, &check_tmp);
+			parsecode = fr_pair_list_afrom_str(ctx, ptr, &check_tmp);
 			if (parsecode == T_INVALID) {
 				pairlist_free(&pl);
 				ERROR("%s[%d]: Parse error (check) for entry %s: %s",
@@ -277,7 +277,7 @@ parse_again:
 			talloc_free(check_tmp);
 			talloc_free(reply_tmp);
 			ERROR("%s[%d]: Invalid comma after the reply attributes.  Please delete it.",
-			      file, old_lineno);
+			      file, lineno);
 			fclose(fp);
 			return -1;
 		}
@@ -286,9 +286,8 @@ parse_again:
 		 *	Parse the reply values.  If there's a trailing
 		 *	comma, keep parsing the reply values.
 		 */
-		parsecode = userparse(ctx, buffer, &reply_tmp);
+		parsecode = fr_pair_list_afrom_str(ctx, buffer, &reply_tmp);
 		if (parsecode == T_COMMA) {
-			old_lineno = lineno;
 			continue;
 		}
 
@@ -311,12 +310,12 @@ parse_again:
 		 */
 		MEM(t = talloc_zero(ctx, PAIR_LIST));
 
-		if (check_tmp) pairsteal(t, check_tmp);
-		if (reply_tmp) pairsteal(t, reply_tmp);
+		if (check_tmp) fr_pair_steal(t, check_tmp);
+		if (reply_tmp) fr_pair_steal(t, reply_tmp);
 
 		t->check = check_tmp;
 		t->reply = reply_tmp;
-		t->lineno = old_lineno;
+		t->lineno = entry_lineno;
 		check_tmp = NULL;
 		reply_tmp = NULL;
 

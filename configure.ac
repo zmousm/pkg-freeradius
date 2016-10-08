@@ -37,10 +37,7 @@ RADIUSD_MAJOR_VERSION=`cat VERSION | cut -f1 -d.`
 RADIUSD_MINOR_VERSION=`cat VERSION | cut -f2 -d.`
 RADIUSD_INCRM_VERSION=`cat VERSION | cut -f3 -d. | sed 's/[[\.-]].*$//'`
 
-RADIUSD_VERSION=`echo | awk -v major="$RADIUSD_MAJOR_VERSION" \
--v minor="$RADIUSD_MINOR_VERSION" \
--v incrm="$RADIUSD_INCRM_VERSION" \
-'{ printf "%02i%02i%02i", major, minor, incrm }'`
+RADIUSD_VERSION=`printf "%02i%02i%02i" $RADIUSD_MAJOR_VERSION $RADIUSD_MINOR_VERSION $RADIUSD_INCRM_VERSION`
 
 dnl #
 dnl #  Still useful for custom builds
@@ -995,50 +992,50 @@ AC_HEADER_TIME
 AC_HEADER_SYS_WAIT
 
 AC_CHECK_HEADERS( \
-  dlfcn.h \
-  unistd.h \
-  crypt.h \
-  errno.h \
-  resource.h \
-  sys/resource.h \
-  getopt.h \
-  malloc.h \
-  utmp.h \
-  utmpx.h \
-  signal.h \
-  sys/select.h \
-  syslog.h \
-  inttypes.h \
-  stdint.h \
-  stdbool.h \
-  stdio.h \
-  netdb.h \
-  semaphore.h \
   arpa/inet.h \
-  netinet/in.h \
-  sys/types.h \
-  sys/socket.h \
-  winsock.h \
-  utime.h \
-  sys/time.h \
-  sys/wait.h \
-  sys/security.h \
+  crypt.h \
+  dlfcn.h \
+  errno.h \
   fcntl.h \
+  features.h \
+  fnmatch.h \
+  getopt.h \
+  glob.h \
+  grp.h \
+  inttypes.h \
+  limits.h \
+  malloc.h \
+  netdb.h \
+  netinet/in.h \
+  prot.h \
+  pwd.h \
+  resource.h \
+  semaphore.h \
+  sia.h \
+  siad.h \
+  signal.h \
+  stdbool.h \
+  stddef.h \
+  stdint.h \
+  stdio.h \
+  sys/event.h \
   sys/fcntl.h \
   sys/prctl.h \
   sys/ptrace.h \
+  sys/resource.h \
+  sys/security.h \
+  sys/select.h \
+  sys/socket.h \
+  sys/time.h \
+  sys/types.h \
   sys/un.h \
-  glob.h \
-  prot.h \
-  pwd.h \
-  grp.h \
-  stddef.h \
-  fnmatch.h \
-  sia.h \
-  siad.h \
-  features.h \
-  limits.h \
-  sys/event.h
+  sys/wait.h \
+  syslog.h \
+  unistd.h \
+  utime.h \
+  utmp.h \
+  utmpx.h \
+  winsock.h
 )
 
 dnl #
@@ -1172,6 +1169,9 @@ if test "x$WITH_OPENSSL" = xyes; then
       [
         AC_MSG_RESULT(no)
         AC_MSG_FAILURE([OpenSSL library version does not match header version])
+      ],
+      [
+        AC_MSG_RESULT([cross-compiling (assuming yes)])
       ]
     )
     CPPFLAGS="$old_CPPFLAGS"
@@ -1182,6 +1182,7 @@ if test "x$WITH_OPENSSL" = xyes; then
   AC_SUBST(OPENSSL_LDFLAGS)
   AC_SUBST(OPENSSL_CPPFLAGS)
   export OPENSSL_LIBS OPENSSL_LDFLAGS OPENSSL_CPPFLAGS
+  AC_CHECK_FUNCS(SSL_get_client_random,SSL_get_server_random)
 fi
 
 dnl #
@@ -1429,45 +1430,50 @@ dnl #  5. Checks for structures and functions
 dnl #
 dnl #############################################################
 AC_CHECK_FUNCS( \
-  getopt_long \
-  fcntl \
-  strsignal \
-  sigaction \
-  sigprocmask \
-  pthread_sigmask \
-  snprintf \
-  vsnprintf \
-  setsid \
-  strncasecmp \
-  strcasecmp \
-  localtime_r \
+  bindat \
+  clock_gettime \
+  closefrom \
   ctime_r \
-  gmtime_r \
-  strsep \
-  inet_aton \
-  inet_pton \
-  inet_ntop \
-  mallopt \
-  setlinebuf \
-  setvbuf \
-  getusershell \
-  initgroups \
+  dladdr \
+  fcntl \
+  fopencookie \
+  funopen \
   getaddrinfo \
   getnameinfo \
-  closefrom \
-  gettimeofday \
+  getopt_long \
   getpeereid \
-  setuid \
-  setresuid \
   getresuid \
+  gettimeofday \
+  getusershell \
+  gmtime_r \
+  if_indextoname \
+  inet_aton \
+  inet_ntop \
+  inet_pton \
+  initgroups \
+  kqueue \
+  localtime_r \
+  mallopt \
+  mkdirat \
+  openat \
+  pthread_sigmask \
+  setlinebuf \
+  setresuid \
+  setsid \
+  setuid \
+  setvbuf \
+  sigaction \
+  sigprocmask \
+  snprintf \
+  strcasecmp \
   strlcat \
   strlcpy \
-  kqueue \
-  openat \
-  mkdirat \
+  strncasecmp \
+  strsep \
+  strsignal \
   unlinkat \
-  bindat \
-  dladdr
+  vdprintf \
+  vsnprintf
 )
 
 AC_TYPE_SIGNAL
@@ -1584,7 +1590,7 @@ if test "x$developer" = "xyes"; then
   dnl #
   AX_CC_WEVERYTHING_FLAG
   if test "x$ax_cv_cc_weverything_flag" = "xyes"; then
-    devflags="$devflags -W -Weverything -Wformat=2 -Wno-date-time -Wno-padded -Wno-gnu-zero-variadic-macro-arguments -Wno-shorten-64-to-32 -Wno-sign-conversion -Wno-conversion -Wno-switch-enum -Wno-gnu-statement-expression -Wno-extended-offsetof -Wno-cast-align -Wno-documentation-unknown-command -Wno-covered-switch-default -Wno-packed -DWITH_VERIFY_PTR=1"
+    devflags="$devflags -W -Weverything -Wformat=2 -Wno-missing-field-initializers -Wno-date-time -Wno-padded -Wno-gnu-zero-variadic-macro-arguments -Wno-shorten-64-to-32 -Wno-sign-conversion -Wno-conversion -Wno-switch-enum -Wno-gnu-statement-expression -Wno-extended-offsetof -Wno-cast-align -Wno-documentation-unknown-command -Wno-covered-switch-default -Wno-packed -DWITH_VERIFY_PTR=1"
   else
     if test "x$GCC" = "xyes"; then
       devflags="$devflags -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align -Wwrite-strings -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs -W -Wredundant-decls -Wundef -Wformat-y2k -Wno-format-extra-args -Wno-format-zero-length -Wno-cast-align -Wformat-nonliteral -Wformat-security -Wformat=2 -DWITH_VERIFY_PTR=1"

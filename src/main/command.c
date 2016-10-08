@@ -24,6 +24,7 @@
 #ifdef WITH_COMMAND_SOCKET
 
 #include <freeradius-devel/parser.h>
+#include <freeradius-devel/modcall.h>
 #include <freeradius-devel/md5.h>
 #include <freeradius-devel/channel.h>
 
@@ -106,7 +107,7 @@ static const CONF_PARSER command_config[] = {
 	{ "gid", FR_CONF_OFFSET(PW_TYPE_STRING, fr_command_socket_t, gid_name), NULL },
 	{ "mode", FR_CONF_OFFSET(PW_TYPE_STRING, fr_command_socket_t, mode_name), NULL },
 	{ "peercred", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_command_socket_t, peercred), "yes" },
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 static FR_NAME_NUMBER mode_names[] = {
@@ -117,12 +118,9 @@ static FR_NAME_NUMBER mode_names[] = {
 	{ NULL, 0 }
 };
 
-#ifndef HAVE_GETPEEREID
+#if !defined(HAVE_GETPEEREID) && defined(SO_PEERCRED)
 static int getpeereid(int s, uid_t *euid, gid_t *egid)
 {
-#ifndef SO_PEERCRED
-	return -1;
-#else
 	struct ucred cr;
 	socklen_t cl = sizeof(cr);
 
@@ -133,8 +131,11 @@ static int getpeereid(int s, uid_t *euid, gid_t *egid)
 	*euid = cr.uid;
 	*egid = cr.gid;
 	return 0;
-#endif /* SO_PEERCRED */
 }
+
+/* we now have getpeereid() in this file */
+#define HAVE_GETPEEREID (1)
+
 #endif /* HAVE_GETPEEREID */
 
 /** Initialise a socket for use with peercred authentication
@@ -195,6 +196,8 @@ static int fr_server_domain_socket_peercred(char const *path, uid_t UNUSED uid, 
 		 *	FIXME: Check the enclosing directory?
 		 */
 	} else {		/* it exists */
+		int client_fd;
+
 		if (!S_ISREG(buf.st_mode)
 #ifdef S_ISSOCK
 		    && !S_ISSOCK(buf.st_mode)
@@ -214,9 +217,20 @@ static int fr_server_domain_socket_peercred(char const *path, uid_t UNUSED uid, 
 			return -1;
 		}
 
+		/*
+		 *	Check if a server is already listening on the
+		 *	socket?
+		 */
+		client_fd = fr_socket_client_unix(path, false);
+		if (client_fd >= 0) {
+			fr_strerror_printf("Control socket '%s' is already in use", path);
+			close(client_fd);
+			close(sockfd);
+			return -1;
+		}
+
 		if (unlink(path) < 0) {
-		       fr_strerror_printf("Failed to delete %s: %s",
-			     path, fr_syserror(errno));
+		       fr_strerror_printf("Failed to delete %s: %s", path, fr_syserror(errno));
 		       close(sockfd);
 		       return -1;
 		}
@@ -453,6 +467,7 @@ static int fr_server_domain_socket_perm(char const *path, uid_t uid, gid_t gid)
 	 */
 	} else {
 		int ret;
+		int client_fd;
 
 		ret = fstat(dir_fd, &st);
 		if (ret < 0) {
@@ -503,7 +518,19 @@ static int fr_server_domain_socket_perm(char const *path, uid_t uid, gid_t gid)
 					   "permissions are %s (%s)", str_need, oct_need, str_have, oct_have);
 			goto error;
 		}
+
+		/*
+		 *	Check if a server is already listening on the
+		 *	socket?
+		 */
+		client_fd = fr_socket_client_unix(path, false);
+		if (client_fd >= 0) {
+			fr_strerror_printf("Control socket '%s' is already in use", path);
+			close(client_fd);
+			return -1;
+		}
 	}
+
 	name = strrchr(path, FR_DIR_SEP);
 	if (!name) {
 		fr_strerror_printf("Can't determine socket name");
@@ -1324,6 +1351,8 @@ static int command_debug_condition(rad_listen_t *listener, int argc, char *argv[
 		return CMD_FAIL;
 	}
 
+	(void) modcall_pass2_condition(new_condition);
+
 	/*
 	 *	Delete old condition.
 	 *
@@ -1768,7 +1797,7 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 		return 0;
 	}
 
-	ret = readvp2(NULL, &vp, fp, &filedone);
+	ret = fr_pair_list_afrom_file(NULL, &vp, fp, &filedone);
 	fclose(fp);
 	if (ret < 0) {
 		cprintf_error(listener, "Failed reading attributes from %s: %s\n",
@@ -2226,7 +2255,7 @@ static FR_NAME_NUMBER state_names[] = {
 static int command_stats_detail(rad_listen_t *listener, int argc, char *argv[])
 {
 	rad_listen_t *this;
-	listen_detail_t *data;
+	listen_detail_t *data, *needle;
 	struct stat buf;
 
 	if (argc == 0) {
@@ -2238,10 +2267,11 @@ static int command_stats_detail(rad_listen_t *listener, int argc, char *argv[])
 	for (this = main_config.listen; this != NULL; this = this->next) {
 		if (this->type != RAD_LISTEN_DETAIL) continue;
 
-		data = this->data;
-		if (strcmp(argv[1], data->filename) != 0) continue;
-
-		break;
+		needle = this->data;
+		if (!strcmp(argv[0], needle->filename)) {
+			data = needle;
+			break;
+		}
 	}
 
 	if (!data) {
@@ -2283,23 +2313,38 @@ static int command_stats_home_server(rad_listen_t *listener, int argc, char *arg
 	home_server_t *home;
 
 	if (argc == 0) {
-		cprintf_error(listener, "Must specify [auth/acct] OR <ipaddr> <port>\n");
+		cprintf_error(listener, "Must specify [auth|acct|coa|disconnect] OR <ipaddr> <port>\n");
 		return 0;
 	}
 
 	if (argc == 1) {
+		if (strcmp(argv[0], "auth") == 0) {
+			return command_print_stats(listener,
+						   &proxy_auth_stats, 1, 1);
+		}
+
 #ifdef WITH_ACCOUNTING
 		if (strcmp(argv[0], "acct") == 0) {
 			return command_print_stats(listener,
 						   &proxy_acct_stats, 0, 1);
 		}
 #endif
-		if (strcmp(argv[0], "auth") == 0) {
-			return command_print_stats(listener,
-						   &proxy_auth_stats, 1, 1);
-		}
 
-		cprintf_error(listener, "Should specify [auth/acct]\n");
+#ifdef WITH_ACCOUNTING
+		if (strcmp(argv[0], "coa") == 0) {
+			return command_print_stats(listener,
+						   &proxy_coa_stats, 0, 1);
+		}
+#endif
+
+#ifdef WITH_ACCOUNTING
+		if (strcmp(argv[0], "disconnect") == 0) {
+			return command_print_stats(listener,
+						   &proxy_dsc_stats, 0, 1);
+		}
+#endif
+
+		cprintf_error(listener, "Should specify [auth|acct|coa|disconnect]\n");
 		return 0;
 	}
 
@@ -2330,7 +2375,7 @@ static int command_stats_client(rad_listen_t *listener, int argc, char *argv[])
 		 */
 		fake.auth = radius_auth_stats;
 #ifdef WITH_ACCOUNTING
-		fake.auth = radius_acct_stats;
+		fake.acct = radius_acct_stats;
 #endif
 #ifdef WITH_COA
 		fake.coa = radius_coa_stats;
@@ -2557,7 +2602,7 @@ static fr_command_table_t command_table_stats[] = {
 
 #ifdef WITH_PROXY
 	{ "home_server", FR_READ,
-	  "stats home_server [<ipaddr>/auth/acct] <port> [udp|tcp] - show statistics for given home server (ipaddr and port), or for all home servers (auth or acct)",
+	  "stats home_server [<ipaddr>|auth|acct|coa|disconnect] <port> [udp|tcp] - show statistics for given home server (ipaddr and port), or for all home servers (auth or acct)",
 	  command_stats_home_server, NULL },
 #endif
 
@@ -2649,7 +2694,7 @@ static int command_socket_parse_unix(CONF_SECTION *cs, rad_listen_t *this)
 	 *	Can't get uid or gid of connecting user, so can't do
 	 *	peercred authentication.
 	 */
-#if !defined(HAVE_GETPEEREID) && !defined(SO_PEERCRED)
+#ifndef HAVE_GETPEEREID
 	if (sock->peercred && (sock->uid_name || sock->gid_name)) {
 		ERROR("System does not support uid or gid authentication for sockets");
 		return -1;
@@ -2707,6 +2752,8 @@ static int command_socket_parse_unix(CONF_SECTION *cs, rad_listen_t *this)
 
 	if (this->fd < 0) {
 		ERROR("Failed creating control socket \"%s\": %s", sock->path, fr_strerror());
+		if (sock->copy) talloc_free(sock->copy);
+		sock->copy = NULL;
 		return -1;
 	}
 
@@ -2823,10 +2870,19 @@ static void print_help(rad_listen_t *listener, int argc, char *argv[],
 {
 	int i;
 
+	/* this should never happen, but if it does then just return gracefully */
+	if (!table) return;
+
 	for (i = 0; table[i].command != NULL; i++) {
 		if (argc > 0) {
 			if (strcmp(table[i].command, argv[0]) == 0) {
-				print_help(listener, argc - 1, argv + 1, table[i].table, recursive);
+				if (table[i].table) {
+					print_help(listener, argc - 1, argv + 1, table[i].table, recursive);
+				} else {
+					if (table[i].help) {
+						cprintf(listener, "%s\n", table[i].help);
+					}
+				}
 				return;
 			}
 
@@ -2988,7 +3044,12 @@ static int command_domain_recv_co(rad_listen_t *listener, fr_cs_buffer_t *co)
 /*
  *	Write 32-bit magic number && version information.
  */
-static int command_write_magic(int newfd, listen_socket_t *sock)
+static int command_write_magic(int newfd,
+#ifndef WITH_TCP
+			       UNUSED
+#endif
+			       listen_socket_t *sock
+	)
 {
 	ssize_t r;
 	uint32_t magic;
@@ -3013,6 +3074,7 @@ static int command_write_magic(int newfd, listen_socket_t *sock)
 	r = fr_channel_write(newfd, FR_CHANNEL_INIT_ACK, buffer, 8);
 	if (r <= 0) goto do_close;
 
+#ifdef WITH_TCP
 	/*
 	 *	Write an initial challenge
 	 */
@@ -3030,11 +3092,12 @@ static int command_write_magic(int newfd, listen_socket_t *sock)
 		r = fr_channel_write(newfd, FR_CHANNEL_AUTH_CHALLENGE, co->buffer, 16);
 		if (r <= 0) goto do_close;
 	}
+#endif
 
 	return 0;
 }
 
-
+#ifdef WITH_TCP
 static int command_tcp_recv(rad_listen_t *this)
 {
 	ssize_t r;
@@ -3042,16 +3105,18 @@ static int command_tcp_recv(rad_listen_t *this)
 	fr_cs_buffer_t *co = (void *) sock->packet;
 	fr_channel_type_t channel;
 
-	rad_assert(co != NULL);
+	if (!co) {
+	do_close:
+		command_close_socket(this);
+		return 0;
+	}
 
 	if (!co->auth) {
 		uint8_t expected[16];
 
 		r = fr_channel_read(this->fd, &channel, co->buffer, 16);
 		if ((r != 16) || (channel != FR_CHANNEL_AUTH_RESPONSE)) {
-		do_close:
-			command_close_socket(this);
-			return 0;
+			goto do_close;
 		}
 
 		fr_hmac_md5(expected, (void const *) sock->client->secret,
@@ -3071,6 +3136,7 @@ static int command_tcp_recv(rad_listen_t *this)
 	return command_domain_recv_co(this, co);
 }
 
+
 /*
  *	Should never be called.  The functions should just call write().
  */
@@ -3078,6 +3144,7 @@ static int command_tcp_send(UNUSED rad_listen_t *listener, UNUSED REQUEST *reque
 {
 	return 0;
 }
+#endif
 
 static int command_domain_recv(rad_listen_t *listener)
 {
@@ -3111,7 +3178,7 @@ static int command_domain_accept(rad_listen_t *listener)
 		return 0;
 	}
 
-#if defined(HAVE_GETPEEREID) || defined (SO_PEERCRED)
+#ifdef HAVE_GETPEEREID
 	/*
 	 *	Perform user authentication.
 	 */

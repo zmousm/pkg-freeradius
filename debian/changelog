@@ -1,10 +1,22 @@
-freeradius (3.0.9-1+grnet) unstable; urgency=low
+freeradius (3.0.12-1) unstable; urgency=medium
 
-  * Placeholder
+  * New upstream version.
 
- -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Fri, 10 Jul 2015 03:26:43 +0300
+ -- Alan DeKok <aland@freeradius.org>  Mon, 25 Jan 2016 14:00:00 -0400
 
-freeradius (3.0.9-1) unstable; urgency=medium
+freeradius (3.0.11+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Mon, 05 Oct 2015 15:00:00 -0400
+
+freeradius (3.0.10+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Wed, 08 Jul 2015 14:00:00 -0400
+
+freeradius (3.0.9+git) unstable; urgency=medium
 
   * New upstream version.
 

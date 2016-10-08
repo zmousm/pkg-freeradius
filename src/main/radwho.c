@@ -45,7 +45,7 @@ static char const *eol = "\n";
 static int showname = -1;
 static int showptype = 0;
 static int showcid = 0;
-char const *progname = "radwho";
+static char const *progname = "radwho";
 char const *radlog_dir = NULL;
 
 static char const *radutmp_file = NULL;
@@ -53,7 +53,6 @@ static char const *raddb_dir = RADDBDIR;
 static char const *dict_dir = DICTDIR;
 
 char const *radacct_dir = NULL;
-char const *radlib_dir = NULL;
 
 bool log_stripped_names;
 
@@ -80,8 +79,8 @@ static struct radutmp_config_t {
 } radutmpconfig;
 
 static const CONF_PARSER module_config[] = {
-  { "filename", FR_CONF_POINTER(PW_TYPE_FILE_INPUT, &radutmpconfig.radutmp_fn), RADUTMP },
-  { NULL, -1, 0, NULL, NULL }
+	{ "filename", FR_CONF_POINTER(PW_TYPE_FILE_INPUT, &radutmpconfig.radutmp_fn), RADUTMP },
+	CONF_PARSER_TERMINATOR
 };
 
 /*

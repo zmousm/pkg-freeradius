@@ -623,6 +623,10 @@ static ssize_t xlat_string(UNUSED void *instance, REQUEST *request,
 		len = fr_prints(out, outlen, (char const *) p, vp->vp_length, '"');
 		break;
 
+		/*
+		 *	Note that "%{string:...}" is NOT binary safe!
+		 *	It is explicitly used to get rid of embedded zeros.
+		 */
 	case PW_TYPE_STRING:
 		len = strlcpy(out, vp->vp_strvalue, outlen);
 		break;
@@ -652,6 +656,8 @@ static ssize_t xlat_xlat(UNUSED void *instance, REQUEST *request,
 	}
 
 	if ((radius_get_vp(&vp, request, fmt) < 0) || !vp) goto nothing;
+
+	if (vp->da->type != PW_TYPE_STRING) goto nothing;
 
 	return radius_xlat(out, outlen, request, vp->vp_strvalue, NULL, NULL);
 }
@@ -1280,6 +1286,7 @@ static ssize_t xlat_tokenize_expansion(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **
 	 *	Check for empty expressions %{}
 	 */
 	if ((*q == '}') && (q == p)) {
+		talloc_free(node);
 		*error = "Empty expression is invalid";
 		return -(p - fmt);
 	}
@@ -1334,6 +1341,8 @@ static ssize_t xlat_tokenize_expansion(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **
 		} else {
 			*error = fr_strerror();
 		}
+
+		talloc_free(node);
 		return slen - (p - fmt);
 	}
 
@@ -1342,6 +1351,12 @@ static ssize_t xlat_tokenize_expansion(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **
 	 */
 	if (node->attr.type == TMPL_TYPE_ATTR_UNDEFINED) {
 		node->xlat = xlat_find(node->attr.tmpl_unknown_name);
+		if (node->xlat && node->xlat->instance && !node->xlat->internal) {
+			talloc_free(node);
+			*error = "Missing content in expansion";
+			return -(p - fmt) - slen;
+		}
+
 		if (node->xlat) {
 			node->type = XLAT_VIRTUAL;
 			node->fmt = node->attr.tmpl_unknown_name;
@@ -1366,7 +1381,7 @@ static ssize_t xlat_tokenize_expansion(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **
 		*error = "No matching closing brace";
 		return -1;	/* second character of format string */
 	}
-	p++;
+	*p++ = '\0';
 	*head = node;
 	rad_assert(node->next == NULL);
 
@@ -1398,7 +1413,9 @@ static ssize_t xlat_tokenize_literal(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **he
 				*error = "Invalid escape at end of string";
 				return -(p - fmt);
 			}
+
 			p += 2;
+			node->len += 2;
 			continue;
 		}
 
@@ -1452,27 +1469,31 @@ static ssize_t xlat_tokenize_literal(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **he
 			ssize_t slen;
 			xlat_exp_t *next;
 
-			if (!p[1] || !strchr("%dlmntDGHISTYv", p[1])) {
-					talloc_free(node);
-					*error = "Invalid variable expansion";
-					p++;
-					return - (p - fmt);
+			if (!p[1] || !strchr("%}dlmntDGHISTYv", p[1])) {
+				talloc_free(node);
+				*error = "Invalid variable expansion";
+				p++;
+				return - (p - fmt);
 			}
 
 			next = talloc_zero(node, xlat_exp_t);
 			next->len = 1;
 
-			if (p[1] == '%') {
-				next->fmt = talloc_typed_strdup(next, "%");
+			switch (p[1]) {
+			case '%':
+			case '}':
+				next->fmt = talloc_strndup(next, p + 1, 1);
 
-				XLAT_DEBUG("LITERAL-PERCENT <-- %s", next->fmt);
+				XLAT_DEBUG("LITERAL-ESCAPED <-- %s", next->fmt);
 				next->type = XLAT_LITERAL;
+				break;
 
-			} else {
+			default:
 				next->fmt = p + 1;
 
 				XLAT_DEBUG("PERCENT <-- %c", *next->fmt);
 				next->type = XLAT_PERCENT;
+				break;
 			}
 
 			node->next = next;
@@ -1929,15 +1950,15 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, vp_tmpl_t const *vpt,
 	 *	various VP functions.
 	 */
 	case PW_PACKET_AUTHENTICATION_VECTOR:
-		virtual = pairalloc(ctx, vpt->tmpl_da);
-		pairmemcpy(virtual, packet->vector, sizeof(packet->vector));
+		virtual = fr_pair_afrom_da(ctx, vpt->tmpl_da);
+		fr_pair_value_memcpy(virtual, packet->vector, sizeof(packet->vector));
 		vp = virtual;
 		break;
 
 	case PW_CLIENT_IP_ADDRESS:
 	case PW_PACKET_SRC_IP_ADDRESS:
 		if (packet->src_ipaddr.af == AF_INET) {
-			virtual = pairalloc(ctx, vpt->tmpl_da);
+			virtual = fr_pair_afrom_da(ctx, vpt->tmpl_da);
 			virtual->vp_ipaddr = packet->src_ipaddr.ipaddr.ip4addr.s_addr;
 			vp = virtual;
 		}
@@ -1945,7 +1966,7 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, vp_tmpl_t const *vpt,
 
 	case PW_PACKET_DST_IP_ADDRESS:
 		if (packet->dst_ipaddr.af == AF_INET) {
-			virtual = pairalloc(ctx, vpt->tmpl_da);
+			virtual = fr_pair_afrom_da(ctx, vpt->tmpl_da);
 			virtual->vp_ipaddr = packet->dst_ipaddr.ipaddr.ip4addr.s_addr;
 			vp = virtual;
 		}
@@ -1953,7 +1974,7 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, vp_tmpl_t const *vpt,
 
 	case PW_PACKET_SRC_IPV6_ADDRESS:
 		if (packet->src_ipaddr.af == AF_INET6) {
-			virtual = pairalloc(ctx, vpt->tmpl_da);
+			virtual = fr_pair_afrom_da(ctx, vpt->tmpl_da);
 			memcpy(&virtual->vp_ipv6addr,
 			       &packet->src_ipaddr.ipaddr.ip6addr,
 			       sizeof(packet->src_ipaddr.ipaddr.ip6addr));
@@ -1963,7 +1984,7 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, vp_tmpl_t const *vpt,
 
 	case PW_PACKET_DST_IPV6_ADDRESS:
 		if (packet->dst_ipaddr.af == AF_INET6) {
-			virtual = pairalloc(ctx, vpt->tmpl_da);
+			virtual = fr_pair_afrom_da(ctx, vpt->tmpl_da);
 			memcpy(&virtual->vp_ipv6addr,
 			       &packet->dst_ipaddr.ipaddr.ip6addr,
 			       sizeof(packet->dst_ipaddr.ipaddr.ip6addr));
@@ -1972,13 +1993,13 @@ static char *xlat_getvp(TALLOC_CTX *ctx, REQUEST *request, vp_tmpl_t const *vpt,
 		break;
 
 	case PW_PACKET_SRC_PORT:
-		virtual = pairalloc(ctx, vpt->tmpl_da);
+		virtual = fr_pair_afrom_da(ctx, vpt->tmpl_da);
 		virtual->vp_integer = packet->src_port;
 		vp = virtual;
 		break;
 
 	case PW_PACKET_DST_PORT:
-		virtual = pairalloc(ctx, vpt->tmpl_da);
+		virtual = fr_pair_afrom_da(ctx, vpt->tmpl_da);
 		virtual->vp_integer = packet->dst_port;
 		vp = virtual;
 		break;
@@ -2247,7 +2268,7 @@ static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * c
 		/*
 		 *	Smash \n --> CR.
 		 *
-		 *	The OUTPUT of xlat is a printable string.  The INPUT might not be...
+		 *	The OUTPUT of xlat is a "raw" string.  The INPUT is a printable string.
 		 *
 		 *	This is really the reverse of fr_prints().
 		 */
@@ -2341,10 +2362,13 @@ static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * c
 	 *	Escape the non-literals we found above.
 	 */
 	if (str && escape) {
+		size_t len;
 		char *escaped;
 
-		escaped = talloc_array(ctx, char, 2048); /* FIXME: do something intelligent */
-		escape(request, escaped, 2038, str, escape_ctx);
+		len = talloc_array_length(str) * 3;
+
+		escaped = talloc_array(ctx, char, len);
+		escape(request, escaped, len, str, escape_ctx);
 		talloc_free(str);
 		str = escaped;
 	}
@@ -2437,7 +2461,7 @@ static size_t xlat_process(char **out, REQUEST *request, xlat_exp_t const * cons
 
 /** Replace %whatever in a string.
  *
- * See 'doc/variables.txt' for more information.
+ * See 'doc/configuration/variables.rst' for more information.
  *
  * @param[out] out Where to write pointer to output buffer.
  * @param[in] outlen Size of out.
@@ -2463,6 +2487,7 @@ static ssize_t xlat_expand_struct(char **out, size_t outlen, REQUEST *request, x
 	}
 
 	len = strlen(buff);
+
 	/*
 	 *	If out doesn't point to an existing buffer
 	 *	copy the pointer to our buffer over.
@@ -2485,7 +2510,7 @@ static ssize_t xlat_expand(char **out, size_t outlen, REQUEST *request, char con
 
 /** Replace %whatever in a string.
  *
- * See 'doc/variables.txt' for more information.
+ * See 'doc/configuration/variables.rst' for more information.
  *
  * @param[out] out Where to write pointer to output buffer.
  * @param[in] outlen Size of out.
@@ -2538,7 +2563,7 @@ vp_tmpl_t *xlat_to_tmpl_attr(TALLOC_CTX *ctx, xlat_exp_t *node)
 {
 	vp_tmpl_t *vpt;
 
-	if (node->next || (node->type != XLAT_ATTRIBUTE)) return NULL;
+	if (node->next || (node->type != XLAT_ATTRIBUTE) || (node->attr.type != TMPL_TYPE_ATTR)) return NULL;
 
 	/*
 	 *   Concat means something completely different as an attribute reference

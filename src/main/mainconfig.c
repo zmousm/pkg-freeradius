@@ -25,6 +25,7 @@ RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
+#include <freeradius-devel/modpriv.h>
 #include <freeradius-devel/rad_assert.h>
 
 #include <sys/stat.h>
@@ -105,7 +106,7 @@ static const CONF_PARSER startup_log_config[] = {
 	{ "logdir", FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dir), "${localstatedir}/log"},
 	{ "file",  FR_CONF_POINTER(PW_TYPE_STRING, &main_config.log_file), "${logdir}/radius.log" },
 	{ "requests",  FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_DEPRECATED, &default_log.file), NULL },
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -121,7 +122,7 @@ static const CONF_PARSER startup_server_config[] = {
 	{ "log_file",  FR_CONF_POINTER(PW_TYPE_STRING, &main_config.log_file), NULL },
 	{ "log_destination", FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dest), NULL },
 	{ "use_utc", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_dates_utc), NULL },
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -140,10 +141,8 @@ static const CONF_PARSER log_config[] = {
 	{ "msg_goodpass", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.auth_goodpass_msg), NULL},
 	{ "colourise",FR_CONF_POINTER(PW_TYPE_BOOLEAN, &do_colourise), NULL },
 	{ "use_utc", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_dates_utc), NULL },
-	{ "msg_denied", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.denied_msg),
-	  "You are already logged in - access denied" },
-
-	{ NULL, -1, 0, NULL, NULL }
+	{ "msg_denied", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.denied_msg), "You are already logged in - access denied" },
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -157,7 +156,7 @@ static const CONF_PARSER security_config[] = {
 #ifdef ENABLE_OPENSSL_VERSION_CHECK
 	{ "allow_vulnerable_openssl", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.allow_vulnerable_openssl), "no"},
 #endif
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static const CONF_PARSER resources[] = {
@@ -167,8 +166,7 @@ static const CONF_PARSER resources[] = {
 	 *	it exists.
 	 */
 	{ "talloc_pool_size", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.talloc_pool_size), NULL },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static const CONF_PARSER server_config[] = {
@@ -218,8 +216,7 @@ static const CONF_PARSER server_config[] = {
 	{ "log_stripped_names", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &log_stripped_names), NULL },
 
 	{  "security", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) security_config },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -243,8 +240,7 @@ static const CONF_PARSER bootstrap_security_config[] = {
 #endif
 	{ "chroot",  FR_CONF_POINTER(PW_TYPE_STRING, &chroot_dir), NULL },
 	{ "allow_core_dumps", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &allow_core_dumps), "no" },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static const CONF_PARSER bootstrap_config[] = {
@@ -266,8 +262,7 @@ static const CONF_PARSER bootstrap_config[] = {
 #endif
 	{ "chroot",  FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_DEPRECATED, &chroot_dir), NULL },
 	{ "allow_core_dumps", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &allow_core_dumps), NULL },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -389,12 +384,15 @@ static ssize_t xlat_client(UNUSED void *instance, REQUEST *request, char const *
 
 	cp = cf_pair_find(request->client->cs, fmt);
 	if (!cp || !(value = cf_pair_value(cp))) {
-		if (strcmp(fmt, "shortname") == 0) {
-			strlcpy(out, request->client->shortname, outlen);
-			return strlen(out);
+		if (strcmp(fmt, "shortname") == 0 && request->client->shortname) {
+			value = request->client->shortname;
 		}
-		*out = '\0';
-		return 0;
+		else if (strcmp(fmt, "nas_type") == 0 && request->client->nas_type) {
+			value = request->client->nas_type;
+		} else {
+			*out = '\0';
+			return 0;
+		}
 	}
 
 	strlcpy(out, value, outlen);
@@ -423,7 +421,7 @@ static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char cons
 	}
 
 	strlcpy(buffer, p, (q + 1) - p);
-	if (fr_pton(&ip, buffer, -1, false) < 0) {
+	if (fr_pton(&ip, buffer, -1, AF_UNSPEC, false) < 0) {
 		REDEBUG("\"%s\" is not a valid IPv4 or IPv6 address", buffer);
 		goto error;
 	}
@@ -455,6 +453,35 @@ static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char cons
 	return -1;
 }
 
+/*
+ *	Xlat for %{listen:foo}
+ */
+static ssize_t xlat_listen(UNUSED void *instance, REQUEST *request,
+			   char const *fmt, char *out, size_t outlen)
+{
+	char const *value = NULL;
+	CONF_PAIR *cp;
+
+	if (!fmt || !out || (outlen < 1)) return 0;
+
+	if (!request->listener) {
+		RWDEBUG("No listener associated with this request");
+		*out = '\0';
+		return 0;
+	}
+
+	cp = cf_pair_find(request->listener->cs, fmt);
+	if (!cp || !(value = cf_pair_value(cp))) {
+		RDEBUG("Listener does not contain config item \"%s\"", fmt);
+		*out = '\0';
+		return 0;
+	}
+
+	strlcpy(out, value, outlen);
+
+	return strlen(out);
+}
+
 #ifdef HAVE_SETUID
 /*
  *  Do chroot, if requested.
@@ -472,7 +499,7 @@ static int switch_users(CONF_SECTION *cs)
 	 *	initialized.
 	 */
 	if (fr_set_dumpable_init() < 0) {
-		fr_perror("radiusd");
+		fr_perror("%s", main_config.name);
 		return 0;
 	}
 
@@ -483,7 +510,8 @@ static int switch_users(CONF_SECTION *cs)
 	if (rad_debug_lvl && (getuid() != 0)) return 1;
 
 	if (cf_section_parse(cs, NULL, bootstrap_config) < 0) {
-		fprintf(stderr, "radiusd: Error: Failed to parse user/group information.\n");
+		fprintf(stderr, "%s: Error: Failed to parse user/group information.\n",
+			main_config.name);
 		return 0;
 	}
 
@@ -499,7 +527,7 @@ static int switch_users(CONF_SECTION *cs)
 		gr = getgrnam(gid_name);
 		if (!gr) {
 			fprintf(stderr, "%s: Cannot get ID for group %s: %s\n",
-				progname, gid_name, fr_syserror(errno));
+				main_config.name, gid_name, fr_syserror(errno));
 			return 0;
 		}
 
@@ -520,7 +548,7 @@ static int switch_users(CONF_SECTION *cs)
 
 		if (rad_getpwnam(cs, &user, uid_name) < 0) {
 			fprintf(stderr, "%s: Cannot get passwd entry for user %s: %s\n",
-				progname, uid_name, fr_strerror());
+				main_config.name, uid_name, fr_strerror());
 			return 0;
 		}
 
@@ -533,7 +561,7 @@ static int switch_users(CONF_SECTION *cs)
 #ifdef HAVE_INITGROUPS
 			if (initgroups(uid_name, server_gid) < 0) {
 				fprintf(stderr, "%s: Cannot initialize supplementary group list for user %s: %s\n",
-					progname, uid_name, fr_syserror(errno));
+					main_config.name, uid_name, fr_syserror(errno));
 				talloc_free(user);
 				return 0;
 			}
@@ -549,7 +577,7 @@ static int switch_users(CONF_SECTION *cs)
 	if (chroot_dir) {
 		if (chroot(chroot_dir) < 0) {
 			fprintf(stderr, "%s: Failed to perform chroot %s: %s",
-				progname, chroot_dir, fr_syserror(errno));
+				main_config.name, chroot_dir, fr_syserror(errno));
 			return 0;
 		}
 
@@ -577,23 +605,22 @@ static int switch_users(CONF_SECTION *cs)
 	if (do_sgid) {
 		if (setgid(server_gid) < 0){
 			fprintf(stderr, "%s: Failed setting group to %s: %s",
-				progname, gid_name, fr_syserror(errno));
+				main_config.name, gid_name, fr_syserror(errno));
 			return 0;
 		}
 	}
 #endif
 
 	/*
-	 *	If we did change from root to a normal user, do some
-	 *	more work.
+	 *	The directories for PID files and logs must exist.  We
+	 *	need to create them if we're told to write files to
+	 *	those directories.
 	 *
-	 *	Try to create the various output directories.  Because
-	 *	this creation is new in 3.0.9, it's a soft fail.
+	 *	Because this creation is new in 3.0.9, it's a soft
+	 *	fail.
 	 *
-	 *	And once we're done with all of the above work,
-	 *	permanently change the UID.
 	 */
-	if (do_suid) {
+	if (main_config.write_pid) {
 		char *my_dir;
 
 		my_dir = talloc_strdup(NULL, run_dir);
@@ -602,16 +629,24 @@ static int switch_users(CONF_SECTION *cs)
 			      my_dir, strerror(errno));
 		}
 		talloc_free(my_dir);
+	}
 
-		if (default_log.dst == L_DST_FILES) {
-			my_dir = talloc_strdup(NULL, radlog_dir);
-			if (rad_mkdir(my_dir, 0750, server_uid, server_gid) < 0) {
-				DEBUG("Failed to create logdir %s: %s",
-				      my_dir, strerror(errno));
-			}
-			talloc_free(my_dir);
+	if (default_log.dst == L_DST_FILES) {
+		char *my_dir;
+
+		my_dir = talloc_strdup(NULL, radlog_dir);
+		if (rad_mkdir(my_dir, 0750, server_uid, server_gid) < 0) {
+			DEBUG("Failed to create logdir %s: %s",
+			      my_dir, strerror(errno));
 		}
+		talloc_free(my_dir);
+	}
 
+	/*
+	 *	Once we're done with all of the privileged work,
+	 *	permanently change the UID.
+	 */
+	if (do_suid) {
 		rad_suid_set_down_uid(server_uid);
 		rad_suid_down();
 	}
@@ -626,7 +661,8 @@ static int switch_users(CONF_SECTION *cs)
 		default_log.fd = open(main_config.log_file,
 				      O_WRONLY | O_APPEND | O_CREAT, 0640);
 		if (default_log.fd < 0) {
-			fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", main_config.log_file, fr_syserror(errno));
+			fprintf(stderr, "%s: Failed to open log file %s: %s\n",
+				main_config.name, main_config.log_file, fr_syserror(errno));
 			return 0;
 		}
 	}
@@ -643,7 +679,7 @@ static int switch_users(CONF_SECTION *cs)
 	    (default_log.dst == L_DST_FILES)) {
 		if (fchown(default_log.fd, server_uid, server_gid) < 0) {
 			fprintf(stderr, "%s: Cannot change ownership of log file %s: %s\n",
-				progname, main_config.log_file, fr_syserror(errno));
+				main_config.name, main_config.log_file, fr_syserror(errno));
 			return 0;
 		}
 	}
@@ -741,7 +777,7 @@ int main_config_init(void)
 	 *
 	 *	Which should be enough for many configurations.
 	 */
-	main_config.talloc_pool_size = 32 * 1024; /* default */
+	main_config.talloc_pool_size = 8 * 1024; /* default */
 
 	/*
 	 *	Read the distribution dictionaries first, then
@@ -831,13 +867,15 @@ do {\
 	 */
 	if (default_log.dst == L_DST_NULL) {
 		if (cf_section_parse(cs, NULL, startup_server_config) < 0) {
-			fprintf(stderr, "radiusd: Error: Failed to parse log{} section.\n");
+			fprintf(stderr, "%s: Error: Failed to parse log{} section.\n",
+				main_config.name);
 			cf_file_free(cs);
 			return -1;
 		}
 
 		if (!radlog_dest) {
-			fprintf(stderr, "radiusd: Error: No log destination specified.\n");
+			fprintf(stderr, "%s: Error: No log destination specified.\n",
+				main_config.name);
 			cf_file_free(cs);
 			return -1;
 		}
@@ -845,8 +883,8 @@ do {\
 		default_log.dst = fr_str2int(log_str2dst, radlog_dest,
 					      L_DST_NUM_DEST);
 		if (default_log.dst == L_DST_NUM_DEST) {
-			fprintf(stderr, "radiusd: Error: Unknown log_destination %s\n",
-				radlog_dest);
+			fprintf(stderr, "%s: Error: Unknown log_destination %s\n",
+				main_config.name, radlog_dest);
 			cf_file_free(cs);
 			return -1;
 		}
@@ -857,14 +895,15 @@ do {\
 			 *	before using it
 			 */
 			if (!syslog_facility) {
-				fprintf(stderr, "radiusd: Error: Syslog chosen but no facility was specified\n");
+				fprintf(stderr, "%s: Error: Syslog chosen but no facility was specified\n",
+					main_config.name);
 				cf_file_free(cs);
 				return -1;
 			}
 			main_config.syslog_facility = fr_str2int(syslog_facility_table, syslog_facility, -1);
 			if (main_config.syslog_facility < 0) {
-				fprintf(stderr, "radiusd: Error: Unknown syslog_facility %s\n",
-					syslog_facility);
+				fprintf(stderr, "%s: Error: Unknown syslog_facility %s\n",
+					main_config.name, syslog_facility);
 				cf_file_free(cs);
 				return -1;
 			}
@@ -874,12 +913,13 @@ do {\
 			 *	Call openlog only once, when the
 			 *	program starts.
 			 */
-			openlog(progname, LOG_PID, main_config.syslog_facility);
+			openlog(main_config.name, LOG_PID, main_config.syslog_facility);
 #endif
 
 		} else if (default_log.dst == L_DST_FILES) {
 			if (!main_config.log_file) {
-				fprintf(stderr, "radiusd: Error: Specified \"files\" as a log destination, but no log filename was given!\n");
+				fprintf(stderr, "%s: Error: Specified \"files\" as a log destination, but no log filename was given!\n",
+					main_config.name);
 				cf_file_free(cs);
 				return -1;
 			}
@@ -933,7 +973,7 @@ do {\
 
 	FR_INTEGER_BOUND_CHECK("cleanup_delay", main_config.cleanup_delay, <=, 10);
 
-	FR_INTEGER_BOUND_CHECK("resources.talloc_pool_size", main_config.talloc_pool_size, >=, 16 * 1024);
+	FR_INTEGER_BOUND_CHECK("resources.talloc_pool_size", main_config.talloc_pool_size, >=, 2 * 1024);
 	FR_INTEGER_BOUND_CHECK("resources.talloc_pool_size", main_config.talloc_pool_size, <=, 1024 * 1024);
 
 	/*
@@ -965,11 +1005,12 @@ do {\
 	}
 
 	/*
-	 *  Register the %{config:section.subsection} xlat function.
+	 *	Register the %{config:section.subsection} xlat function.
 	 */
 	xlat_register("config", xlat_config, NULL, NULL);
 	xlat_register("client", xlat_client, NULL, NULL);
 	xlat_register("getclient", xlat_getclient, NULL, NULL);
+	xlat_register("listen", xlat_listen, NULL, NULL);
 
 	/*
 	 *  Go update our behaviour, based on the configuration
@@ -1050,12 +1091,52 @@ void hup_logfile(void)
 	}
 }
 
+static int hup_callback(void *ctx, void *data)
+{
+	CONF_SECTION *modules = ctx;
+	CONF_SECTION *cs = data;
+	CONF_SECTION *parent;
+	char const *name;
+	module_instance_t *mi;
+
+	/*
+	 *	Files may be defined in sub-sections of a module
+	 *	config.  Walk up the tree until we find the module
+	 *	definition.
+	 */
+	parent = cf_item_parent(cf_section_to_item(cs));
+	while (parent != modules) {
+		cs = parent;
+		parent = cf_item_parent(cf_section_to_item(cs));
+
+		/*
+		 *	Something went wrong.  Oh well...
+		 */
+		if (!parent) return 0;
+	}
+
+	name = cf_section_name2(cs);
+	if (!name) name = cf_section_name1(cs);
+
+	mi = module_find(modules, name);
+	if (!mi) return 0;
+
+	if ((mi->entry->module->type & RLM_TYPE_HUP_SAFE) == 0) return 0;
+
+	if (!module_hup_module(mi->cs, mi, time(NULL))) return 0;
+
+	return 1;
+}
+
 void main_config_hup(void)
 {
 	int rcode;
 	cached_config_t *cc;
 	CONF_SECTION *cs;
+	time_t when;
 	char buffer[1024];
+
+	static time_t last_hup = 0;
 
 	/*
 	 *	Re-open the log file.  If we can't, then keep logging
@@ -1066,7 +1147,17 @@ void main_config_hup(void)
 	 */
 	hup_logfile();
 
-	rcode = cf_file_changed(cs_cache->cs);
+	/*
+	 *	Only check the config files every few seconds.
+	 */
+	when = time(NULL);
+	if ((last_hup + 2) >= when) {
+		INFO("HUP - Last HUP was too recent.  Ignoring");
+		return;
+	}
+	last_hup = when;
+
+	rcode = cf_file_changed(cs_cache->cs, hup_callback);
 	if (rcode == CF_FILE_NONE) {
 		INFO("HUP - No files changed.  Ignoring");
 		return;
@@ -1077,8 +1168,18 @@ void main_config_hup(void)
 		return;
 	}
 
-	if (rcode == CF_FILE_MODULE) {
-		INFO("HUP - Files loaded by a module have changed.");
+	/*
+	 *	No config files have changed.
+	 */
+	if ((rcode & CF_FILE_CONFIG) == 0) {
+		if ((rcode & CF_FILE_MODULE) != 0) {
+			INFO("HUP - Files loaded by a module have changed.");
+
+			/*
+			 *	FIXME: reload the module.
+			 */
+
+		}
 		return;
 	}
 
