@@ -61,7 +61,7 @@ radacctdir = @radacctdir@
 
 #
 #  name of the running server.  See also the "-n" command-line option.
-name = radiusd
+name = freeradius
 
 #  Location of config and logfiles.
 confdir = ${raddbdir}
@@ -436,8 +436,8 @@ security {
 	#  member.  This can allow for some finer-grained access
 	#  controls.
 	#
-#	user = radius
-#	group = radius
+	user = freerad
+	group = freerad
 
 	#  Core dumps are a bad thing.  This should only be set to
 	#  'yes' if you're debugging a problem with the server.

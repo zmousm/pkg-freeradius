@@ -95,7 +95,7 @@ LDFLAGS		= $(OPENSSL_LDFLAGS) $(TALLOC_LDFLAGS) @LDFLAGS@
 
 LOGDIR		= ${logdir}
 RADDBDIR	= ${raddbdir}
-RUNDIR		= ${localstatedir}/run/radiusd
+RUNDIR		= ${localstatedir}/run/freeradius
 SBINDIR		= ${sbindir}
 RADIR		= ${radacctdir}
 LIBRADIUS	= $(top_builddir)/src/lib/$(LIBPREFIX)freeradius-radius.la $(TALLOC_LIBS)
