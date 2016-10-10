@@ -1,3 +1,10 @@
+freeradius (3.0.12-1~70+grnet2) unstable; urgency=low
+
+  * Add debian/patches/raddebug-dash-n.diff
+  * Add debian/patches/raddebug-default-timeout.diff
+
+ -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Mon, 10 Oct 2016 09:22:33 +0300
+
 freeradius (3.0.12-1~70+grnet1) unstable; urgency=low
 
   [ Alan T. DeKok ]
