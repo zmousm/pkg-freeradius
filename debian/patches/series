@@ -1,2 +1,4 @@
 radiusd-to-freeradius.diff
 disable-dhcp-bydefault.diff
+raddebug-dash-n.diff
+raddebug-default-timeout.diff

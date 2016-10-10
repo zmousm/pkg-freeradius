@@ -1,0 +1,60 @@
+From: Zenon Mousmoulas <zmousm@noc.grnet.gr>
+Date: Mon, 10 Oct 2016 08:20:00 +0300
+Subject: Let raddebug also have the -n option
+
+---
+ man/man8/raddebug.8 |    4 ++++
+ scripts/raddebug    |    6 ++++--
+ 2 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/man/man8/raddebug.8 b/man/man8/raddebug.8
+index 407a4f2..66e80e6 100644
+--- a/man/man8/raddebug.8
++++ b/man/man8/raddebug.8
+@@ -7,6 +7,8 @@ raddebug - Display debugging output from a running server.
+ .IR condition ]
+ .RB [ \-d
+ .IR config_directory ]
++.RB [ \-n
++.IR name ]
+ .RB [ \-i
+ .IR ipv4-address ]
+ .RB [ \-I
+@@ -71,6 +73,8 @@ option is equivalent to using:
+ .IP "\-d \fIconfig directory\fP"
+ The radius configuration directory, usually /etc/raddb.  See the
+ \fIradmin\fP manual page for more description of this option.
++.IP "\-n \fImname\fP"
++Read \fIraddb/name.conf\fP instead of \fIraddb/radiusd.conf\fP.
+ .IP \-I\ \fIipv6-address\fP
+ Show debug output for the client having the given IPv6 address.  This
+ option is equivalent to using:
+diff --git a/scripts/raddebug b/scripts/raddebug
+index f10b291..c1d6a2a 100755
+--- a/scripts/raddebug
++++ b/scripts/raddebug
+@@ -29,20 +29,22 @@
+ #
+ 
+ usage() {
+-    printf "Usage: %s: [-c condition] [-d directory] [-D dictdir]  [-i client-ip-address] [-I client-ipv6-address] [-f socket_file] [-t timeout] [-u user]\n" $(basename $0) >&2
++    printf "Usage: %s: [-c condition] [-d directory] [-n name] [-D dictdir]  [-i client-ip-address] [-I client-ipv6-address] [-f socket_file] [-t timeout] [-u user]\n" $(basename $0) >&2
+     exit 2
+ }
+ 
+ extra=
+ condition=1
+ timeout=60
+-while getopts 'd:D:c:i:I:f:t:u:' OPTION
++while getopts 'd:n:D:c:i:I:f:t:u:' OPTION
+ do
+   case $OPTION in
+   c)	condition="$OPTARG"
+ 	;;
+   d)    extra="$extra -d $OPTARG"
+ 	;;
++  n)    extra="$extra -n $OPTARG"
++	;;
+   D)    extra="$extra -D $OPTARG"
+ 	;;
+   i)    x="(Packet-Src-IP-Address == $OPTARG)"
