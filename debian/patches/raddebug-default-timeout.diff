@@ -1,0 +1,21 @@
+From: Zenon Mousmoulas <zmousm@noc.grnet.gr>
+Date: Mon, 10 Oct 2016 09:02:40 +0300
+Subject: Change the default timeout for raddebug to 600 seconds
+
+---
+ scripts/raddebug |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scripts/raddebug b/scripts/raddebug
+index c1d6a2a..909789f 100755
+--- a/scripts/raddebug
++++ b/scripts/raddebug
+@@ -35,7 +35,7 @@ usage() {
+ 
+ extra=
+ condition=1
+-timeout=60
++timeout=600
+ while getopts 'd:n:D:c:i:I:f:t:u:' OPTION
+ do
+   case $OPTION in
