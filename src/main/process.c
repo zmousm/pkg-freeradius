@@ -415,6 +415,14 @@ static void debug_packet(REQUEST *request, RADIUS_PACKET *packet, bool received)
 	if (!packet) return;
 	if (!RDEBUG_ENABLED) return;
 
+#ifdef WITH_DETAIL
+	/*
+	 *	Don't print IP addresses for detail files.
+	 */
+	if (request->listener &&
+	    (request->listener->type == RAD_LISTEN_DETAIL)) return;
+
+#endif
 	/*
 	 *	Client-specific debugging re-prints the input
 	 *	packet into the client log.
@@ -477,6 +485,8 @@ static struct timeval *request_response_window(REQUEST *request)
 {
 	VERIFY_REQUEST(request);
 
+	rad_assert(request->home_server != NULL);
+
 	if (request->client) {
 		/*
 		 *	The client hasn't set the response window.  Return
@@ -492,7 +502,6 @@ static struct timeval *request_response_window(REQUEST *request)
 		}
 	}
 
-	rad_assert(request->home_server != NULL);
 	return &request->home_server->response_window;
 }
 
@@ -2114,8 +2123,9 @@ static void remove_from_proxy_hash_nl(REQUEST *request, bool yank)
 	}
 
 #ifdef WITH_TCP
-	rad_assert(request->proxy_listener != NULL);
-	request->proxy_listener->count--;
+	if (request->proxy_listener) {
+		request->proxy_listener->count--;
+	}
 #endif
 	request->proxy_listener = NULL;
 
@@ -2561,8 +2571,6 @@ int request_proxy_reply(RADIUS_PACKET *packet)
 
 #ifdef WITH_ACCOUNTING
 	case PW_CODE_ACCOUNTING_REQUEST:
-		proxy_acct_stats.last_packet = packet->timestamp.tv_sec;
-
 		request->proxy_listener->stats.total_responses++;
 		proxy_acct_stats.last_packet = packet->timestamp.tv_sec;
 		break;
