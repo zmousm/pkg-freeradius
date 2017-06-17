@@ -197,7 +197,7 @@ static int CC_HINT(nonnull) rad_check_password(REQUEST *request)
 	 *	Warn if more than one Auth-Type was found, because only the last
 	 *	one found will actually be used.
 	 */
-	if ((auth_type_count > 1) && (rad_debug_lvl)) {
+	if ((auth_type_count > 1) && (rad_debug_lvl) && request->username) {
 		RERROR("Warning:  Found %d auth-types on request for user '%s'",
 			auth_type_count, request->username->vp_strvalue);
 	}
@@ -332,6 +332,7 @@ int rad_postauth(REQUEST *request)
 		if (request->reply->code != PW_CODE_ACCESS_REJECT) {
 			RDEBUG("Using Post-Auth-Type Reject");
 
+			request->reply->code = PW_CODE_ACCESS_REJECT;
 			process_post_auth(PW_POST_AUTH_TYPE_REJECT, request);
 		}
 

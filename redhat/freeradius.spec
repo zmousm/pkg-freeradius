@@ -26,7 +26,7 @@
 
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 3.0.12
+Version: 3.0.14
 Release: 2%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
@@ -665,6 +665,8 @@ fi
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/mysql/*
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/ndb
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/ndb/*
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/moonshot-targeted-ids/mysql
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/moonshot-targeted-ids/mysql/*
 # postgres
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter/postgresql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/counter/postgresql/*
@@ -674,6 +676,8 @@ fi
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/postgresql/*
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/postgresql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/postgresql/*
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/moonshot-targeted-ids/postgresql
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/moonshot-targeted-ids/postgresql/*
 # sqlite
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/counter/sqlite/*
@@ -686,6 +690,8 @@ fi
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/sqlite/*
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/sqlite/*
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/moonshot-targeted-ids/sqlite
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/moonshot-targeted-ids/sqlite/*
 # ruby
 %if %{?_with_rlm_ruby:1}%{!?_with_rlm_ruby:0}
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/ruby
@@ -714,7 +720,7 @@ fi
 # man-pages
 %doc %{_mandir}/man1/dhcpclient.1.gz
 %doc %{_mandir}/man1/radclient.1.gz
-%doc %{_mandir}/man1/radcounter.1.gz
+%doc %{_mandir}/man1/rad_counter.1.gz
 %doc %{_mandir}/man1/radeapclient.1.gz
 %doc %{_mandir}/man1/radlast.1.gz
 %doc %{_mandir}/man1/radtest.1.gz
