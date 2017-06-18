@@ -3,7 +3,7 @@ Date: Mon, 10 Oct 2016 09:02:40 +0300
 Subject: Change the default timeout for raddebug to 600 seconds
 
 ---
- scripts/raddebug |    2 +-
+ scripts/raddebug | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/scripts/raddebug b/scripts/raddebug

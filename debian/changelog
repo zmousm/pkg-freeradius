@@ -1,3 +1,22 @@
+freeradius (3.0.14-1~80+grnet1) unstable; urgency=medium
+
+  * Drop debian/patches/raddebug-dash-n.diff
+  * Refresh debian/patches
+
+ -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Sun, 18 Jun 2017 18:14:30 +0300
+
+freeradius (3.0.14-1) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Tue, 07 Mar 2017 12:00:00 -0400
+
+freeradius (3.0.13+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Fri, 30 Sep 2016 12:00:00 -0400
+
 freeradius (3.0.12-1~70+grnet2) unstable; urgency=low
 
   * Add debian/patches/raddebug-dash-n.diff
