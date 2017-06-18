@@ -1,4 +1,14 @@
+From: Josip Rodin <joy-packages@debian.org>
+Date: Mon, 10 Oct 2016 09:00:45 +0300
+Subject: disable-dhcp-bydefault
+
 diff a/raddb/all.mk b/raddb/all.mk
+---
+ raddb/all.mk | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/raddb/all.mk b/raddb/all.mk
+index 370f533..d921a04 100644
 --- a/raddb/all.mk
 +++ b/raddb/all.mk
 @@ -8,7 +8,7 @@ DEFAULT_SITES :=	default inner-tunnel
