@@ -30,6 +30,8 @@ RCSID("$Id$")
 
 #include "rlm_eap.h"
 
+#include <sys/stat.h>
+
 static const CONF_PARSER module_config[] = {
 	{ "default_eap_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_t, default_method_name), "md5" },
 	{ "timer_expire", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_eap_t, timer_limit), "60" },
@@ -406,6 +408,26 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		}
 
 	} else {
+		/*
+		 *	Enable the cached entry on success.
+		 */
+		if (handler->eap_ds->request->code == PW_EAP_SUCCESS) {
+			VALUE_PAIR *vp;
+
+			vp = fr_pair_find_by_num(request->state, PW_TLS_CACHE_FILENAME, 0, TAG_ANY);
+			if (vp) (void) chmod(vp->vp_strvalue, S_IRUSR | S_IWUSR);
+		}
+
+		/*
+		 *	Disable the cached entry on failure.
+		 */
+		if (handler->eap_ds->request->code == PW_EAP_FAILURE) {
+			VALUE_PAIR *vp;
+
+			vp = fr_pair_find_by_num(request->state, PW_TLS_CACHE_FILENAME, 0, TAG_ANY);
+			if (vp) (void) unlink(vp->vp_strvalue);
+		}
+
 		RDEBUG2("Freeing handler");
 		/* handler is not required any more, free it now */
 		talloc_free(handler);
@@ -431,17 +453,28 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 
 		/*
 		 *	Cisco AP1230 has a bug and needs a zero
-		 *	terminated string in Access-Accept.
+		 *	terminated string in Access-Accept.  This
+		 *	means it requires 2 trailing zeros.  One to
+		 *	send in the RADIUS packet, and the other to
+		 *	convince the rest of the server that
+		 *	vp->vp_strvalue is still a NUL-terminated C
+		 *	string.
 		 */
 		if (inst->mod_accounting_username_bug) {
 			char const *old = vp->vp_strvalue;
-			char *new = talloc_zero_array(vp, char, vp->vp_length + 1);
+			char *new;
+
+			vp->vp_length++; /* account for an additional zero */
+
+			new = talloc_array(vp, char, vp->vp_length + 1);
 
 			memcpy(new, old, vp->vp_length);
+			new[vp->length] = '\0';
+			new[vp->length + 1] = '\0';
 			vp->vp_strvalue = new;
-			vp->vp_length++;
 
 			rad_const_free(old);
+			VERIFY_VP(vp);
 		}
 	}
 

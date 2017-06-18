@@ -1,24 +1,16 @@
-freeradius (3.0.12-1~80+grnet2) unstable; urgency=low
+freeradius (3.0.14-1) unstable; urgency=medium
 
-  * Add debian/patches/raddebug-dash-n.diff
-  * Add debian/patches/raddebug-default-timeout.diff
+  * New upstream version.
 
- -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Mon, 10 Oct 2016 09:18:43 +0300
+ -- Alan DeKok <aland@freeradius.org>  Tue, 07 Mar 2017 12:00:00 -0400
 
-freeradius (3.0.12-1~80+grnet1) unstable; urgency=low
+freeradius (3.0.13+git) unstable; urgency=medium
 
-  [ Alan T. DeKok ]
-  * add "date" module (cherry picked from commit e5cce0504bd0dbc227c839297e3d164ef800cbc8)
+  * New upstream version.
 
-  [ Zenon Mousmoulas ]
-  * Non-maintainer upload.
-  * Refresh debian/patches/radiusd-to-freeradius.diff
-  * Set debian/source/format = quilt
-  * Add libpcre3-dev to build-deps
+ -- Alan DeKok <aland@freeradius.org>  Fri, 30 Sep 2016 12:00:00 -0400
 
- -- Zenon Mousmoulas <zmousm@noc.grnet.gr>  Sun, 09 Oct 2016 09:02:51 +0300
-
-freeradius (3.0.12-1) unstable; urgency=medium
+freeradius (3.0.12+git) unstable; urgency=medium
 
   * New upstream version.
 
