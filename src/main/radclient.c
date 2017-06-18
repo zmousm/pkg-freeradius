@@ -977,8 +977,10 @@ static int send_one_packet(rc_request_t *request)
 		return -1;
 	}
 
-	fr_packet_header_print(fr_log_fp, request->packet, false);
-	if (fr_debug_lvl > 0) vp_printlist(fr_log_fp, request->packet->vps);
+	if (fr_log_fp) {
+		fr_packet_header_print(fr_log_fp, request->packet, false);
+		if (fr_debug_lvl > 0) vp_printlist(fr_log_fp, request->packet->vps);
+	}
 
 	return 0;
 }
@@ -1087,8 +1089,10 @@ static int recv_one_packet(int wait_time)
 		goto packet_done;
 	}
 
-	fr_packet_header_print(fr_log_fp, request->reply, true);
-	if (fr_debug_lvl > 0) vp_printlist(fr_log_fp, request->reply->vps);
+	if (fr_log_fp) {
+		fr_packet_header_print(fr_log_fp, request->reply, true);
+		if (fr_debug_lvl > 0) vp_printlist(fr_log_fp, request->reply->vps);
+	}
 
 	/*
 	 *	Increment counters...
@@ -1621,17 +1625,17 @@ int main(int argc, char **argv)
 	dict_free();
 
 	if (do_summary) {
-		DEBUG("Packet summary:\n"
-		      "\tAccepted      : %" PRIu64 "\n"
-		      "\tRejected      : %" PRIu64 "\n"
-		      "\tLost          : %" PRIu64 "\n"
-		      "\tPassed filter : %" PRIu64 "\n"
-		      "\tFailed filter : %" PRIu64,
-		      stats.accepted,
-		      stats.rejected,
-		      stats.lost,
-		      stats.passed,
-		      stats.failed
+		printf("Packet summary:\n"
+		       "\tAccepted      : %" PRIu64 "\n"
+		       "\tRejected      : %" PRIu64 "\n"
+		       "\tLost          : %" PRIu64 "\n"
+		       "\tPassed filter : %" PRIu64 "\n"
+		       "\tFailed filter : %" PRIu64 "\n",
+		       stats.accepted,
+		       stats.rejected,
+		       stats.lost,
+		       stats.passed,
+		       stats.failed
 		);
 	}
 
